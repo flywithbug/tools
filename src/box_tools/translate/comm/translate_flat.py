@@ -152,6 +152,7 @@ def _build_system_prompt(
         "Return ONLY a single valid JSON object. "
         "The JSON keys MUST match the input keys exactly; translate ONLY the values. "
         "No extra commentary. No markdown. No code fences."
+        "The input JSON is a flat object mapping keys to strings. Output a JSON object with the SAME keys ONLY."
     )
 
     extra = (prompt_en or "").strip()
@@ -159,11 +160,10 @@ def _build_system_prompt(
 
 
 def _build_user_payload(tgt_locale: str, chunk: Dict[str, str]) -> str:
-    return json.dumps(
-        {"tgt_locale": tgt_locale, "payload": chunk},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    # ✅ 不要再包 {tgt_locale, payload}，否则模型会按顶层 key 回传
+    # tgt_locale 已经在 system prompt 里告诉模型了
+    return json.dumps(chunk, ensure_ascii=False, separators=(",", ":"))
+
 
 
 # =========================================================
