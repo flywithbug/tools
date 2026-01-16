@@ -40,7 +40,7 @@ BOX_TOOL = {
         {"cmd": "pub_upgrade --yes --no-commit", "desc": "直接升级（不提交）"},
         {"cmd": "pub_upgrade --follow-release", "desc": "release 分支严格跟随 x.y.*"},
     ],
-    "docs": "src/box_tools/flutter/README.md",
+    "docs": "src/box_tools/flutter/pub_upgrade.md",
 }
 
 

@@ -1,14 +1,13 @@
 [project]
 name = "box"
-version = "0.1.2"
+version = "0.1.4"
 requires-python = ">=3.9"
 dependencies = []
 
 [project.scripts]
 box = "box.box:main"
-pub_version = "box_tools.flutter.pub_version:main"
 pub_upgrade = "box_tools.flutter.pub_upgrade:main"
-
+pub_version = "box_tools.flutter.pub_version:main"
 
 [build-system]
 requires = ["hatchling"]

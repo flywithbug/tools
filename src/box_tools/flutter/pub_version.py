@@ -25,7 +25,7 @@ BOX_TOOL = {
         {"cmd": "pub_version", "desc": "进入交互菜单选择升级级别"},
         {"cmd": "pub_version patch --no-git", "desc": "仅更新补丁号，不提交"},
     ],
-    "docs": "src/box_tools/flutter/README.md",  # 文档路径（相对仓库根）
+    "docs": "src/box_tools/flutter/pub_version.md",  # 文档路径（相对仓库根）
 }
 
 

@@ -44,7 +44,7 @@ BOX_TOOL = {
         {"cmd": "box update", "desc": "更新工具集"},
         {"cmd": "box tools", "desc": "列出当前工具与简介"},
     ],
-    "docs": "src/box/README.md",
+    "docs": "src/box/box.md",
 }
 
 
