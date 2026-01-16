@@ -6,6 +6,28 @@ import subprocess
 import sys
 from pathlib import Path
 
+BOX_TOOL = {
+    "id": "flutter.pub_version",          # 唯一标识（建议：类别.工具名）
+    "name": "pub_version",                # 命令名（console script 名）
+    "category": "flutter",                # 分类（可选）
+    "summary": "升级 pubspec.yaml 的 version（支持交互选择 minor/patch）",
+    "usage": [
+        "pub_version",
+        "pub_version minor",
+        "pub_version patch --no-git",
+        "pub_version minor --file path/to/pubspec.yaml",
+    ],
+    "options": [
+        {"flag": "--file", "desc": "指定 pubspec.yaml 路径（默认 ./pubspec.yaml）"},
+        {"flag": "--no-git", "desc": "只改版本号，不执行 git add/commit/push"},
+    ],
+    "examples": [
+        {"cmd": "pub_version", "desc": "进入交互菜单选择升级级别"},
+        {"cmd": "pub_version patch --no-git", "desc": "仅更新补丁号，不提交"},
+    ],
+    "docs": "src/box_tools/flutter/README.md",  # 文档路径（相对仓库根）
+}
+
 
 def parse_version(version: str):
     m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\+(.+))?$", version.strip())
