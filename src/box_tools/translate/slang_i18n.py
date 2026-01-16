@@ -197,7 +197,7 @@ def get_active_groups(i18n_dir: Path) -> List[Path]:
 
 
 # =========================================================
-# Filename helpers (camelCase)
+# Filename helpers (camelCase folder + _locale suffix)
 # =========================================================
 
 def _to_camel(s: str) -> str:
@@ -213,29 +213,18 @@ def _to_camel(s: str) -> str:
     return head + tail
 
 
-def _locale_to_camel(loc: str) -> str:
-    """
-    locale -> Camel token for filename suffix
-    e.g. "en" -> "En", "zh_Hant" -> "ZhHant"
-    """
-    parts = [p for p in re.split(r"[_\-]+", loc.strip()) if p]
-    return "".join(p[:1].upper() + p[1:] for p in parts) if parts else loc
-
-
 def group_file_name(group: Path, locale: str) -> Path:
     """
-    i18n/: {locale}.i18n.json
-    i18n/assets/: assetsZhHant.i18n.json  （驼峰）
+    ✅ 你要的规则：
+    - i18n/ 根目录：{locale}.i18n.json  （保持不变）
+    - i18n/<module>/：{camelFolder}_{locale}.i18n.json
+      例如 i18n/user_profile/ -> userProfile_en.i18n.json
     """
     if group.name == I18N_DIR:
-        # 根目录保持 {locale}.i18n.json（更稳）
-        name = f"{locale}.i18n.json"
-        return group / name
+        return group / f"{locale}.i18n.json"
 
     prefix = _to_camel(group.name)
-    loc_token = _locale_to_camel(locale)
-    name = f"{prefix}{loc_token}.i18n.json"
-    return group / name
+    return group / f"{prefix}_{locale}.i18n.json"
 
 
 # =========================================================
@@ -309,30 +298,20 @@ def _match_locale_from_filename(filename: str, locales_sorted: List[str]) -> Opt
     """
     仅在能“明确识别 locale”时返回 locale，否则返回 None
 
-    支持旧/新两套命名（便于平滑迁移）：
-    - 旧：xxx_{locale}.i18n.json
-    - 旧：{locale}.i18n.json
-    - 新：xxx{CamelLocale}.i18n.json
-    - 新：{CamelLocale}.i18n.json（可选兼容）
+    ✅ 新规则：文件名后缀必须是 _{locale}.i18n.json 或 {locale}.i18n.json（根目录）
+    - i18n/<module>/: xxx_{locale}.i18n.json
+    - i18n/: {locale}.i18n.json
     """
     if not filename.endswith(".i18n.json"):
         return None
 
     stem = filename[:-len(".i18n.json")]
 
-    # 1) 先匹配旧格式：..._{locale} 或 {locale}
+    # 优先长 locale，避免 zh vs zh_Hant 误匹配
     for loc in locales_sorted:
         if stem.endswith(f"_{loc}"):
             return loc
         if stem == loc:
-            return loc
-
-    # 2) 再匹配新格式：...{CamelLocale} 或 {CamelLocale}
-    for loc in locales_sorted:
-        camel = _locale_to_camel(loc)
-        if stem.endswith(camel):
-            return loc
-        if stem == camel:
             return loc
 
     return None
@@ -340,8 +319,8 @@ def _match_locale_from_filename(filename: str, locales_sorted: List[str]) -> Opt
 
 def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = True) -> None:
     """
-    只规范化 i18n/<module>/ 下的文件名，使其前缀严格等于文件夹名（驼峰）：
-    - 目标格式：{camelFolder}{CamelLocale}.i18n.json
+    只规范化 i18n/<module>/ 下的文件名，使其前缀严格等于文件夹名的驼峰：
+    - 目标格式：{camelFolder}_{locale}.i18n.json
     - 只对“能从文件名明确识别 locale”的文件动手（locale 必须在 locales 列表里）
     - 不覆盖已有目标文件
     """
@@ -350,13 +329,14 @@ def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = T
 
     locales_sorted = sorted(set(locales), key=len, reverse=True)
     expected_prefix = group.name
+    expected_prefix_camel = _to_camel(expected_prefix)
 
     for p in group.glob("*.i18n.json"):
         loc = _match_locale_from_filename(p.name, locales_sorted)
         if not loc:
             continue  # 无法明确识别 locale，不动
 
-        expected_name = f"{_to_camel(expected_prefix)}{_locale_to_camel(loc)}.i18n.json"
+        expected_name = f"{expected_prefix_camel}_{loc}.i18n.json"
         if p.name == expected_name:
             continue
 
@@ -435,12 +415,12 @@ def collect_redundant(cfg: Dict[str, Any], i18n_dir: Path) -> List[RedundantItem
     items: List[RedundantItem] = []
     for group in get_active_groups(i18n_dir):
         src_path = group_file_name(group, src_locale)
-        src_meta, src_body = split_slang_json(src_path, load_json_obj(src_path))
+        _, src_body = split_slang_json(src_path, load_json_obj(src_path))
         src_keys = set(src_body.keys())
 
         for loc in targets:
             tgt_path = group_file_name(group, loc)
-            tgt_meta, tgt_body = split_slang_json(tgt_path, load_json_obj(tgt_path))
+            _, tgt_body = split_slang_json(tgt_path, load_json_obj(tgt_path))
             tgt_keys = set(tgt_body.keys())
 
             extra = sorted(tgt_keys - src_keys)
@@ -525,7 +505,7 @@ def _compute_need_for_one(group: Path, cfg: Dict[str, Any], loc: str, incrementa
     tgt_path = group_file_name(group, loc)
 
     _, src_body = split_slang_json(src_path, load_json_obj(src_path))
-    tgt_meta, tgt_body = split_slang_json(tgt_path, load_json_obj(tgt_path))
+    _, tgt_body = split_slang_json(tgt_path, load_json_obj(tgt_path))
 
     if cleanup_extra:
         tgt_body = {k: v for k, v in tgt_body.items() if k in src_body}
@@ -534,58 +514,9 @@ def _compute_need_for_one(group: Path, cfg: Dict[str, Any], loc: str, incrementa
     return len(need)
 
 
-# ==============================
-# 修改点 1：translate_all 只处理“需要翻译”的模块
-# ==============================
-
-def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str, full: bool) -> None:
-    incremental = not full
-    cleanup_extra = bool(cfg["options"]["cleanup_extra_keys"])
-    sort_keys = bool(cfg["options"]["sort_keys"])
-
-    groups = get_active_groups(i18n_dir)
-    targets = cfg["target_locales"]
-
-    # 统计每个模块需要翻译的 keys（跨所有 target locales 求和）
-    group_need: Dict[Path, int] = {}
-    total_need = 0
-    for g in groups:
-        need_sum = 0
-        for loc in targets:
-            need_sum += _compute_need_for_one(
-                g, cfg, loc,
-                incremental=incremental,
-                cleanup_extra=cleanup_extra
-            )
-        group_need[g] = need_sum
-        total_need += need_sum
-
-    prog = Progress(total_keys=total_need)
-    print(f"🧮 Total keys to translate: {total_need}（模式={'全量' if full else '增量'}）")
-    if total_need == 0:
-        print("✅ 无需翻译：所有语言文件已齐全")
-        return
-
-    # 只翻译需要翻译的模块（need_sum > 0）
-    for g in groups:
-        if group_need.get(g, 0) <= 0:
-            continue
-        translate_group(
-            group=g,
-            cfg=cfg,
-            api_key=api_key,
-            model=model,
-            incremental=incremental,
-            cleanup_extra=cleanup_extra,
-            sort_keys=sort_keys,
-            progress=prog,
-        )
-
-
-# ==============================
-# 修改点 2：translate_group 当 need=0 时不打印进度、不打印模块行
-#         （仍会确保 @@locale 并保存）
-# ==============================
+# =========================================================
+# Translation
+# =========================================================
 
 def translate_group(
         group: Path,
@@ -616,13 +547,12 @@ def translate_group(
         need = {k: v for k, v in src_body.items() if k not in tgt_body} if incremental else dict(src_body)
 
         if not need:
-            # ✅ keys=0：不显示进度、不显示模块输出
+            # keys=0：不显示任何进度/输出，但仍确保 @@locale
             tgt_meta = dict(tgt_meta)
             tgt_meta.setdefault("@@locale", loc)
             save_json(tgt_path, tgt_meta, tgt_body, sort_keys=sort_keys)
             continue
 
-        # ✅ 只有真的要翻译才打印
         print(f"🌍 {module_name}: {src_locale} → {loc}  (+{len(need)} keys)")
         translated = translate_flat_dict(
             prompt_en=prompt_en_cfg,
@@ -640,6 +570,47 @@ def translate_group(
 
         progress.bump(len(translated))
         print(f"   📈 {progress.done_keys}/{progress.total_keys} ({progress.percent()}%) {progress.eta_text()}")
+
+
+def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str, full: bool) -> None:
+    incremental = not full
+    cleanup_extra = bool(cfg["options"]["cleanup_extra_keys"])
+    sort_keys = bool(cfg["options"]["sort_keys"])
+
+    groups = get_active_groups(i18n_dir)
+    targets = cfg["target_locales"]
+
+    # 统计每个模块需要翻译的 keys（跨所有 target locales 求和）
+    group_need: Dict[Path, int] = {}
+    total_need = 0
+    for g in groups:
+        need_sum = 0
+        for loc in targets:
+            need_sum += _compute_need_for_one(g, cfg, loc, incremental=incremental, cleanup_extra=cleanup_extra)
+        group_need[g] = need_sum
+        total_need += need_sum
+
+    prog = Progress(total_keys=total_need)
+    print(f"🧮 Total keys to translate: {total_need}（模式={'全量' if full else '增量'}）")
+    if total_need == 0:
+        print("✅ 无需翻译：所有语言文件已齐全")
+        return
+
+    # 只翻译需要翻译的模块
+    for g in groups:
+        if group_need.get(g, 0) <= 0:
+            continue
+        translate_group(
+            group=g,
+            cfg=cfg,
+            api_key=api_key,
+            model=model,
+            incremental=incremental,
+            cleanup_extra=cleanup_extra,
+            sort_keys=sort_keys,
+            progress=prog,
+        )
+
 
 # =========================================================
 # Doctor
