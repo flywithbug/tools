@@ -21,6 +21,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter
 
+- **`pub_publish`**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）
 - **`pub_upgrade`**：升级 pubspec.yaml 中的私服 hosted/url 依赖（比对清单 + 确认；release 分支可选跟随 x.y.*）
 - **`pub_version`**：升级 pubspec.yaml 的 version（支持交互选择 minor/patch）
 
@@ -63,6 +64,44 @@ box tools --full
 ---
 
 ## flutter
+
+### pub_publish
+
+**简介**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）
+
+**命令**：`pub_publish`
+
+**用法**
+
+```bash
+pub_publish --msg fix crash on iOS
+pub_publish --msg feat add new api --no-publish
+pub_publish --pubspec path/to/pubspec.yaml --changelog path/to/CHANGELOG.md --msg release notes
+pub_publish --msg hotfix --dry-run
+```
+
+**参数说明**
+
+- `--pubspec`：pubspec.yaml 路径（默认 ./pubspec.yaml）
+- `--changelog`：CHANGELOG.md 路径（默认 ./CHANGELOG.md）
+- `--msg`：更新说明（必填；可写多段，不需要引号）
+- `--no-pull`：跳过 git pull
+- `--no-git`：跳过 git add/commit/push
+- `--no-publish`：跳过 flutter pub publish
+- `--skip-pub-get`：跳过 flutter pub get
+- `--dry-run`：仅打印将执行的操作，不改文件、不跑命令
+
+**示例**
+
+- `pub_publish --msg fix null error`：拉代码→升级版本→更新 changelog→pub get→提交→发布
+- `pub_publish --msg release notes --no-publish`：只提交不发布
+- `pub_publish --msg try --dry-run`：预演一次，不做任何修改
+
+**文档**
+
+[src/box_tools/flutter/pub_publish.md](src/box_tools/flutter/pub_publish.md)
+
+---
 
 ### pub_upgrade
 
