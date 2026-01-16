@@ -7,7 +7,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 try:
     from openai import OpenAI  # noqa: F401
@@ -37,6 +37,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "sort_keys": True,
         "cleanup_extra_keys": True,
         "incremental_translate": True,
+        # 规范化文件名（更安全的实现，默认开启；你也可以关掉）
+        "normalize_filenames": True,
     },
 }
 
@@ -83,6 +85,7 @@ def _schema_error(msg: str) -> ValueError:
         "  sort_keys: true\n"
         "  cleanup_extra_keys: true\n"
         "  incremental_translate: true\n"
+        "  normalize_filenames: true\n"
     )
 
 
@@ -123,6 +126,11 @@ def validate_config(cfg: Any) -> Dict[str, Any]:
             raise _schema_error(f"options.{key} 必须是 bool（true/false）")
         return v
 
+    # normalize_filenames 可选，默认 true（为了兼容旧配置）
+    normalize_filenames = opts.get("normalize_filenames", True)
+    if not isinstance(normalize_filenames, bool):
+        raise _schema_error("options.normalize_filenames 必须是 bool（true/false）")
+
     return {
         "source_locale": src,
         "target_locales": targets2,
@@ -131,6 +139,7 @@ def validate_config(cfg: Any) -> Dict[str, Any]:
             "sort_keys": need_bool("sort_keys"),
             "cleanup_extra_keys": need_bool("cleanup_extra_keys"),
             "incremental_translate": need_bool("incremental_translate"),
+            "normalize_filenames": normalize_filenames,
         },
     }
 
@@ -190,55 +199,6 @@ def group_file_name(group: Path, locale: str) -> Path:
     return group / name
 
 
-def _parse_group_file_locale(group: Path, file_path: Path) -> Optional[str]:
-    """
-    从文件名解析 locale：
-    - root group: {locale}.i18n.json
-    - module group: {anyprefix}_{locale}.i18n.json（我们取最后一个 '_' 后的 locale）
-    """
-    name = file_path.name
-    if not name.endswith(".i18n.json"):
-        return None
-    stem = name[:-len(".i18n.json")]
-    if group.name == I18N_DIR:
-        return stem or None
-
-    if "_" not in stem:
-        return None
-    # locale = 最后一个 '_' 后
-    return stem.split("_")[-1] or None
-
-
-def normalize_group_filenames(group: Path, verbose: bool = True) -> None:
-    """
-    需求：若模块文件夹内存在“驼峰命名/前缀不一致”的 i18n 文件，则全部改成跟文件夹名一致：
-    - i18n/assets_record/ 期望：assets_record_{locale}.i18n.json
-      发现：assetsRecord_zh_Hant.i18n.json -> rename 为 assets_record_zh_Hant.i18n.json
-    """
-    if group.name == I18N_DIR:
-        return  # root 不做这种前缀修正
-
-    expected_prefix = group.name
-    for p in group.glob("*.i18n.json"):
-        loc = _parse_group_file_locale(group, p)
-        if not loc:
-            continue
-        expected_name = f"{expected_prefix}_{loc}.i18n.json"
-        if p.name == expected_name:
-            continue
-
-        target = group / expected_name
-        if target.exists():
-            # 避免覆盖：两者都存在就不动，给提示
-            if verbose:
-                print(f"⚠️ 跳过重命名（目标已存在）：{p.name} -> {target.name}")
-            continue
-
-        if verbose:
-            print(f"🛠️ 重命名：{p.name} -> {target.name}")
-        p.rename(target)
-
-
 def load_json_obj(path: Path) -> Dict[str, Any]:
     obj = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(obj, dict):
@@ -271,6 +231,66 @@ def save_json(path: Path, data: Dict[str, str], sort_keys: bool) -> None:
     path.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# =========================================================
+# Filename normalization (accurate + conservative)
+# =========================================================
+
+def _match_locale_from_filename(filename: str, locales_sorted: List[str]) -> Optional[str]:
+    """
+    仅在能“明确识别 locale”时返回 locale，否则返回 None
+    - 支持 xxx_{locale}.i18n.json
+    - 也支持 {locale}.i18n.json（模块目录里有些人会漏前缀）
+    - locale 匹配按长度降序，避免 zh vs zh_Hant 被误匹配
+    """
+    if not filename.endswith(".i18n.json"):
+        return None
+
+    for loc in locales_sorted:
+        if filename.endswith(f"_{loc}.i18n.json"):
+            return loc
+        if filename == f"{loc}.i18n.json":
+            return loc
+    return None
+
+
+def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = True) -> None:
+    """
+    只规范化 i18n/<module>/ 下的文件名，使其前缀严格等于文件夹名：
+    - 目标格式：{folder}_{locale}.i18n.json
+    - 只对“能从文件名明确识别 locale”的文件动手（locale 必须在 locales 列表里）
+    - 不覆盖已有目标文件
+    """
+    if group.name == I18N_DIR:
+        return  # 不动根目录
+
+    locales_sorted = sorted(set(locales), key=len, reverse=True)
+    expected_prefix = group.name
+
+    for p in group.glob("*.i18n.json"):
+        loc = _match_locale_from_filename(p.name, locales_sorted)
+        if not loc:
+            # 无法明确识别 locale，坚决不动
+            continue
+
+        expected_name = f"{expected_prefix}_{loc}.i18n.json"
+        if p.name == expected_name:
+            continue  # 已正确
+
+        target = group / expected_name
+        if target.exists():
+            if verbose:
+                print(f"⚠️ 跳过重命名（目标已存在）：{p.name} -> {target.name}")
+            continue
+
+        if verbose:
+            print(f"🛠️ 重命名：{p.name} -> {target.name}")
+        p.rename(target)
+
+
+# =========================================================
+# Ensure files
+# =========================================================
+
 def ensure_language_files_in_group(group: Path, src_locale: str, targets: List[str]) -> None:
     src_path = group_file_name(group, src_locale)
     if not src_path.exists():
@@ -286,11 +306,12 @@ def ensure_language_files_in_group(group: Path, src_locale: str, targets: List[s
 
 def ensure_all_language_files(i18n_dir: Path, cfg: Dict[str, Any]) -> None:
     groups = find_groups(i18n_dir)
-    # ✅ 先做文件名规范化（只针对模块目录）
-    for g in groups:
-        normalize_group_filenames(g, verbose=True)
+    locales = [cfg["source_locale"], *cfg["target_locales"]]
 
-    # ✅ 再补齐语言文件
+    if bool(cfg["options"].get("normalize_filenames", True)):
+        for g in groups:
+            normalize_group_filenames(g, locales=locales, verbose=True)
+
     for g in groups:
         ensure_language_files_in_group(g, cfg["source_locale"], cfg["target_locales"])
 
@@ -375,7 +396,7 @@ def delete_redundant(items: List[RedundantItem], sort_keys: bool) -> None:
 
 
 # =========================================================
-# Translation progress (group/locale level)
+# Progress (group/locale level)
 # =========================================================
 
 @dataclass
@@ -463,14 +484,11 @@ def translate_group(
         module_name = "i18n" if group.name == I18N_DIR else group.name
 
         if not need:
-            # 仍写回（保证清理后结果落盘 + 排序）
             save_json(tgt_path, {"@@locale": loc, **tgt_body}, sort_keys=sort_keys)
-            # group/locale 级进度：0 keys 也显示一下更可感知
             print(f"🌍 {module_name}: {src_locale} → {loc}  (+0 keys)  📈 {progress.done_keys}/{progress.total_keys} ({progress.percent()}%) {progress.eta_text()}")
             continue
 
         print(f"🌍 {module_name}: {src_locale} → {loc}  (+{len(need)} keys)")
-
         translated = translate_flat_dict(
             prompt_en=prompt_en_cfg,
             src_dict=need,
@@ -495,14 +513,13 @@ def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str,
     groups = find_groups(i18n_dir)
     targets = cfg["target_locales"]
 
-    # 预先计算总需翻译 key 数（用于进度）
     total_need = 0
     for g in groups:
         for loc in targets:
             total_need += _compute_need_for_one(g, cfg, loc, incremental=incremental, cleanup_extra=cleanup_extra)
 
     prog = Progress(total_keys=total_need)
-    print(f"🧮 Total keys to translate: {total_need} （模式={'全量' if full else '增量'}）")
+    print(f"🧮 Total keys to translate: {total_need}（模式={'全量' if full else '增量'}）")
     if total_need == 0:
         print("✅ 无需翻译：所有语言文件已齐全")
         return
@@ -555,7 +572,8 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
         try:
             cfg = read_config(cfg_path)
             prompt_on = bool((cfg.get("prompt_en") or "").strip())
-            print(f"✅ {CONFIG_FILE} OK (source={cfg['source_locale']} targets={len(cfg['target_locales'])} prompt_en={'ON' if prompt_on else 'OFF'})")
+            normalize_on = bool(cfg["options"].get("normalize_filenames", True))
+            print(f"✅ {CONFIG_FILE} OK (source={cfg['source_locale']} targets={len(cfg['target_locales'])} prompt_en={'ON' if prompt_on else 'OFF'} normalize_filenames={'ON' if normalize_on else 'OFF'})")
         except Exception as e:
             ok = False
             print(f"❌ {CONFIG_FILE} 解析失败：{e}")
@@ -608,7 +626,9 @@ def _print_header(cfg: Optional[Dict[str, Any]], i18n_dir: Optional[Path], model
         print(f"🌐 source_locale: {cfg['source_locale']}")
         print(f"🎯 target_locales: {len(cfg['target_locales'])} 个")
         prompt_on = bool((cfg.get('prompt_en') or '').strip())
+        normalize_on = bool(cfg["options"].get("normalize_filenames", True))
         print(f"📝 prompt_en: {'ON' if prompt_on else 'OFF'}")
+        print(f"🧹 normalize_filenames: {'ON' if normalize_on else 'OFF'}")
         opts = cfg["options"]
         print(f"⚙️  sort_keys={opts['sort_keys']} cleanup_extra_keys={opts['cleanup_extra_keys']} incremental_translate={opts['incremental_translate']}")
     else:
@@ -697,7 +717,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         if action == "exit":
             return EXIT_OK
 
-    # init / doctor
     if action == "init":
         try:
             init_config(cfg_path)
@@ -716,7 +735,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"❌ {e}")
             return EXIT_BAD
 
-    # 其余动作：需要 config + i18n
     try:
         cfg = read_config_or_throw(cfg_path)
     except Exception as e:
@@ -729,14 +747,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"❌ {e}")
         return EXIT_BAD
 
-    # 补齐语言文件（包含：先规范化文件名前缀）
     try:
         ensure_all_language_files(i18n_dir, cfg)
     except Exception as e:
         print(f"❌ 补齐/规范化语言文件失败：{e}")
         return EXIT_BAD
 
-    # sort
     if action == "sort":
         try:
             sort_all_json(i18n_dir, sort_keys=bool(cfg["options"]["sort_keys"]))
@@ -746,7 +762,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"❌ 排序失败：{e}")
             return EXIT_FAIL
 
-    # check redundant
     if action == "check":
         try:
             items = collect_redundant(cfg, i18n_dir)
@@ -758,7 +773,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"❌ 冗余检查失败：{e}")
             return EXIT_FAIL
 
-    # clean redundant
     if action == "clean":
         try:
             items = collect_redundant(cfg, i18n_dir)
@@ -779,7 +793,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"❌ 删除冗余失败：{e}")
             return EXIT_FAIL
 
-    # translate
     if action == "translate":
         api_key = args.api_key or os.getenv("OPENAI_API_KEY")
         if not api_key and interactive:
@@ -814,7 +827,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         cost = time.time() - started
         print(f"✅ 翻译完成（{cost:.1f}s，模式={'全量' if full else '增量'}）")
 
-        # 翻译后可选排序
         try:
             if bool(cfg["options"]["sort_keys"]):
                 sort_all_json(i18n_dir, sort_keys=True)
