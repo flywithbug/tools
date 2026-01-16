@@ -26,6 +26,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - **`pub_version`**：升级 pubspec.yaml 的 version（支持交互选择 minor/patch）
 - **`riverpod_gen`**：生成 Riverpod StateNotifier + State 模板文件（notifier/state）
 
+### translate
+
+- **`slang_i18n`**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（交互 + 非交互）
+
 ---
 
 ## box（工具集管理）
@@ -209,6 +213,46 @@ riverpod_gen Product --legacy
 **文档**
 
 [src/box_tools/flutter/riverpod_gen.md](src/box_tools/flutter/riverpod_gen.md)
+
+---
+
+## translate
+
+### slang_i18n
+
+**简介**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（交互 + 非交互）
+
+**命令**：`slang_i18n`
+
+**用法**
+
+```bash
+slang_i18n
+slang_i18n init
+slang_i18n doctor
+slang_i18n sort
+slang_i18n translate --api-key sk-xxx
+slang_i18n check
+slang_i18n clean --yes
+```
+
+**参数说明**
+
+- `--api-key`：OpenAI API key（也可用环境变量 OPENAI_API_KEY）
+- `--model`：模型（默认 GPT_4O）
+- `--full`：全量翻译（否则增量翻译）
+- `--yes`：删除冗余时跳过确认
+
+**示例**
+
+- `slang_i18n`：进入交互菜单
+- `slang_i18n init`：生成 slang_i18n.yaml（存在则校验不覆盖）
+- `slang_i18n translate --api-key $OPENAI_API_KEY`：增量翻译补齐缺失 key
+- `slang_i18n clean --yes`：直接删除冗余 key（免确认）
+
+**文档**
+
+[src/box_tools/translate/slang_i18n.md](src/box_tools/translate/slang_i18n.md)
 
 ---
 
