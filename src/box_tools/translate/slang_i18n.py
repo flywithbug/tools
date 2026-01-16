@@ -7,18 +7,15 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-
-import yaml  # pip install pyyaml
+from typing import Any, Dict, Iterable, List, Optional
 
 try:
     from openai import OpenAI  # noqa: F401
 except Exception:
     OpenAI = None  # type: ignore
 
-# 你已有的翻译模块（请确保存在）
-# 需要导出：translate_flat_dict / OpenAIModel / TranslationError
-from slang_translate import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
+# ✅ 关键：翻译能力来自 translate/comm/translate_flat.py（你给的文件）
+from .comm.translate_flat import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
 
 
 BOX_TOOL = {
@@ -31,15 +28,16 @@ BOX_TOOL = {
         "slang_i18n init",
         "slang_i18n doctor",
         "slang_i18n sort",
-        "slang_i18n translate --api-key sk-xxx",
         "slang_i18n check",
-        "slang_i18n clean --yes",
+        "slang_i18n clean",
+        "slang_i18n translate --api-key $OPENAI_API_KEY",
     ],
     "options": [
         {"flag": "--api-key", "desc": "OpenAI API key（也可用环境变量 OPENAI_API_KEY）"},
-        {"flag": "--model", "desc": "模型（默认 GPT_4O）"},
-        {"flag": "--full", "desc": "全量翻译（否则增量翻译）"},
-        {"flag": "--yes", "desc": "删除冗余时跳过确认"},
+        {"flag": "--model", "desc": "模型（默认 gpt-4o）"},
+        {"flag": "--full", "desc": "全量翻译（默认增量）"},
+        {"flag": "--yes", "desc": "clean 删除冗余时跳过确认"},
+        {"flag": "--no-exitcode-3", "desc": "check 发现冗余时仍返回 0（默认返回 3）"},
     ],
     "examples": [
         {"cmd": "slang_i18n", "desc": "进入交互菜单"},
@@ -54,11 +52,13 @@ BOX_TOOL = {
 CONFIG_FILE = "slang_i18n.yaml"
 I18N_DIR = "i18n"
 
-DEFAULT_SOURCE_LOCALE = "en"
-DEFAULT_TARGET_LOCALES = [
-    "zh_Hant", "de", "es", "fil", "fr", "hi", "id", "ja",
-    "kk", "ko", "pt", "ru", "th", "uk", "vi", "tr", "nl",
+# 你给的默认语言集合
+DEFAULT_ALL_LOCALES = [
+    "en", "zh_Hant", "de", "es", "fil", "fr", "hi", "id", "ja",
+    "kk", "ko", "pt", "ru", "th", "uk", "vi", "tr", "nl"
 ]
+DEFAULT_SOURCE_LOCALE = "en"
+DEFAULT_TARGET_LOCALES = [x for x in DEFAULT_ALL_LOCALES if x != DEFAULT_SOURCE_LOCALE]
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "source_locale": DEFAULT_SOURCE_LOCALE,
@@ -71,19 +71,33 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
 }
 
-
-# =========================================================
-# Errors & exit codes
-# =========================================================
-# 0: 成功 or 用户主动退出
-# 1: 执行失败（翻译失败 / 删除失败等）
-# 2: 参数/配置/文件结构错误
-# 3: check 发现冗余（仅用于 check 命令的可选返回）
+# Exit codes
 EXIT_OK = 0
 EXIT_FAIL = 1
 EXIT_BAD = 2
 EXIT_REDUNDANT_FOUND = 3
 
+
+# =========================================================
+# Lazy import for PyYAML (避免没装就 traceback)
+# =========================================================
+
+def _require_yaml():
+    try:
+        import yaml  # type: ignore
+        return yaml
+    except Exception:
+        raise SystemExit(
+            "❌ 缺少依赖 PyYAML（import yaml 失败）\n"
+            "修复方式：\n"
+            "1) 如果你用 pipx 安装：pipx inject box pyyaml\n"
+            "2) 或在 pyproject.toml dependencies 加入 PyYAML>=6.0 后重新发布/安装\n"
+        )
+
+
+# =========================================================
+# Config
+# =========================================================
 
 def _schema_error(msg: str) -> ValueError:
     return ValueError(
@@ -102,10 +116,6 @@ def _schema_error(msg: str) -> ValueError:
         "  incremental_translate: true\n"
     )
 
-
-# =========================================================
-# Config
-# =========================================================
 
 def validate_config(cfg: Any) -> Dict[str, Any]:
     if not isinstance(cfg, dict):
@@ -157,6 +167,7 @@ def validate_config(cfg: Any) -> Dict[str, Any]:
 
 
 def read_config(path: Path) -> Dict[str, Any]:
+    yaml = _require_yaml()
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     return validate_config(raw)
 
@@ -168,6 +179,7 @@ def read_config_or_throw(path: Path) -> Dict[str, Any]:
 
 
 def init_config(path: Path) -> None:
+    yaml = _require_yaml()
     if path.exists():
         # 存在就校验，不覆盖；格式不对直接报错
         _ = read_config(path)
@@ -193,7 +205,6 @@ def ensure_i18n_dir() -> Path:
 
 
 def find_groups(i18n_dir: Path) -> List[Path]:
-    # group = i18n/ 本身 + i18n/ 下一级子目录
     groups = [i18n_dir]
     for child in i18n_dir.iterdir():
         if child.is_dir():
@@ -251,10 +262,6 @@ def save_json(path: Path, data: Dict[str, str], sort_keys: bool) -> None:
 
 
 def ensure_language_files_in_group(group: Path, src_locale: str, targets: List[str]) -> None:
-    """
-    - 若缺 src 文件：创建仅包含 {"@@locale": src}
-    - targets 缺失也创建同结构
-    """
     src_path = group_file_name(group, src_locale)
     if not src_path.exists():
         save_json(src_path, {"@@locale": src_locale}, sort_keys=False)
@@ -268,8 +275,7 @@ def ensure_language_files_in_group(group: Path, src_locale: str, targets: List[s
 
 
 def ensure_all_language_files(i18n_dir: Path, cfg: Dict[str, Any]) -> None:
-    groups = find_groups(i18n_dir)
-    for g in groups:
+    for g in find_groups(i18n_dir):
         ensure_language_files_in_group(g, cfg["source_locale"], cfg["target_locales"])
 
 
@@ -402,13 +408,7 @@ def translate_group(
         save_json(tgt_path, {"@@locale": loc, **tgt_body}, sort_keys=sort_keys)
 
 
-def translate_all(
-        i18n_dir: Path,
-        cfg: Dict[str, Any],
-        api_key: str,
-        model: str,
-        full: bool,
-) -> None:
+def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str, full: bool) -> None:
     incremental = not full
     cleanup_extra = bool(cfg["options"]["cleanup_extra_keys"])
     sort_keys = bool(cfg["options"]["sort_keys"])
@@ -437,6 +437,14 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
         print("❌ OpenAI SDK 不可用：请 pip install openai>=1.0.0")
     else:
         print("✅ OpenAI SDK OK")
+
+    # PyYAML 检查（懒加载）
+    try:
+        _require_yaml()
+        print("✅ PyYAML OK")
+    except SystemExit as e:
+        ok = False
+        print(str(e).strip())
 
     i18n_dir = Path.cwd() / I18N_DIR
     if not i18n_dir.exists() or not i18n_dir.is_dir():
@@ -533,7 +541,6 @@ def choose_action_interactive(model_default: str) -> str:
         try:
             cfg = read_config(cfg_path)
         except Exception as e:
-            # 配置存在但错误：仍让用户选 doctor/init
             print(f"❌ {e}")
             cfg = None
 
@@ -582,9 +589,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="动作（不填则进入交互菜单）",
     )
     p.add_argument("--api-key", default=None, help="OpenAI API key（也可用环境变量 OPENAI_API_KEY）")
-    p.add_argument("--model", default=OpenAIModel.GPT_4O.value, help="模型（默认 GPT_4O）")
+    p.add_argument("--model", default=OpenAIModel.GPT_4O.value, help="模型（默认 gpt-4o）")
     p.add_argument("--full", action="store_true", help="全量翻译（默认增量翻译）")
-    p.add_argument("--yes", action="store_true", help="删除冗余时跳过确认")
+    p.add_argument("--yes", action="store_true", help="clean 删除冗余时跳过确认")
     p.add_argument("--no-exitcode-3", action="store_true", help="check 发现冗余时仍返回 0（默认返回 3）")
     return p
 
@@ -597,16 +604,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     model = args.model
 
     action = args.action
+    interactive = False
     if not action:
+        interactive = True
         action = choose_action_interactive(model_default=model)
         if action == "exit":
             return EXIT_OK
 
-    # ---- init/doctor 不强依赖 i18n/config 完整性（doctor 会检查）
+    # init / doctor
     if action == "init":
         try:
             init_config(cfg_path)
             return EXIT_OK
+        except SystemExit as e:
+            print(str(e).strip())
+            return EXIT_BAD
         except Exception as e:
             print(f"❌ {e}")
             return EXIT_BAD
@@ -621,7 +633,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"❌ {e}")
             return EXIT_BAD
 
-    # ---- 其余动作：需要 config + i18n
+    # 其余动作：需要 config + i18n
     try:
         cfg = read_config_or_throw(cfg_path)
     except Exception as e:
@@ -634,7 +646,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"❌ {e}")
         return EXIT_BAD
 
-    # 先补齐（en + targets）文件
+    # 补齐语言文件（en + targets）
     try:
         ensure_all_language_files(i18n_dir, cfg)
     except Exception as e:
@@ -688,6 +700,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if action == "translate":
         api_key = args.api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
+            api_key = _ensure_api_key_interactive(None) if interactive else None
+        if not api_key:
             print("❌ 未提供 apiKey（--api-key 或 OPENAI_API_KEY）")
             return EXIT_BAD
         if OpenAI is None:
@@ -695,16 +709,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             return EXIT_BAD
 
         full = bool(args.full)
-        incremental = not full
 
-        # 交互模式下再给一次“增量/全量”选择（更像 pub_version）
-        if not args.action:  # 从交互菜单进来的
-            print(f"🤖 当前模式：{'增量' if incremental else '全量'}")
+        if interactive and args.action is None:
+            print(f"🤖 当前模式：{'全量' if full else '增量'}")
             m = _read_choice("选择翻译模式：1 增量 / 2 全量 / 0 取消: ", valid=["0", "1", "2"])
             if m == "0":
                 print("🧊 已取消翻译")
                 return EXIT_OK
-            incremental = (m == "1")
             full = (m == "2")
 
         started = time.time()
@@ -719,12 +730,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         cost = time.time() - started
         print(f"✅ 翻译完成（{cost:.1f}s，模式={'全量' if full else '增量'}）")
-        # 翻译后按需排序（配置里开了就做）
+
+        # 翻译后可选排序
         try:
             if bool(cfg["options"]["sort_keys"]):
                 sort_all_json(i18n_dir, sort_keys=True)
         except Exception:
             pass
+
         return EXIT_OK
 
     print("❌ 未知 action")
