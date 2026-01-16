@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
@@ -25,7 +26,7 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 @dataclass(frozen=True)
 class Tool:
     py_path: Path               # src/.../tool.py (absolute)
-    md_path: Path               # src/.../tool.md (absolute, same name rule)
+    md_path: Path               # docs md (absolute) - prefer BOX_TOOL["docs"] else same-name.md
     rel_py: str                 # relative path for display/link
     rel_md: str                 # relative path for link
 
@@ -42,6 +43,8 @@ class Tool:
 
     module: str                 # e.g. box_tools.flutter.pub_version
     entrypoint: str             # e.g. box_tools.flutter.pub_version:main
+
+    extra_meta: Dict[str, Any]  # 原始 BOX_TOOL meta（用于 deps/docs 等扩展）
 
 
 # -------------------------
@@ -133,11 +136,6 @@ def dir_key_from_py(py_file: Path) -> str:
 def make_group_title(dir_key: str, category: str) -> str:
     """
     README 的分组标题：优先用 folder 结构（满足“按文件夹分类”）。
-    同时尽量展示得简洁：
-      - box -> box
-      - box_tools/flutter -> flutter
-      - box_tools/flutter/sub -> flutter/sub
-      - other_dir -> other_dir
     category 仅作为补充，不作为分组依据（避免目录与 category 不一致导致混乱）。
     """
     if dir_key == "box":
@@ -150,6 +148,21 @@ def make_group_title(dir_key: str, category: str) -> str:
             return "/".join(rest)
         return "box_tools"
     return dir_key
+
+
+def _resolve_docs_md(py_file: Path, meta: Dict[str, Any]) -> Path:
+    """
+    文档路径规则：
+    - 优先 BOX_TOOL["docs"]（相对仓库根目录或绝对路径）
+    - 否则同名 md（同目录同 stem）
+    """
+    docs = meta.get("docs")
+    if isinstance(docs, str) and docs.strip():
+        p = Path(docs.strip())
+        if not p.is_absolute():
+            p = REPO_ROOT / p
+        return p
+    return same_name_md(py_file)
 
 
 def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
@@ -165,9 +178,10 @@ def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
     options = norm_list_dict(meta.get("options"))
     examples = norm_list_dict(meta.get("examples"))
 
-    md_file = same_name_md(py_file)
+    md_file = _resolve_docs_md(py_file, meta)
+
     rel_py = py_file.relative_to(REPO_ROOT).as_posix()
-    rel_md = md_file.relative_to(REPO_ROOT).as_posix()
+    rel_md = md_file.relative_to(REPO_ROOT).as_posix() if md_file.is_absolute() and md_file.exists() or md_file.is_absolute() else md_file.relative_to(REPO_ROOT).as_posix()
 
     dir_key = dir_key_from_py(py_file)
     stem = py_file.stem
@@ -190,6 +204,7 @@ def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
         examples=examples,
         module=module,
         entrypoint=entrypoint,
+        extra_meta=meta,
     )
 
 
@@ -205,7 +220,6 @@ def collect_tools() -> List[Tool]:
 
     # 排序：box 最上，其余按 (folder, filename)
     def is_box(t: Tool) -> bool:
-        # 以“脚本名=box 或目录=box/”为准
         if t.name.lower() == "box":
             return True
         rel = t.py_path.relative_to(SRC_DIR).as_posix().lower()
@@ -227,7 +241,6 @@ def render_overview(tools: List[Tool]) -> str:
     for t in tools:
         groups.setdefault(t.dir_key, []).append(t)
 
-    # group 排序：box 先，其余按目录字母
     group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
 
     out: List[str] = []
@@ -235,9 +248,11 @@ def render_overview(tools: List[Tool]) -> str:
     for gk in group_keys:
         title = make_group_title(gk, "")
         out.append(f"### {title}\n\n")
-        # 每组内：box 先，其余按文件名
         group_tools = groups[gk]
-        group_tools_sorted = sorted(group_tools, key=lambda t: (0, "") if t.name.lower() == "box" else (1, t.py_path.stem.lower()))
+        group_tools_sorted = sorted(
+            group_tools,
+            key=lambda t: (0, "") if t.name.lower() == "box" else (1, t.py_path.stem.lower())
+        )
         for t in group_tools_sorted:
             s = t.summary or ""
             if s:
@@ -252,11 +267,10 @@ def render_overview(tools: List[Tool]) -> str:
 def render_tool_detail(t: Tool) -> str:
     """
     生成单个工具详情块（信息密度高但规整）。
-    文档链接使用“同名.md”规则，并且可点击。
+    文档链接优先 BOX_TOOL["docs"]，否则同名 md。
     """
     out: List[str] = []
 
-    # 标题层级：box 用二级标题，其它用三级标题（更像手册）
     if t.name.lower() == "box":
         out.append("## box（工具集管理）\n\n")
     else:
@@ -267,17 +281,14 @@ def render_tool_detail(t: Tool) -> str:
 
     out.append(f"**命令**：`{t.name}`\n\n")
 
-    # usage
     if t.usage:
         out.append("**用法**\n\n")
         out.append("```bash\n")
         out.extend([u + "\n" for u in t.usage])
         out.append("```\n\n")
 
-    # options
     if t.options:
         out.append("**参数说明**\n\n")
-        # 列表形式（更稳、更适合 README）
         for opt in t.options:
             flag = norm_str(opt.get("flag") or opt.get("name") or "")
             desc = norm_str(opt.get("desc") or opt.get("description") or "")
@@ -289,7 +300,6 @@ def render_tool_detail(t: Tool) -> str:
                 out.append(f"- {desc}\n")
         out.append("\n")
 
-    # examples
     if t.examples:
         out.append("**示例**\n\n")
         for ex in t.examples:
@@ -303,13 +313,14 @@ def render_tool_detail(t: Tool) -> str:
                 out.append(f"- {desc}\n")
         out.append("\n")
 
-    # docs link (same-name.md)
+    out.append("**文档**\n\n")
     if t.md_path.exists():
-        out.append("**文档**\n\n")
-        out.append(f"[{t.rel_md}]({t.rel_md})\n\n")
+        rel = t.md_path.relative_to(REPO_ROOT).as_posix()
+        out.append(f"[{rel}]({rel})\n\n")
     else:
-        out.append("**文档**\n\n")
-        out.append(f"- 未找到同名文档：`{t.rel_md}`（请创建该文件）\n\n")
+        # 保持显示为相对路径更好读
+        rel_guess = t.md_path.relative_to(REPO_ROOT).as_posix() if t.md_path.is_absolute() else str(t.md_path)
+        out.append(f"- 未找到文档：`{rel_guess}`（请创建该文件）\n\n")
 
     out.append("---\n\n")
     return "".join(out)
@@ -320,20 +331,17 @@ def render_readme(temp_header: str, tools: List[Tool]) -> str:
     out.append(temp_header.rstrip() + "\n\n")
     out.append(render_overview(tools))
 
-    # 按目录分段：box 先单独，其他按目录分组
     box_tools = [t for t in tools if t.name.lower() == "box" or t.py_path.relative_to(SRC_DIR).as_posix().lower() == "box/box.py"]
     other_tools = [t for t in tools if t not in box_tools]
 
-    # box 详情（如果存在）
     for t in box_tools:
         out.append(render_tool_detail(t))
 
-    # 其他：按 dir_key 分组，再按文件名
     groups: Dict[str, List[Tool]] = {}
     for t in other_tools:
         groups.setdefault(t.dir_key, []).append(t)
 
-    group_keys = sorted(groups.keys(), key=lambda k: (1, k.lower()))  # box 已经单独处理
+    group_keys = sorted(groups.keys(), key=lambda k: (1, k.lower()))
 
     for gk in group_keys:
         title = make_group_title(gk, "")
@@ -365,7 +373,6 @@ def replace_table_block(text: str, header: str, body_lines: List[str]) -> str:
     替换一个 table 块：从 [header] 开始到下一个 [..] 或 EOF。
     不触碰其他 table。
     """
-    # header 是不带中括号的，如 project.scripts
     pattern = re.compile(rf"(?ms)^\[{re.escape(header)}\]\s*\n.*?(?=^\[|\Z)")
     new_block = f"[{header}]\n" + "\n".join(body_lines).rstrip() + "\n\n"
 
@@ -398,7 +405,169 @@ def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
     return text[:m.start()] + block2 + text[m.end():]
 
 
-def update_pyproject(tools: List[Tool], do_bump: bool) -> Tuple[str, int, List[str]]:
+# -------------------------
+# dependencies: collect + patch
+# -------------------------
+
+_STDLIB_NAMES: Set[str] = set(getattr(sys, "stdlib_module_names", set()))
+_STDLIB_FALLBACK = {
+    "argparse", "ast", "datetime", "os", "re", "subprocess", "pathlib",
+    "typing", "dataclasses", "json", "time", "sys", "textwrap", "shlex",
+    "collections", "itertools", "functools", "logging", "math", "random",
+    "traceback", "inspect", "types", "enum", "copy", "hashlib", "base64",
+    "threading", "multiprocessing", "signal", "tempfile", "contextlib",
+}
+_STDLIB_NAMES |= _STDLIB_FALLBACK
+
+_IMPORT_TO_PIP = {
+    "yaml": "PyYAML",
+    "openai": "openai",
+    "requests": "requests",
+    "toml": "toml",
+    "tomli": "tomli",
+    "rich": "rich",
+}
+
+def _top_import_name(mod: str) -> str:
+    return (mod or "").split(".", 1)[0].strip()
+
+
+def _norm_dep_list(v: Any) -> List[str]:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        s = v.strip()
+        return [s] if s else []
+    if isinstance(v, (list, tuple)):
+        out: List[str] = []
+        for x in v:
+            if x is None:
+                continue
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        return out
+    return []
+
+
+def infer_deps_from_imports(py_file: Path) -> List[str]:
+    """
+    解析 import / from import，提取非 stdlib 的顶层模块名，再映射到 pip 包名。
+    （推断只做“尽力而为”，最终以 BOX_TOOL 显式 dependencies 为准）
+    """
+    try:
+        src = py_file.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(src)
+    except Exception:
+        return []
+
+    imports: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = _top_import_name(alias.name)
+                if name:
+                    imports.add(name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.level > 0:
+                continue  # 相对导入视为项目内部
+            name = _top_import_name(node.module or "")
+            if name:
+                imports.add(name)
+
+    project_top_pkgs: Set[str] = set()
+    if SRC_DIR.exists():
+        for p in SRC_DIR.iterdir():
+            if p.is_dir() and (p / "__init__.py").exists():
+                project_top_pkgs.add(p.name)
+
+    out: List[str] = []
+    seen: Set[str] = set()
+    for name in sorted(imports):
+        if name in _STDLIB_NAMES:
+            continue
+        if name in project_top_pkgs:
+            continue
+        pip_name = _IMPORT_TO_PIP.get(name, name)
+        if pip_name not in seen:
+            out.append(pip_name)
+            seen.add(pip_name)
+    return out
+
+
+def collect_tool_dependencies(tools: List[Tool]) -> List[str]:
+    """
+    依赖来源：
+    1) BOX_TOOL 显式：dependencies/depends/deps/requires
+    2) import 推断（兜底）
+    合并去重：显式优先、顺序稳定。
+    """
+    merged: List[str] = []
+    seen: Set[str] = set()
+
+    for t in tools:
+        meta = t.extra_meta or {}
+        raw = (meta.get("dependencies") or meta.get("depends") or meta.get("deps") or meta.get("requires"))
+        explicit = _norm_dep_list(raw)
+        inferred = infer_deps_from_imports(t.py_path)
+
+        for dep in explicit + inferred:
+            if dep not in seen:
+                merged.append(dep)
+                seen.add(dep)
+
+    return merged
+
+
+def ensure_project_dependencies(text: str, add_deps: List[str]) -> str:
+    """
+    把 add_deps 合并进 [project].dependencies
+    - 若 dependencies 不存在：追加 dependencies = [...]
+    - 若存在：抽取引号中的条目，合并后回写（保持原有优先）
+    """
+    if not add_deps:
+        return text
+
+    project_pat = re.compile(r"(?ms)^\[project\]\s*\n.*?(?=^\[|\Z)")
+    m = project_pat.search(text)
+    if not m:
+        deps_lines = ", ".join([f'"{d}"' for d in add_deps])
+        block = "[project]\n" + f"dependencies = [{deps_lines}]\n\n"
+        return text.rstrip() + "\n\n" + block
+
+    block = text[m.start():m.end()]
+
+    dep_pat = re.compile(r"(?ms)^\s*dependencies\s*=\s*\[(?P<body>.*?)\]\s*$")
+    md = dep_pat.search(block)
+
+    if md:
+        body = md.group("body")
+        existing = [s.strip() for s in re.findall(r"""["']([^"']+)["']""", body) if s.strip()]
+
+        merged: List[str] = []
+        seen: Set[str] = set()
+
+        for d in existing:
+            if d not in seen:
+                merged.append(d)
+                seen.add(d)
+        for d in add_deps:
+            if d not in seen:
+                merged.append(d)
+                seen.add(d)
+
+        deps_lines = ", ".join([f'"{d}"' for d in merged])
+        new_line = f"dependencies = [{deps_lines}]"
+        block2 = dep_pat.sub(new_line, block, count=1)
+        return text[:m.start()] + block2 + text[m.end():]
+
+    deps_lines = ", ".join([f'"{d}"' for d in add_deps])
+    new_line = f"dependencies = [{deps_lines}]"
+    block2 = block.rstrip() + "\n" + new_line + "\n"
+    return text[:m.start()] + block2 + text[m.end():]
+
+
+def update_pyproject(tools: List[Tool], do_bump: bool) -> Tuple[str, int, List[str], List[str]]:
     if not PYPROJECT.exists():
         raise SystemExit("未找到 pyproject.toml，请在仓库根目录执行。")
 
@@ -423,10 +592,14 @@ def update_pyproject(tools: List[Tool], do_bump: bool) -> Tuple[str, int, List[s
     packages.sort(key=lambda s: (0, "") if s.lower() == "src/box" else (1, s.lower()))
     text = replace_wheel_packages_line(text, packages)
 
+    # project dependencies：合并工具依赖
+    deps_added = collect_tool_dependencies(tools)
+    text = ensure_project_dependencies(text, deps_added)
+
     if text != original:
         PYPROJECT.write_text(text, encoding="utf-8")
 
-    return new_version, len(scripts), packages
+    return new_version, len(scripts), packages, deps_added
 
 
 # -------------------------
@@ -437,7 +610,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-readme", action="store_true", help="不生成 README.md")
     ap.add_argument("--no-toml", action="store_true", help="不更新 pyproject.toml")
-    ap.add_argument("--no-bump", action="store_true", help="不升级 version（仍会更新 scripts / wheel packages）")
+    ap.add_argument("--no-bump", action="store_true", help="不升级 version（仍会更新 scripts / wheel packages / dependencies）")
     args = ap.parse_args()
 
     if not TEMP_MD.exists():
@@ -456,11 +629,13 @@ def main() -> None:
         print(f"[ok] README.md 已生成：{README_MD}")
 
     if not args.no_toml:
-        new_version, n_scripts, wheel_pkgs = update_pyproject(tools, do_bump=not args.no_bump)
+        new_version, n_scripts, wheel_pkgs, deps_added = update_pyproject(tools, do_bump=not args.no_bump)
         if new_version:
             print(f"[ok] pyproject.toml version -> {new_version}")
         print(f"[ok] [project.scripts] -> {n_scripts} 项")
         print(f"[ok] wheel packages -> {wheel_pkgs}")
+        if deps_added:
+            print(f"[ok] project.dependencies merged -> {deps_added}")
 
     print("Done.")
 

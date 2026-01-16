@@ -19,6 +19,39 @@ except Exception:
 from .comm.translate_flat import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
 
 
+BOX_TOOL = {
+    "id": "flutter.slang_i18n",
+    "name": "slang_i18n",
+    "category": "flutter",
+    "summary": "Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）",
+    "usage": [
+        "slang_i18n",
+        "slang_i18n init",
+        "slang_i18n doctor",
+        "slang_i18n sort",
+        "slang_i18n check",
+        "slang_i18n clean --yes",
+        "slang_i18n translate --api-key $OPENAI_API_KEY",
+    ],
+    "options": [
+        {"flag": "--api-key", "desc": "OpenAI API key（也可用环境变量 OPENAI_API_KEY）"},
+        {"flag": "--model", "desc": "模型（默认 gpt-4o）"},
+        {"flag": "--full", "desc": "全量翻译（默认增量翻译）"},
+        {"flag": "--yes", "desc": "clean 删除冗余时跳过确认"},
+        {"flag": "--no-exitcode-3", "desc": "check 发现冗余时仍返回 0（默认返回 3）"},
+    ],
+    "examples": [
+        {"cmd": "slang_i18n init", "desc": "生成 slang_i18n.yaml 模板"},
+        {"cmd": "slang_i18n translate --api-key $OPENAI_API_KEY", "desc": "增量翻译缺失的 keys"},
+        {"cmd": "slang_i18n clean --yes", "desc": "删除所有冗余 key（不询问）"},
+    ],
+    "dependencies": [
+        "PyYAML>=6.0",
+        "openai>=1.0.0",
+    ],
+}
+
+
 CONFIG_FILE = "slang_i18n.yaml"
 I18N_DIR = "i18n"
 
