@@ -39,11 +39,10 @@ def read_version(content: str) -> str:
 def replace_version(content: str, new_version: str) -> str:
     return re.sub(
         r"^(version:\s*)([^\s]+)",
-        rf"\1{new_version}",
+        lambda m: f"{m.group(1)}{new_version}",
         content,
         flags=re.MULTILINE,
     )
-
 
 def git_commit(path: Path, version: str) -> bool:
     try:
@@ -63,13 +62,18 @@ def choose_level_interactive(current_version: str, preview_minor: str, preview_p
     print("请选择升级级别：")
     print(f"1 - 次版本号（minor）升级 → {preview_minor}")
     print(f"2 - 补丁号（patch）升级 → {preview_patch}")
-    choice = input("请输入 1 或 2: ").strip()
+    print("0 - 退出")
+    choice = input("请输入 0 / 1 / 2（或 q 退出）: ").strip().lower()
+
+    if choice in ("0", "q", "quit", "exit"):
+        raise SystemExit(0)  # 正常退出
+
     if choice == "1":
         return "minor"
     if choice == "2":
         return "patch"
-    raise ValueError("无效输入（只能是 1 或 2）")
 
+    raise ValueError("无效输入（只能是 0/1/2 或 q）")
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
