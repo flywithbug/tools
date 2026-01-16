@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -195,13 +196,45 @@ def get_active_groups(i18n_dir: Path) -> List[Path]:
     return [i18n_dir]
 
 
+# =========================================================
+# Filename helpers (camelCase)
+# =========================================================
+
+def _to_camel(s: str) -> str:
+    """
+    snake_case / kebab-case / mixed -> camelCase
+    e.g. "user_profile" -> "userProfile", "assets" -> "assets"
+    """
+    parts = [p for p in re.split(r"[_\-\s]+", s.strip()) if p]
+    if not parts:
+        return s
+    head = parts[0].lower()
+    tail = "".join(p[:1].upper() + p[1:] for p in parts[1:])
+    return head + tail
+
+
+def _locale_to_camel(loc: str) -> str:
+    """
+    locale -> Camel token for filename suffix
+    e.g. "en" -> "En", "zh_Hant" -> "ZhHant"
+    """
+    parts = [p for p in re.split(r"[_\-]+", loc.strip()) if p]
+    return "".join(p[:1].upper() + p[1:] for p in parts) if parts else loc
+
+
 def group_file_name(group: Path, locale: str) -> Path:
     """
     i18n/: {locale}.i18n.json
-    i18n/assets/: assets_{locale}.i18n.json
+    i18n/assets/: assetsZhHant.i18n.json  （驼峰）
     """
-    prefix = "" if group.name == I18N_DIR else group.name
-    name = f"{locale}.i18n.json" if not prefix else f"{prefix}_{locale}.i18n.json"
+    if group.name == I18N_DIR:
+        # 根目录保持 {locale}.i18n.json（更稳）
+        name = f"{locale}.i18n.json"
+        return group / name
+
+    prefix = _to_camel(group.name)
+    loc_token = _locale_to_camel(locale)
+    name = f"{prefix}{loc_token}.i18n.json"
     return group / name
 
 
@@ -275,24 +308,40 @@ def save_json(path: Path, meta: Dict[str, Any], body: Dict[str, str], sort_keys:
 def _match_locale_from_filename(filename: str, locales_sorted: List[str]) -> Optional[str]:
     """
     仅在能“明确识别 locale”时返回 locale，否则返回 None
-    - 支持 xxx_{locale}.i18n.json
-    - 也支持 {locale}.i18n.json（模块目录里有人会漏前缀）
-    - locale 匹配按长度降序，避免 zh vs zh_Hant 被误匹配
+
+    支持旧/新两套命名（便于平滑迁移）：
+    - 旧：xxx_{locale}.i18n.json
+    - 旧：{locale}.i18n.json
+    - 新：xxx{CamelLocale}.i18n.json
+    - 新：{CamelLocale}.i18n.json（可选兼容）
     """
     if not filename.endswith(".i18n.json"):
         return None
+
+    stem = filename[:-len(".i18n.json")]
+
+    # 1) 先匹配旧格式：..._{locale} 或 {locale}
     for loc in locales_sorted:
-        if filename.endswith(f"_{loc}.i18n.json"):
+        if stem.endswith(f"_{loc}"):
             return loc
-        if filename == f"{loc}.i18n.json":
+        if stem == loc:
             return loc
+
+    # 2) 再匹配新格式：...{CamelLocale} 或 {CamelLocale}
+    for loc in locales_sorted:
+        camel = _locale_to_camel(loc)
+        if stem.endswith(camel):
+            return loc
+        if stem == camel:
+            return loc
+
     return None
 
 
 def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = True) -> None:
     """
-    只规范化 i18n/<module>/ 下的文件名，使其前缀严格等于文件夹名：
-    - 目标格式：{folder}_{locale}.i18n.json
+    只规范化 i18n/<module>/ 下的文件名，使其前缀严格等于文件夹名（驼峰）：
+    - 目标格式：{camelFolder}{CamelLocale}.i18n.json
     - 只对“能从文件名明确识别 locale”的文件动手（locale 必须在 locales 列表里）
     - 不覆盖已有目标文件
     """
@@ -307,7 +356,7 @@ def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = T
         if not loc:
             continue  # 无法明确识别 locale，不动
 
-        expected_name = f"{expected_prefix}_{loc}.i18n.json"
+        expected_name = f"{_to_camel(expected_prefix)}{_locale_to_camel(loc)}.i18n.json"
         if p.name == expected_name:
             continue
 
