@@ -534,9 +534,58 @@ def _compute_need_for_one(group: Path, cfg: Dict[str, Any], loc: str, incrementa
     return len(need)
 
 
-# =========================================================
-# Translation
-# =========================================================
+# ==============================
+# 修改点 1：translate_all 只处理“需要翻译”的模块
+# ==============================
+
+def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str, full: bool) -> None:
+    incremental = not full
+    cleanup_extra = bool(cfg["options"]["cleanup_extra_keys"])
+    sort_keys = bool(cfg["options"]["sort_keys"])
+
+    groups = get_active_groups(i18n_dir)
+    targets = cfg["target_locales"]
+
+    # 统计每个模块需要翻译的 keys（跨所有 target locales 求和）
+    group_need: Dict[Path, int] = {}
+    total_need = 0
+    for g in groups:
+        need_sum = 0
+        for loc in targets:
+            need_sum += _compute_need_for_one(
+                g, cfg, loc,
+                incremental=incremental,
+                cleanup_extra=cleanup_extra
+            )
+        group_need[g] = need_sum
+        total_need += need_sum
+
+    prog = Progress(total_keys=total_need)
+    print(f"🧮 Total keys to translate: {total_need}（模式={'全量' if full else '增量'}）")
+    if total_need == 0:
+        print("✅ 无需翻译：所有语言文件已齐全")
+        return
+
+    # 只翻译需要翻译的模块（need_sum > 0）
+    for g in groups:
+        if group_need.get(g, 0) <= 0:
+            continue
+        translate_group(
+            group=g,
+            cfg=cfg,
+            api_key=api_key,
+            model=model,
+            incremental=incremental,
+            cleanup_extra=cleanup_extra,
+            sort_keys=sort_keys,
+            progress=prog,
+        )
+
+
+# ==============================
+# 修改点 2：translate_group 当 need=0 时不打印进度、不打印模块行
+#         （仍会确保 @@locale 并保存）
+# ==============================
 
 def translate_group(
         group: Path,
@@ -553,7 +602,9 @@ def translate_group(
     prompt_en_cfg = (cfg.get("prompt_en") or "").strip() or None
 
     src_path = group_file_name(group, src_locale)
-    src_meta, src_body = split_slang_json(src_path, load_json_obj(src_path))
+    _, src_body = split_slang_json(src_path, load_json_obj(src_path))
+
+    module_name = group.name if group.name != I18N_DIR else "i18n"
 
     for loc in targets:
         tgt_path = group_file_name(group, loc)
@@ -563,16 +614,15 @@ def translate_group(
             tgt_body = {k: v for k, v in tgt_body.items() if k in src_body}
 
         need = {k: v for k, v in src_body.items() if k not in tgt_body} if incremental else dict(src_body)
-        module_name = group.name if group.name != I18N_DIR else "i18n"
 
         if not need:
-            # 确保 @@locale 存在
+            # ✅ keys=0：不显示进度、不显示模块输出
             tgt_meta = dict(tgt_meta)
             tgt_meta.setdefault("@@locale", loc)
             save_json(tgt_path, tgt_meta, tgt_body, sort_keys=sort_keys)
-            print(f"🌍 {module_name}: {src_locale} → {loc}  (+0 keys)  📈 {progress.done_keys}/{progress.total_keys} ({progress.percent()}%) {progress.eta_text()}")
             continue
 
+        # ✅ 只有真的要翻译才打印
         print(f"🌍 {module_name}: {src_locale} → {loc}  (+{len(need)} keys)")
         translated = translate_flat_dict(
             prompt_en=prompt_en_cfg,
@@ -590,39 +640,6 @@ def translate_group(
 
         progress.bump(len(translated))
         print(f"   📈 {progress.done_keys}/{progress.total_keys} ({progress.percent()}%) {progress.eta_text()}")
-
-
-def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str, full: bool) -> None:
-    incremental = not full
-    cleanup_extra = bool(cfg["options"]["cleanup_extra_keys"])
-    sort_keys = bool(cfg["options"]["sort_keys"])
-
-    groups = get_active_groups(i18n_dir)
-    targets = cfg["target_locales"]
-
-    total_need = 0
-    for g in groups:
-        for loc in targets:
-            total_need += _compute_need_for_one(g, cfg, loc, incremental=incremental, cleanup_extra=cleanup_extra)
-
-    prog = Progress(total_keys=total_need)
-    print(f"🧮 Total keys to translate: {total_need}（模式={'全量' if full else '增量'}）")
-    if total_need == 0:
-        print("✅ 无需翻译：所有语言文件已齐全")
-        return
-
-    for g in groups:
-        translate_group(
-            group=g,
-            cfg=cfg,
-            api_key=api_key,
-            model=model,
-            incremental=incremental,
-            cleanup_extra=cleanup_extra,
-            sort_keys=sort_keys,
-            progress=prog,
-        )
-
 
 # =========================================================
 # Doctor
