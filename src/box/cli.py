@@ -272,7 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="box",
         description="box: 工具集管理入口",
     )
-    sub = p.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="command")
 
     sp = sub.add_parser("help", help="显示帮助")
     sp.set_defaults(handler=cmd_help)
@@ -299,14 +299,20 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
+
+    # ✅ box（无参数）时，等同 --help
+    if not argv:
+        parser.print_help()
+        return 0
+
     args = parser.parse_args(argv)
 
     handler = getattr(args, "handler", None)
     if handler is None:
+        # ✅ 没有子命令时，也打印帮助（比如某些异常解析场景）
         parser.print_help()
-        return 2
+        return 0
 
-    # help 需要 parser 本体
     return int(handler(parser, args))
 
 
