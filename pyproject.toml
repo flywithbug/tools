@@ -5,7 +5,7 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.scripts]
-box = "box.cli:main"
+box = "box.box:main"
 pub_version = "box_tools.flutter.pub_version:main"
 pub_upgrade = "box_tools.flutter.pub_upgrade:main"
 
