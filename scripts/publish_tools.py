@@ -165,6 +165,13 @@ def _resolve_docs_md(py_file: Path, meta: Dict[str, Any]) -> Path:
     return same_name_md(py_file)
 
 
+def _rel_to_repo(p: Path) -> str:
+    """把绝对/相对 Path 都稳定转成相对 REPO_ROOT 的 posix 路径。"""
+    if p.is_absolute():
+        return p.relative_to(REPO_ROOT).as_posix()
+    return (REPO_ROOT / p).relative_to(REPO_ROOT).as_posix()
+
+
 def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
     name = norm_str(meta.get("name") or meta.get("cmd") or "")
     if not name:
@@ -181,7 +188,7 @@ def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
     md_file = _resolve_docs_md(py_file, meta)
 
     rel_py = py_file.relative_to(REPO_ROOT).as_posix()
-    rel_md = md_file.relative_to(REPO_ROOT).as_posix() if md_file.is_absolute() and md_file.exists() or md_file.is_absolute() else md_file.relative_to(REPO_ROOT).as_posix()
+    rel_md = _rel_to_repo(md_file)
 
     dir_key = dir_key_from_py(py_file)
     stem = py_file.stem
@@ -315,12 +322,9 @@ def render_tool_detail(t: Tool) -> str:
 
     out.append("**文档**\n\n")
     if t.md_path.exists():
-        rel = t.md_path.relative_to(REPO_ROOT).as_posix()
-        out.append(f"[{rel}]({rel})\n\n")
+        out.append(f"[{t.rel_md}]({t.rel_md})\n\n")
     else:
-        # 保持显示为相对路径更好读
-        rel_guess = t.md_path.relative_to(REPO_ROOT).as_posix() if t.md_path.is_absolute() else str(t.md_path)
-        out.append(f"- 未找到文档：`{rel_guess}`（请创建该文件）\n\n")
+        out.append(f"- 未找到文档：`{t.rel_md}`（请创建该文件）\n\n")
 
     out.append("---\n\n")
     return "".join(out)
@@ -331,7 +335,10 @@ def render_readme(temp_header: str, tools: List[Tool]) -> str:
     out.append(temp_header.rstrip() + "\n\n")
     out.append(render_overview(tools))
 
-    box_tools = [t for t in tools if t.name.lower() == "box" or t.py_path.relative_to(SRC_DIR).as_posix().lower() == "box/box.py"]
+    box_tools = [
+        t for t in tools
+        if t.name.lower() == "box" or t.py_path.relative_to(SRC_DIR).as_posix().lower() == "box/box.py"
+    ]
     other_tools = [t for t in tools if t not in box_tools]
 
     for t in box_tools:
@@ -353,7 +360,7 @@ def render_readme(temp_header: str, tools: List[Tool]) -> str:
 
 
 # -------------------------
-# pyproject.toml minimal patch
+# pyproject.toml patch
 # -------------------------
 
 _VERSION_LINE_RE = re.compile(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$')
@@ -371,7 +378,7 @@ def bump_patch_version(text: str) -> Tuple[str, str]:
 def replace_table_block(text: str, header: str, body_lines: List[str]) -> str:
     """
     替换一个 table 块：从 [header] 开始到下一个 [..] 或 EOF。
-    不触碰其他 table。
+    替换后强制以一个空行结束（\n\n），避免粘连下一段。
     """
     pattern = re.compile(rf"(?ms)^\[{re.escape(header)}\]\s*\n.*?(?=^\[|\Z)")
     new_block = f"[{header}]\n" + "\n".join(body_lines).rstrip() + "\n\n"
@@ -402,6 +409,11 @@ def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
         block2 = re.sub(r"(?m)^packages\s*=\s*\[.*\]\s*$", new_line, block, count=1)
     else:
         block2 = block.rstrip() + "\n" + new_line + "\n"
+
+    # ✅ 确保 wheel table 末尾有空行
+    if not block2.endswith("\n\n"):
+        block2 = block2.rstrip() + "\n\n"
+
     return text[:m.start()] + block2 + text[m.end():]
 
 
@@ -453,7 +465,6 @@ def _norm_dep_list(v: Any) -> List[str]:
 def infer_deps_from_imports(py_file: Path) -> List[str]:
     """
     解析 import / from import，提取非 stdlib 的顶层模块名，再映射到 pip 包名。
-    （推断只做“尽力而为”，最终以 BOX_TOOL 显式 dependencies 为准）
     """
     try:
         src = py_file.read_text(encoding="utf-8", errors="ignore")
@@ -519,11 +530,21 @@ def collect_tool_dependencies(tools: List[Tool]) -> List[str]:
     return merged
 
 
+def _ensure_block_ends_with_blank_line(block: str) -> str:
+    """
+    ✅ 强制 table block 以 \n\n 结尾，避免下一个 [table] 粘上来导致 TOML 解析失败。
+    """
+    if block.endswith("\n\n"):
+        return block
+    return block.rstrip() + "\n\n"
+
+
 def ensure_project_dependencies(text: str, add_deps: List[str]) -> str:
     """
     把 add_deps 合并进 [project].dependencies
-    - 若 dependencies 不存在：追加 dependencies = [...]
-    - 若存在：抽取引号中的条目，合并后回写（保持原有优先）
+    - 若 [project] 不存在：追加 [project] + dependencies，并以空行收尾
+    - 若 dependencies 不存在：在 [project] block 末尾追加 dependencies，并以空行收尾
+    - 若存在：合并后回写，并以空行收尾（关键修复点）
     """
     if not add_deps:
         return text
@@ -537,7 +558,9 @@ def ensure_project_dependencies(text: str, add_deps: List[str]) -> str:
 
     block = text[m.start():m.end()]
 
-    dep_pat = re.compile(r"(?ms)^\s*dependencies\s*=\s*\[(?P<body>.*?)\]\s*$")
+    # 注意：这里只处理“单行 dependencies = [ ... ]”
+    # （你现在脚本也是这样生成的，最稳定）
+    dep_pat = re.compile(r'(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$')
     md = dep_pat.search(block)
 
     if md:
@@ -559,11 +582,14 @@ def ensure_project_dependencies(text: str, add_deps: List[str]) -> str:
         deps_lines = ", ".join([f'"{d}"' for d in merged])
         new_line = f"dependencies = [{deps_lines}]"
         block2 = dep_pat.sub(new_line, block, count=1)
+        block2 = _ensure_block_ends_with_blank_line(block2)
         return text[:m.start()] + block2 + text[m.end():]
 
+    # 没有 dependencies 行：追加到 [project] block 尾部
     deps_lines = ", ".join([f'"{d}"' for d in add_deps])
     new_line = f"dependencies = [{deps_lines}]"
-    block2 = block.rstrip() + "\n" + new_line + "\n"
+    block2 = block.rstrip() + "\n" + new_line + "\n\n"
+    block2 = _ensure_block_ends_with_blank_line(block2)
     return text[:m.start()] + block2 + text[m.end():]
 
 
@@ -592,7 +618,7 @@ def update_pyproject(tools: List[Tool], do_bump: bool) -> Tuple[str, int, List[s
     packages.sort(key=lambda s: (0, "") if s.lower() == "src/box" else (1, s.lower()))
     text = replace_wheel_packages_line(text, packages)
 
-    # project dependencies：合并工具依赖
+    # project dependencies：合并工具依赖（✅ 修复：保证 [project] block 末尾有空行）
     deps_added = collect_tool_dependencies(tools)
     text = ensure_project_dependencies(text, deps_added)
 
