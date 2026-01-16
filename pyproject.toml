@@ -1,6 +1,6 @@
 [project]
 name = "box"
-version = "0.1.6"
+version = "0.1.7"
 requires-python = ">=3.9"
 dependencies = []
 
@@ -9,6 +9,7 @@ box = "box.box:main"
 pub_publish = "box_tools.flutter.pub_publish:main"
 pub_upgrade = "box_tools.flutter.pub_upgrade:main"
 pub_version = "box_tools.flutter.pub_version:main"
+riverpod_gen = "box_tools.flutter.riverpod_gen:main"
 
 [build-system]
 requires = ["hatchling"]

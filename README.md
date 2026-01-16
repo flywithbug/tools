@@ -24,6 +24,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - **`pub_publish`**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）
 - **`pub_upgrade`**：升级 pubspec.yaml 中的私服 hosted/url 依赖（比对清单 + 确认；release 分支可选跟随 x.y.*）
 - **`pub_version`**：升级 pubspec.yaml 的 version（支持交互选择 minor/patch）
+- **`riverpod_gen`**：生成 Riverpod StateNotifier + State 模板文件（notifier/state）
 
 ---
 
@@ -170,6 +171,44 @@ pub_version minor --file path/to/pubspec.yaml
 **文档**
 
 [src/box_tools/flutter/pub_version.md](src/box_tools/flutter/pub_version.md)
+
+---
+
+### riverpod_gen
+
+**简介**：生成 Riverpod StateNotifier + State 模板文件（notifier/state）
+
+**命令**：`riverpod_gen`
+
+**用法**
+
+```bash
+riverpod_gen
+riverpod_gen Product
+riverpod_gen product_item --out lib/features/product
+riverpod_gen Product --force
+riverpod_gen Product --no-copywith
+riverpod_gen Product --legacy
+```
+
+**参数说明**
+
+- `--out`：输出目录（默认当前目录）
+- `--force`：覆盖已存在文件
+- `--no-copywith`：不生成 copy_with_extension 注解与 part '*.g.dart'
+- `--legacy`：notifier 使用 flutter_riverpod/legacy.dart（默认启用 legacy）
+- `--modern`：notifier 使用 flutter_riverpod/flutter_riverpod.dart
+
+**示例**
+
+- `riverpod_gen`：交互输入类名与输出目录
+- `riverpod_gen Product`：在当前目录生成 product_notifier.dart 与 product_state.c.dart
+- `riverpod_gen product_item --out lib/features/product`：在指定目录生成 product_item_* 文件
+- `riverpod_gen Product --force`：覆盖已存在文件
+
+**文档**
+
+[src/box_tools/flutter/riverpod_gen.md](src/box_tools/flutter/riverpod_gen.md)
 
 ---
 
