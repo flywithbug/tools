@@ -1,0 +1,16 @@
+[project]
+name = "box"
+version = "0.1.0"
+description = "flywithbug personal toolbox CLI"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "flywithbug" }]
+dependencies = []
+
+[project.scripts]
+box = "box.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
