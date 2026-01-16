@@ -6,6 +6,7 @@ dependencies = []
 
 [project.scripts]
 box = "box.cli:main"
+pub_version = "flutter.pub_version:main"
 
 [build-system]
 requires = ["hatchling"]
