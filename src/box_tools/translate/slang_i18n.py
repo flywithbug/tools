@@ -7,52 +7,21 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
     from openai import OpenAI  # noqa: F401
 except Exception:
     OpenAI = None  # type: ignore
 
-# ✅ 关键：翻译能力来自 translate/comm/translate_flat.py（你给的文件）
+# 翻译能力来自 translate/comm/translate_flat.py
 from .comm.translate_flat import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
-
-
-BOX_TOOL = {
-    "id": "flutter.slang_i18n",
-    "name": "slang_i18n",
-    "category": "flutter",
-    "summary": "Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（交互 + 非交互）",
-    "usage": [
-        "slang_i18n",
-        "slang_i18n init",
-        "slang_i18n doctor",
-        "slang_i18n sort",
-        "slang_i18n check",
-        "slang_i18n clean",
-        "slang_i18n translate --api-key $OPENAI_API_KEY",
-    ],
-    "options": [
-        {"flag": "--api-key", "desc": "OpenAI API key（也可用环境变量 OPENAI_API_KEY）"},
-        {"flag": "--model", "desc": "模型（默认 gpt-4o）"},
-        {"flag": "--full", "desc": "全量翻译（默认增量）"},
-        {"flag": "--yes", "desc": "clean 删除冗余时跳过确认"},
-        {"flag": "--no-exitcode-3", "desc": "check 发现冗余时仍返回 0（默认返回 3）"},
-    ],
-    "examples": [
-        {"cmd": "slang_i18n", "desc": "进入交互菜单"},
-        {"cmd": "slang_i18n init", "desc": "生成 slang_i18n.yaml（存在则校验不覆盖）"},
-        {"cmd": "slang_i18n translate --api-key $OPENAI_API_KEY", "desc": "增量翻译补齐缺失 key"},
-        {"cmd": "slang_i18n clean --yes", "desc": "直接删除冗余 key（免确认）"},
-    ],
-    "docs": "src/box_tools/flutter/slang_i18n.md",
-}
 
 
 CONFIG_FILE = "slang_i18n.yaml"
 I18N_DIR = "i18n"
 
-# 你给的默认语言集合
+# 默认语言集合（你给的）
 DEFAULT_ALL_LOCALES = [
     "en", "zh_Hant", "de", "es", "fil", "fr", "hi", "id", "ja",
     "kk", "ko", "pt", "ru", "th", "uk", "vi", "tr", "nl"
@@ -79,7 +48,7 @@ EXIT_REDUNDANT_FOUND = 3
 
 
 # =========================================================
-# Lazy import for PyYAML (避免没装就 traceback)
+# Lazy import for PyYAML
 # =========================================================
 
 def _require_yaml():
@@ -90,7 +59,7 @@ def _require_yaml():
         raise SystemExit(
             "❌ 缺少依赖 PyYAML（import yaml 失败）\n"
             "修复方式：\n"
-            "1) 如果你用 pipx 安装：pipx inject box pyyaml\n"
+            "1) pipx 安装：pipx inject box pyyaml\n"
             "2) 或在 pyproject.toml dependencies 加入 PyYAML>=6.0 后重新发布/安装\n"
         )
 
@@ -181,8 +150,7 @@ def read_config_or_throw(path: Path) -> Dict[str, Any]:
 def init_config(path: Path) -> None:
     yaml = _require_yaml()
     if path.exists():
-        # 存在就校验，不覆盖；格式不对直接报错
-        _ = read_config(path)
+        _ = read_config(path)  # 存在就校验，不覆盖
         print(f"✅ {CONFIG_FILE} 已存在且格式正确（不会覆盖）")
         return
 
@@ -222,6 +190,55 @@ def group_file_name(group: Path, locale: str) -> Path:
     return group / name
 
 
+def _parse_group_file_locale(group: Path, file_path: Path) -> Optional[str]:
+    """
+    从文件名解析 locale：
+    - root group: {locale}.i18n.json
+    - module group: {anyprefix}_{locale}.i18n.json（我们取最后一个 '_' 后的 locale）
+    """
+    name = file_path.name
+    if not name.endswith(".i18n.json"):
+        return None
+    stem = name[:-len(".i18n.json")]
+    if group.name == I18N_DIR:
+        return stem or None
+
+    if "_" not in stem:
+        return None
+    # locale = 最后一个 '_' 后
+    return stem.split("_")[-1] or None
+
+
+def normalize_group_filenames(group: Path, verbose: bool = True) -> None:
+    """
+    需求：若模块文件夹内存在“驼峰命名/前缀不一致”的 i18n 文件，则全部改成跟文件夹名一致：
+    - i18n/assets_record/ 期望：assets_record_{locale}.i18n.json
+      发现：assetsRecord_zh_Hant.i18n.json -> rename 为 assets_record_zh_Hant.i18n.json
+    """
+    if group.name == I18N_DIR:
+        return  # root 不做这种前缀修正
+
+    expected_prefix = group.name
+    for p in group.glob("*.i18n.json"):
+        loc = _parse_group_file_locale(group, p)
+        if not loc:
+            continue
+        expected_name = f"{expected_prefix}_{loc}.i18n.json"
+        if p.name == expected_name:
+            continue
+
+        target = group / expected_name
+        if target.exists():
+            # 避免覆盖：两者都存在就不动，给提示
+            if verbose:
+                print(f"⚠️ 跳过重命名（目标已存在）：{p.name} -> {target.name}")
+            continue
+
+        if verbose:
+            print(f"🛠️ 重命名：{p.name} -> {target.name}")
+        p.rename(target)
+
+
 def load_json_obj(path: Path) -> Dict[str, Any]:
     obj = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(obj, dict):
@@ -230,9 +247,6 @@ def load_json_obj(path: Path) -> Dict[str, Any]:
 
 
 def ensure_flat_string_map(path: Path, obj: Dict[str, Any]) -> Dict[str, str]:
-    """
-    slang flat：允许 @@locale(str)，其余必须是 str->str
-    """
     out: Dict[str, str] = {}
     for k, v in obj.items():
         if not isinstance(k, str):
@@ -249,10 +263,6 @@ def ensure_flat_string_map(path: Path, obj: Dict[str, Any]) -> Dict[str, str]:
 
 
 def save_json(path: Path, data: Dict[str, str], sort_keys: bool) -> None:
-    """
-    - @@locale 永远放第一
-    - 其余按 key 排序（如果 sort_keys=True）
-    """
     locale = data.get("@@locale")
     body = {k: v for k, v in data.items() if k != "@@locale"}
     if sort_keys:
@@ -275,7 +285,13 @@ def ensure_language_files_in_group(group: Path, src_locale: str, targets: List[s
 
 
 def ensure_all_language_files(i18n_dir: Path, cfg: Dict[str, Any]) -> None:
-    for g in find_groups(i18n_dir):
+    groups = find_groups(i18n_dir)
+    # ✅ 先做文件名规范化（只针对模块目录）
+    for g in groups:
+        normalize_group_filenames(g, verbose=True)
+
+    # ✅ 再补齐语言文件
+    for g in groups:
         ensure_language_files_in_group(g, cfg["source_locale"], cfg["target_locales"])
 
 
@@ -359,6 +375,60 @@ def delete_redundant(items: List[RedundantItem], sort_keys: bool) -> None:
 
 
 # =========================================================
+# Translation progress (group/locale level)
+# =========================================================
+
+@dataclass
+class Progress:
+    total_keys: int
+    done_keys: int = 0
+    started_at: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.started_at <= 0:
+            self.started_at = time.time()
+
+    def bump(self, n: int) -> None:
+        self.done_keys += max(0, n)
+
+    def percent(self) -> int:
+        if self.total_keys <= 0:
+            return 100
+        return int(self.done_keys * 100 / self.total_keys)
+
+    def eta_text(self) -> str:
+        if self.total_keys <= 0 or self.done_keys <= 0:
+            return "ETA: --"
+        elapsed = time.time() - self.started_at
+        rate = self.done_keys / max(elapsed, 1e-6)
+        remain = max(self.total_keys - self.done_keys, 0)
+        sec = int(remain / max(rate, 1e-6))
+        if sec < 60:
+            return f"ETA: {sec}s"
+        if sec < 3600:
+            return f"ETA: {sec//60}m{sec%60:02d}s"
+        return f"ETA: {sec//3600}h{(sec%3600)//60:02d}m"
+
+
+def _compute_need_for_one(group: Path, cfg: Dict[str, Any], loc: str, incremental: bool, cleanup_extra: bool) -> int:
+    src_locale = cfg["source_locale"]
+    src_path = group_file_name(group, src_locale)
+    tgt_path = group_file_name(group, loc)
+
+    src_obj = ensure_flat_string_map(src_path, load_json_obj(src_path))
+    tgt_obj = ensure_flat_string_map(tgt_path, load_json_obj(tgt_path))
+
+    src_body = {k: v for k, v in src_obj.items() if k != "@@locale"}
+    tgt_body = {k: v for k, v in tgt_obj.items() if k != "@@locale"}
+
+    if cleanup_extra:
+        tgt_body = {k: v for k, v in tgt_body.items() if k in src_body}
+
+    need = {k: v for k, v in src_body.items() if k not in tgt_body} if incremental else dict(src_body)
+    return len(need)
+
+
+# =========================================================
 # Translation
 # =========================================================
 
@@ -370,6 +440,7 @@ def translate_group(
         incremental: bool,
         cleanup_extra: bool,
         sort_keys: bool,
+        progress: Progress,
 ) -> None:
     src_locale = cfg["source_locale"]
     targets = cfg["target_locales"]
@@ -388,12 +459,17 @@ def translate_group(
             tgt_body = {k: v for k, v in tgt_body.items() if k in src_body}
 
         need = {k: v for k, v in src_body.items() if k not in tgt_body} if incremental else dict(src_body)
-        if not need:
-            save_json(tgt_path, {"@@locale": loc, **tgt_body}, sort_keys=sort_keys)
-            continue
 
         module_name = "i18n" if group.name == I18N_DIR else group.name
-        print(f"🌍 {module_name}: {src_locale} → {loc}  ({'+' if incremental else ''}{len(need)} keys)")
+
+        if not need:
+            # 仍写回（保证清理后结果落盘 + 排序）
+            save_json(tgt_path, {"@@locale": loc, **tgt_body}, sort_keys=sort_keys)
+            # group/locale 级进度：0 keys 也显示一下更可感知
+            print(f"🌍 {module_name}: {src_locale} → {loc}  (+0 keys)  📈 {progress.done_keys}/{progress.total_keys} ({progress.percent()}%) {progress.eta_text()}")
+            continue
+
+        print(f"🌍 {module_name}: {src_locale} → {loc}  (+{len(need)} keys)")
 
         translated = translate_flat_dict(
             prompt_en=prompt_en_cfg,
@@ -407,13 +483,31 @@ def translate_group(
         tgt_body.update(translated)
         save_json(tgt_path, {"@@locale": loc, **tgt_body}, sort_keys=sort_keys)
 
+        progress.bump(len(translated))
+        print(f"   📈 {progress.done_keys}/{progress.total_keys} ({progress.percent()}%) {progress.eta_text()}")
+
 
 def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str, full: bool) -> None:
     incremental = not full
     cleanup_extra = bool(cfg["options"]["cleanup_extra_keys"])
     sort_keys = bool(cfg["options"]["sort_keys"])
 
-    for g in find_groups(i18n_dir):
+    groups = find_groups(i18n_dir)
+    targets = cfg["target_locales"]
+
+    # 预先计算总需翻译 key 数（用于进度）
+    total_need = 0
+    for g in groups:
+        for loc in targets:
+            total_need += _compute_need_for_one(g, cfg, loc, incremental=incremental, cleanup_extra=cleanup_extra)
+
+    prog = Progress(total_keys=total_need)
+    print(f"🧮 Total keys to translate: {total_need} （模式={'全量' if full else '增量'}）")
+    if total_need == 0:
+        print("✅ 无需翻译：所有语言文件已齐全")
+        return
+
+    for g in groups:
         translate_group(
             group=g,
             cfg=cfg,
@@ -422,6 +516,7 @@ def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str,
             incremental=incremental,
             cleanup_extra=cleanup_extra,
             sort_keys=sort_keys,
+            progress=prog,
         )
 
 
@@ -434,11 +529,10 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
 
     if OpenAI is None:
         ok = False
-        print("❌ OpenAI SDK 不可用：请 pip install openai>=1.0.0")
+        print("❌ OpenAI SDK 不可用：请 pip install openai>=1.0.0（pipx: pipx inject box 'openai>=1.0.0'）")
     else:
         print("✅ OpenAI SDK OK")
 
-    # PyYAML 检查（懒加载）
     try:
         _require_yaml()
         print("✅ PyYAML OK")
@@ -461,10 +555,7 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
         try:
             cfg = read_config(cfg_path)
             prompt_on = bool((cfg.get("prompt_en") or "").strip())
-            print(
-                f"✅ {CONFIG_FILE} OK "
-                f"(source={cfg['source_locale']} targets={len(cfg['target_locales'])} prompt_en={'ON' if prompt_on else 'OFF'})"
-            )
+            print(f"✅ {CONFIG_FILE} OK (source={cfg['source_locale']} targets={len(cfg['target_locales'])} prompt_en={'ON' if prompt_on else 'OFF'})")
         except Exception as e:
             ok = False
             print(f"❌ {CONFIG_FILE} 解析失败：{e}")
@@ -481,7 +572,7 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
 
 
 # =========================================================
-# Interactive (pub_version style)
+# Interactive
 # =========================================================
 
 def _read_choice(prompt: str, valid: Iterable[str]) -> str:
@@ -515,7 +606,7 @@ def _print_header(cfg: Optional[Dict[str, Any]], i18n_dir: Optional[Path], model
 
     if cfg:
         print(f"🌐 source_locale: {cfg['source_locale']}")
-        print(f"🎯 target_locales: {len(cfg['target_locales'])} 个（默认内置列表）")
+        print(f"🎯 target_locales: {len(cfg['target_locales'])} 个")
         prompt_on = bool((cfg.get('prompt_en') or '').strip())
         print(f"📝 prompt_en: {'ON' if prompt_on else 'OFF'}")
         opts = cfg["options"]
@@ -548,7 +639,7 @@ def choose_action_interactive(model_default: str) -> str:
 
     print("请选择操作：")
     print("1 - 排序（sort）")
-    print("2 - 增量翻译（translate incremental）")
+    print("2 - 翻译（默认增量，可选全量）")
     print("3 - 检查冗余（check）")
     print("4 - 删除冗余（clean）")
     print("5 - doctor")
@@ -558,19 +649,14 @@ def choose_action_interactive(model_default: str) -> str:
     choice = _read_choice("请输入 0 / 1 / 2 / 3 / 4 / 5 / 6（或 q 退出）: ", valid=["0", "1", "2", "3", "4", "5", "6"])
     if choice == "0":
         return "exit"
-    if choice == "1":
-        return "sort"
-    if choice == "2":
-        return "translate"
-    if choice == "3":
-        return "check"
-    if choice == "4":
-        return "clean"
-    if choice == "5":
-        return "doctor"
-    if choice == "6":
-        return "init"
-    return "exit"
+    return {
+        "1": "sort",
+        "2": "translate",
+        "3": "check",
+        "4": "clean",
+        "5": "doctor",
+        "6": "init",
+    }.get(choice, "exit")
 
 
 # =========================================================
@@ -616,9 +702,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             init_config(cfg_path)
             return EXIT_OK
-        except SystemExit as e:
-            print(str(e).strip())
-            return EXIT_BAD
         except Exception as e:
             print(f"❌ {e}")
             return EXIT_BAD
@@ -646,11 +729,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"❌ {e}")
         return EXIT_BAD
 
-    # 补齐语言文件（en + targets）
+    # 补齐语言文件（包含：先规范化文件名前缀）
     try:
         ensure_all_language_files(i18n_dir, cfg)
     except Exception as e:
-        print(f"❌ 补齐语言文件失败：{e}")
+        print(f"❌ 补齐/规范化语言文件失败：{e}")
         return EXIT_BAD
 
     # sort
@@ -699,17 +782,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     # translate
     if action == "translate":
         api_key = args.api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            api_key = _ensure_api_key_interactive(None) if interactive else None
+        if not api_key and interactive:
+            api_key = _ensure_api_key_interactive(None)
+
         if not api_key:
             print("❌ 未提供 apiKey（--api-key 或 OPENAI_API_KEY）")
             return EXIT_BAD
         if OpenAI is None:
-            print("❌ OpenAI SDK 不可用：请 pip install openai>=1.0.0")
+            print("❌ OpenAI SDK 不可用：pipx: pipx inject box 'openai>=1.0.0'")
             return EXIT_BAD
 
         full = bool(args.full)
-
         if interactive and args.action is None:
             print(f"🤖 当前模式：{'全量' if full else '增量'}")
             m = _read_choice("选择翻译模式：1 增量 / 2 全量 / 0 取消: ", valid=["0", "1", "2"])
