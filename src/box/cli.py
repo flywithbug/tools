@@ -20,6 +20,35 @@ except Exception:
 PKG_NAME = "box"
 
 
+BOX_TOOL = {
+    "id": "core.box",
+    "name": "box",
+    "category": "core",
+    "summary": "工具集管理入口：诊断、更新、版本查看、卸载、工具列表",
+    "usage": [
+        "box --help",
+        "box help",
+        "box doctor",
+        "box update",
+        "box version",
+        "box uninstall",
+        "box tools",
+        "box tools --full",
+    ],
+    "options": [
+        {"flag": "--help", "desc": "显示帮助（等同 box help）"},
+        {"flag": "tools --full", "desc": "显示工具的详细信息（options/examples）"},
+    ],
+    "examples": [
+        {"cmd": "box doctor", "desc": "诊断环境（python/pipx/PATH）"},
+        {"cmd": "box update", "desc": "更新工具集"},
+        {"cmd": "box tools", "desc": "列出当前工具与简介"},
+    ],
+    "docs": "src/box/README.md",
+}
+
+
+
 def which(cmd: str) -> str | None:
     return shutil.which(cmd)
 
