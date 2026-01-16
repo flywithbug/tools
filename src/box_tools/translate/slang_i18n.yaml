@@ -1,0 +1,3 @@
+model: "gpt-4o"
+locales: [en, zh_Hant, de, es, fil, fr, hi, id, ja, kk, ko, pt, ru, th, uk, vi, tr, nl]
+baseLocale: en
