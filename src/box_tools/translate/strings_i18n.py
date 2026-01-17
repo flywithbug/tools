@@ -4,7 +4,9 @@ import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
-from translate import translate_flat_dict, OpenAIModel  # 引入翻译模块
+
+from .translate import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
+
 
 # 定义工具的元数据
 BOX_TOOL = {
