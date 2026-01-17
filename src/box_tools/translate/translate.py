@@ -23,16 +23,16 @@ except Exception:  # pragma: no cover
 # =========================================================
 
 BOX_TOOL = {
-    "id": "ai.gpt",
-    "name": "gpt",
+    "id": "ai.translate",
+    "name": "translate",
     "category": "ai",
     "summary": "OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检",
     "usage": [
-        "gpt",
-        "gpt --help",
-        "gpt doctor",
-        "gpt translate --src-lang en --tgt-locale zh_Hant --in input.json --out output.json",
-        "gpt translate --src-lang en --tgt-locale ja --in input.json --out output.json --prompt-en 'Use polite tone'",
+        "translate",
+        "translate --help",
+        "translate doctor",
+        "translate translate --src-lang en --tgt-locale zh_Hant --in input.json --out output.json",
+        "translate translate --src-lang en --tgt-locale ja --in input.json --out output.json --prompt-en 'Use polite tone'",
     ],
     "options": [
         {"flag": "doctor", "desc": "检查 OpenAI SDK / OPENAI_API_KEY 环境变量 / Python 环境"},
@@ -41,9 +41,9 @@ BOX_TOOL = {
         {"flag": "--api-key", "desc": "显式传入 API key（优先于环境变量）"},
     ],
     "examples": [
-        {"cmd": "gpt", "desc": "显示简介 + 检查 OPENAI_API_KEY 是否已配置"},
-        {"cmd": "gpt doctor", "desc": "更详细的环境自检"},
-        {"cmd": "gpt translate --src-lang en --tgt-locale zh_Hant --in i18n/en.json --out i18n/zh_Hant.json", "desc": "翻译一个平铺 JSON 文件"},
+        {"cmd": "translate", "desc": "显示简介 + 检查 OPENAI_API_KEY 是否已配置"},
+        {"cmd": "translate doctor", "desc": "更详细的环境自检"},
+        {"cmd": "translate translate --src-lang en --tgt-locale zh_Hant --in i18n/en.json --out i18n/zh_Hant.json", "desc": "翻译一个平铺 JSON 文件"},
     ],
     "docs": "src/box/gpt.md",
 }
@@ -406,7 +406,7 @@ def translate_flat_dict(
 
 
 def _print_intro() -> None:
-    print("== gpt ==")
+    print("== translate ==")
     print("这是工具集里的 OpenAI 小底座：")
     print("- 平铺 JSON 翻译（key 不变，只翻 value）")
     print("- 占位符/格式化 token 守护（避免 {name} / %s / ${x} 被翻坏）")
@@ -425,7 +425,7 @@ def _print_api_key_help() -> None:
     print("  setx OPENAI_API_KEY \"sk-...\"")
     print()
     print("临时传入（优先级最高）：")
-    print("  gpt translate ... --api-key sk-...")
+    print("  translate translate ... --api-key sk-...")
     print()
 
 
@@ -436,7 +436,7 @@ def _get_api_key(explicit: Optional[str]) -> Optional[str]:
 
 
 def _cmd_doctor(_parser: argparse.ArgumentParser, _args: argparse.Namespace) -> int:
-    print("== gpt doctor ==")
+    print("== translate doctor ==")
     print(f"python: {sys.executable}")
     print(f"python_version: {sys.version.split()[0]}")
 
@@ -554,14 +554,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             _print_api_key_help()
 
         print("常用命令：")
-        print("  gpt doctor")
-        print("  gpt translate --src-lang en --tgt-locale zh_Hant --in input.json --out output.json")
+        print("  translate doctor")
+        print("  translate translate --src-lang en --tgt-locale zh_Hant --in input.json --out output.json")
         return 0
 
     p = build_parser()
     args = p.parse_args(argv)
 
-    # `gpt --help` should behave normally
+    # `translate --help` should behave normally
     if not getattr(args, "cmd", None):
         # No subcommand, but args present (e.g. --help already handled by argparse)
         p.print_help()

@@ -1,6 +1,6 @@
-# gpt
+# translate
 
-`gpt` 是一个面向命令行的 OpenAI 小工具：
+`translate` 是一个面向命令行的 OpenAI 小工具：
 
 - 提供 **平铺 JSON（flat dict）翻译能力**：`{key: text}` → `{key: translated_text}`
 - 保证 **key 完全不变**，只翻译 value
@@ -13,12 +13,12 @@
 
 ## 安装
 
-`gpt` 随工具集一起安装。
+`translate` 随工具集一起安装。
 
 安装完成后可执行：
 
 ```sh
-gpt --help
+translate --help
 ```
 
 ---
@@ -28,20 +28,20 @@ gpt --help
 直接运行（会显示简介 + 检查 `OPENAI_API_KEY` 是否配置）：
 
 ```sh
-gpt
+translate
 ```
 
 推荐首次使用先跑 doctor：
 
 ```sh
-gpt doctor
+translate doctor
 ```
 
 ---
 
 ## 配置 OPENAI_API_KEY
 
-`gpt` 会优先读取环境变量：
+`translate` 会优先读取环境变量：
 
 - `OPENAI_API_KEY`
 
@@ -83,7 +83,7 @@ setx OPENAI_API_KEY "sk-..."
 ### 1) 环境自检
 
 ```sh
-gpt doctor
+translate doctor
 ```
 
 会检查：
@@ -108,7 +108,7 @@ gpt doctor
 翻译命令：
 
 ```sh
-gpt translate --src-lang en --tgt-locale zh_Hant --in i18n/en.json --out i18n/zh_Hant.json
+translate translate --src-lang en --tgt-locale zh_Hant --in i18n/en.json --out i18n/zh_Hant.json
 ```
 
 说明：
@@ -134,7 +134,7 @@ pip install "openai>=1.0.0"
 
 ### 2) 提示 OPENAI_API_KEY 未配置
 
-运行 `gpt` 或 `gpt doctor` 会直接提示如何设置环境变量。
+运行 `translate` 或 `translate doctor` 会直接提示如何设置环境变量。
 
 ---
 
