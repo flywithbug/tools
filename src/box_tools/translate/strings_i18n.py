@@ -109,7 +109,15 @@ class StringsI18n:
     def incremental_translate(self, source_locale: str, target_locale: str):
         """增量翻译：只翻译缺失的键"""
         strings_root = self.config.get('strings_root', 'i18n')  # 获取翻译文件的根目录
-        source_file = Path(strings_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
+        base_locale = self.get_base_locale()
+
+        # 核心语言增量翻译：使用 base 目录中的语言文件作为源语言
+        if target_locale == base_locale:
+            source_file = Path(strings_root) / f"{base_locale}.lproj" / f"{base_locale}.strings"
+        else:
+            # 非核心语言增量翻译：使用 source_locale 目录中的语言文件作为源语言
+            source_file = Path(strings_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
+
         target_file = Path(strings_root) / f"{target_locale}.lproj" / f"{target_locale}.strings"
 
         if not source_file.exists():
@@ -142,7 +150,45 @@ class StringsI18n:
 
     def remove_redundant_fields(self):
         """删除冗余字段"""
-        print("Removing redundant fields...")
+        base_locale = self.get_base_locale()
+        strings_root = self.config.get('strings_root', 'i18n')  # 获取翻译文件的根目录
+        base_file = Path(strings_root) / f"{base_locale}.lproj" / f"{base_locale}.strings"
+
+        if not base_file.exists():
+            print(f"Error: {base_file} does not exist!")
+            return
+
+        with open(base_file, 'r', encoding='utf-8') as bf:
+            base_lines = bf.readlines()
+
+        # 获取 base 目录下的所有键
+        base_keys = {line.split('=')[0].strip() for line in base_lines if '=' in line}
+
+        for locale in self.get_target_locales():
+            target_file = Path(strings_root) / f"{locale}.lproj" / f"{locale}.strings"
+            if target_file.exists():
+                with open(target_file, 'r', encoding='utf-8') as tf:
+                    target_lines = tf.readlines()
+
+                # 获取目标文件的所有键
+                target_keys = {line.split('=')[0].strip() for line in target_lines if '=' in line}
+
+                # 找出冗余的键
+                redundant_keys = target_keys - base_keys
+
+                if redundant_keys:
+                    print(f"\n冗余字段在 {locale}.strings 文件中:")
+                    for key in redundant_keys:
+                        print(f"  {key}")
+                    # 提示用户是否删除冗余字段
+                    delete = input(f"是否删除冗余字段在 {locale}.strings 中的键？(y/n): ").strip().lower()
+                    if delete == "y":
+                        target_lines = [line for line in target_lines if line.split('=')[0].strip() not in redundant_keys]
+                        with open(target_file, 'w', encoding='utf-8') as tf:
+                            tf.writelines(target_lines)
+                        print(f"冗余字段已从 {locale}.strings 中删除")
+                else:
+                    print(f"{locale}.strings 文件没有冗余字段")
 
     def sort_language_files(self):
         """排序语言文件"""
@@ -168,18 +214,24 @@ class StringsI18n:
 def create_config(config_path: str):
     """创建默认配置文件"""
     default_config = {
-        "base_locale": "zh_Hans",
-        "source_locale": "en",
-        "core_locales": ["en", "zh_Hans", "zh_Hant"],
-        "prompt_en": "Translate the following text into the target language.",
-        "strings_root": "./TimeTrails/TimeTrails/TimeTrails/SupportFiles",  # 翻译文件保存的根目录
-        "target_locales": ["zh_Hant", "zh_Hans", "ja", "fr", "es"],
         "options": {
-            "sort_keys": True,
             "cleanup_extra_keys": True,
             "incremental_translate": True,
             "normalize_filenames": True,
+            "sort_keys": True,
         },
+        "prompt_en": "Translate the following text into the target language.",
+        "base": "Base.lproj",  # 默认翻译源目录
+        "base_locale": "zh_hans",  # 指定 base 目录下多语言的语言 code
+        "source_locale": "en",  # 源语言
+        "strings_root": "./TimeTrails/TimeTrails/TimeTrails/SupportFiles",  # 翻译文件保存的根目录
+        "target_locales": [
+            "zh_Hant",
+            "zh_Hans",
+            "ja",
+            "fr",
+            "es"
+        ]
     }
     with open(config_path, 'w', encoding='utf-8') as f:
         yaml.dump(default_config, f, allow_unicode=True)
