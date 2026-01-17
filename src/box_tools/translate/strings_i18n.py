@@ -62,11 +62,11 @@ class StringsI18n:
 
     def get_base_locale(self) -> str:
         """获取基础语言"""
-        return self.config['source_locale']
+        return self.config['base_locale']
 
     def get_core_locales(self) -> list:
         """获取核心语言"""
-        return self.config['coreLocales']
+        return self.config['core_locales']
 
     def get_target_locales(self) -> list:
         """获取目标语言"""
@@ -168,10 +168,12 @@ class StringsI18n:
 def create_config(config_path: str):
     """创建默认配置文件"""
     default_config = {
+        "base_locale": "zh_Hans",
         "source_locale": "en",
-        "target_locales": ["zh_Hant", "zh_Hans", "ja", "fr", "es"],
+        "core_locales": ["en", "zh_Hans", "zh_Hant"],
         "prompt_en": "Translate the following text into the target language.",
-        "strings_root": "i18n",  # 翻译文件保存的根目录
+        "strings_root": "./TimeTrails/TimeTrails/TimeTrails/SupportFiles",  # 翻译文件保存的根目录
+        "target_locales": ["zh_Hant", "zh_Hans", "ja", "fr", "es"],
         "options": {
             "sort_keys": True,
             "cleanup_extra_keys": True,
