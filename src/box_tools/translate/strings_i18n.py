@@ -1,229 +1,241 @@
+import json
 import os
-import yaml
-import argparse
+import shutil
+import sys
 from pathlib import Path
-from typing import Dict, List
-from .translate import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
+from typing import List, Dict
 
-# 默认配置
-DEFAULT_CONFIG = {
-    "primarySourceLocale": "en",
-    "primaryTargetLocales": ["zh_Hant", "ja", "ko"],
-    "secondarySourceLocale": "zh_Hans",
-    "secondaryTargetLocales": ["en", "zh_Hant", "zh-HK", "ja", "ko"],
-    "coreLocales": ["en", "zh_Hant", "zh-Hans"],  # 核心语言集
-}
-
-# 文件路径设置
-BASE_LPROJ_DIR = "Base.lproj"
-LOCALIZABLE_FILE = "Localizable.strings"
-
-# 配置文件路径
-CONFIG_FILE_PATH = "strings_i18n.yaml"
-
-# 读取配置文件
-def read_config() -> dict:
-    if not Path(CONFIG_FILE_PATH).exists():
-        write_config(DEFAULT_CONFIG)
-    with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as file:
-        return yaml.safe_load(file)
-
-# 写入配置文件
-def write_config(config: dict):
-    with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as file:
-        yaml.dump(config, file, allow_unicode=True, sort_keys=False)
-
-# 读取 Localizable.strings 文件
-def read_strings_file(file_path: Path) -> Dict[str, str]:
-    with open(file_path, 'r', encoding='utf-8') as file:
-        content = file.readlines()
-
-    strings_dict = {}
-    for line in content:
-        if "=" in line:
-            key, value = line.split("=")
-            strings_dict[key.strip().strip('"')] = value.strip().strip('"')
-    return strings_dict
-
-# 保存翻译后的 strings 文件
-def save_translated_strings(file_path: Path, content: str):
-    with open(file_path, 'w', encoding='utf-8') as file:
-        file.write(content)
-
-# 生成 L10n.swift 文件
-def generate_l10n_swift(base_locale_dir: Path):
-    strings_files = [base_locale_dir / f"{locale}.lproj/Localizable.strings" for locale in ["en", "zh_Hant"]]
-
-    l10n_content = """
-// Auto-generated from Base.lproj/Localizable.strings
-import Foundation
-
-extension String {
-    func callAsFunction(_ arguments: CVarArg...) -> String {
-        String(format: self, locale: Locale.current, arguments: arguments)
-    }
-}
-"""
-    for file_path in strings_files:
-        strings_dict = read_strings_file(file_path)
-        # 对每个分组（以点号分隔）进行处理
-        for key, value in strings_dict.items():
-            parts = key.split(".")
-            if len(parts) > 1:
-                group = parts[0]
-                key_in_group = parts[1]
-                l10n_content += f"""
-    enum {group} {{
-        static var {key_in_group}: String {{ return NSLocalizedString("{key}", value: "{value}", comment: "{value}") }}
-    }}
-"""
-
-    # 保存到 L10n.swift 文件
-    with open(base_locale_dir / "L10n.swift", 'w', encoding='utf-8') as file:
-        file.write(l10n_content)
-
-# 增量翻译
-def incremental_translation(src_file: Path, tgt_file: Path, api_key: str, model: str):
-    src_dict = read_strings_file(src_file)
-    tgt_dict = read_strings_file(tgt_file)
-
-    need_translation = {k: v for k, v in src_dict.items() if k not in tgt_dict}
-
-    # 使用翻译模块进行翻译
-    translated = translate_flat_dict(
-        src_dict=need_translation,
-        src_lang="en",
-        tgt_locale="zh_Hant",
-        model=model,
-        api_key=api_key
-    )
-
-    tgt_dict.update(translated)
-
-    translated_content = "\n".join([f'"{k}" = "{v}";' for k, v in tgt_dict.items()])
-
-    save_translated_strings(tgt_file, translated_content)
-
-# 执行翻译
-def execute_translation(config: dict, api_key: str, model: str):
-    primary_source_locale = config["primarySourceLocale"]
-    primary_target_locales = config["primaryTargetLocales"]
-
-    for locale in primary_target_locales:
-        base_locale_file = Path(BASE_LPROJ_DIR) / f"{primary_source_locale}.lproj/Localizable.strings"
-        target_locale_file = Path(BASE_LPROJ_DIR) / f"{locale}.lproj/Localizable.strings"
-
-        incremental_translation(base_locale_file, target_locale_file, api_key, model)
-
-    # 生成 L10n.swift 文件
-    generate_l10n_swift(Path(BASE_LPROJ_DIR))
-
-# 交互式菜单
-def interactive_mode():
-    print("请选择操作：")
-    print("1 - 增量翻译")
-    print("2 - 全量翻译")
-    print("3 - 生成 L10n.swift 文件")
-    print("4 - 检查冗余翻译")
-    print("5 - 删除冗余翻译")
-    print("6 - 退出")
-
-    choice = input("请输入 1, 2, 3, 4, 5 或 6: ").strip()
-    if choice == '1':
-        print("执行增量翻译...")
-        # 执行增量翻译操作
-    elif choice == '2':
-        print("执行全量翻译...")
-        # 执行全量翻译操作
-    elif choice == '3':
-        print("生成 L10n.swift 文件...")
-        # 生成 L10n.swift 文件
-    elif choice == '4':
-        print("检查冗余翻译...")
-        # 检查冗余翻译
-    elif choice == '5':
-        print("删除冗余翻译...")
-        # 删除冗余翻译
-    elif choice == '6':
-        print("退出程序")
-        return False  # 退出交互模式
-    else:
-        print("无效选择，请重新输入。")
-    return True  # 继续交互模式
-
-# BOX_TOOL 配置
+# BOX_TOOL 元数据（工具元数据示例）
 BOX_TOOL = {
-    "id": "flutter.slang_i18n",
-    "name": "strings_i18n",
-    "category": "i18n",
-    "summary": "处理 Localizable.strings 文件的翻译工具，支持增量翻译、全量翻译以及生成 Swift 的 L10n 文件。",
+    "id": "i18n.strings",           # 唯一标识（类别.工具名）
+    "name": "strings_i18n",         # 工具名称
+    "category": "i18n",             # 分类（可选）
+    "summary": "iOS Xcode 多语言字符串工具：支持增量翻译、全量翻译、冗余字段删除及排序功能",  # 工具简介
     "usage": [
-        "strings_i18n",
-        "strings_i18n init",
-        "strings_i18n doctor",
-        "strings_i18n sort",
-        "strings_i18n check",
-        "strings_i18n clean --yes",
-        "strings_i18n translate --api-key $OPENAI_API_KEY",
+        "strings_i18n init",         # 初始化配置文件
+        "strings_i18n translate",    # 执行翻译
+        "strings_i18n sort",         # 排序语言文件
+        "strings_i18n remove_redundant",  # 删除冗余字段
     ],
     "options": [
-        {"flag": "--api-key", "desc": "OpenAI API key（也可用环境变量 OPENAI_API_KEY）"},
-        {"flag": "--model", "desc": "翻译模型（默认 gpt-4o）"},
-        {"flag": "--full", "desc": "全量翻译（默认增量翻译）"},
-        {"flag": "--yes", "desc": "clean 删除冗余时跳过确认"},
-        {"flag": "--no-exitcode-3", "desc": "check 发现冗余时仍返回 0（默认返回 3）"},
+        {"flag": "--full-translation", "desc": "执行全量翻译"},
+        {"flag": "--core-locales", "desc": "核心语言"},
+        {"flag": "--non-core-locales", "desc": "非核心语言"},
     ],
     "examples": [
-        {"cmd": "strings_i18n init", "desc": "生成 strings_i18n.yaml 模板"},
-        {"cmd": "strings_i18n translate --api-key $OPENAI_API_KEY", "desc": "增量翻译缺失的 keys"},
-        {"cmd": "strings_i18n clean --yes", "desc": "删除所有冗余 key（不询问）"},
+        {"cmd": "strings_i18n init", "desc": "生成配置文件 strings_i18n.yaml"},
+        {"cmd": "strings_i18n translate --full-translation", "desc": "执行全量翻译"},
+        {"cmd": "strings_i18n sort", "desc": "对所有语言文件进行排序"},
+        {"cmd": "strings_i18n remove_redundant", "desc": "删除冗余字段"},
     ],
-    "dependencies": [
-        "PyYAML>=6.0",
-        "openai>=1.0.0",
-    ],
+    "docs": "src/docs/strings_i18n.md",  # 文档路径（相对路径）
 }
 
-# 生成配置文件 `strings_i18n.yaml`
-def generate_yaml_config():
-    if not Path(CONFIG_FILE_PATH).exists():
-        write_config(DEFAULT_CONFIG)
-        print(f"生成默认配置文件: {CONFIG_FILE_PATH}")
-    else:
-        print(f"配置文件 {CONFIG_FILE_PATH} 已存在。")
+# 读取配置文件
+def load_config(file_path: str) -> Dict:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
-# 解析命令行参数
-def parse_args():
-    parser = argparse.ArgumentParser(description="strings_i18n 工具")
-    parser.add_argument("--api-key", help="OpenAI API 密钥")
-    parser.add_argument("--model", default="gpt-4o", help="翻译模型")
-    parser.add_argument("--full", action="store_true", help="执行全量翻译")
-    parser.add_argument("--yes", action="store_true", help="跳过确认删除冗余翻译")
-    parser.add_argument("--init", action="store_true", help="生成配置文件")
-    args = parser.parse_args()
-    return args
+# 读取语言文件（.strings 格式）
+def load_language_file(file_path: str) -> Dict[str, str]:
+    strings_data = {}
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if "=" in line:
+                key, value = line.split("=", 1)
+                key = key.strip().strip('"')
+                value = value.strip().strip('"')
+                strings_data[key] = value
+    return strings_data
+
+# 保存语言文件（.strings 格式）
+def save_language_file(file_path: str, data: Dict[str, str]) -> None:
+    with open(file_path, 'w', encoding='utf-8') as f:
+        for key, value in data.items():
+            f.write(f'"{key}" = "{value}";\n')
+
+# 获取语言文件路径
+def get_locale_file_path(base_dir: str, locale: str) -> str:
+    return os.path.join(base_dir, f"{locale}.lproj", "Localizable.strings")
+
+# 对核心语言进行增量翻译
+def translate_core(base_locale: str, core_locales: List[str], all_locales: List[str], base_dir: str, full_translation: bool) -> None:
+    # 读取源语言文件（即 base_locale）
+    base_locale_file = get_locale_file_path(base_dir, base_locale)
+    base_data = load_language_file(base_locale_file)
+
+    for locale in core_locales:
+        if locale == base_locale:
+            continue  # 跳过源语言文件
+
+        # 读取目标语言文件
+        target_locale_file = get_locale_file_path(base_dir, locale)
+        target_data = load_language_file(target_locale_file)
+
+        # 如果是增量翻译，跳过已经存在的翻译
+        if not full_translation:
+            for key in list(target_data.keys()):
+                if key in base_data:
+                    del target_data[key]  # 删除已有的翻译
+
+        # 增量翻译：复制源语言的翻译到目标语言文件
+        for key, value in base_data.items():
+            if key not in target_data:
+                target_data[key] = value  # 增量翻译
+
+        # 保存翻译结果
+        save_language_file(target_locale_file, target_data)
+
+# 对非核心语言进行增量翻译
+def translate_non_core(base_locale: str, core_locales: List[str], all_locales: List[str], base_dir: str, full_translation: bool) -> None:
+    non_core_locales = [loc for loc in all_locales if loc not in core_locales]
+
+    for locale in non_core_locales:
+        # 读取源语言文件（即 base_locale）
+        base_locale_file = get_locale_file_path(base_dir, base_locale)
+        base_data = load_language_file(base_locale_file)
+
+        # 读取目标语言文件
+        target_locale_file = get_locale_file_path(base_dir, locale)
+        target_data = load_language_file(target_locale_file)
+
+        # 如果是增量翻译，跳过已经存在的翻译
+        if not full_translation:
+            for key in list(target_data.keys()):
+                if key in base_data:
+                    del target_data[key]  # 删除已有的翻译
+
+        # 增量翻译：复制源语言的翻译到目标语言文件
+        for key, value in base_data.items():
+            if key not in target_data:
+                target_data[key] = value  # 增量翻译
+
+        # 保存翻译结果
+        save_language_file(target_locale_file, target_data)
+
+# 删除冗余字段：baseLocale中没有的字段，列出并判断是否删除
+def remove_redundant_fields(base_locale: str, core_locales: List[str], all_locales: List[str], base_dir: str) -> None:
+    base_locale_file = get_locale_file_path(base_dir, base_locale)
+    base_data = load_language_file(base_locale_file)
+
+    redundant_fields = []
+
+    for locale in all_locales:
+        if locale == base_locale:
+            continue
+        locale_file = get_locale_file_path(base_dir, locale)
+        locale_data = load_language_file(locale_file)
+
+        # 检查冗余字段：如果字段在 base_locale 中没有，但在目标语言中有
+        for key in list(locale_data.keys()):
+            if key not in base_data:
+                redundant_fields.append((locale, key, locale_data[key]))
+
+    # 输出冗余字段，供判断是否删除
+    if redundant_fields:
+        print("以下字段在源语言中缺失，但在其他语言中存在：")
+        for locale, key, value in redundant_fields:
+            print(f"语言: {locale}, 键: {key}, 值: {value}")
+        user_input = input("是否删除这些冗余字段？输入 'y' 删除，'n' 保留: ").strip().lower()
+        if user_input == 'y':
+            for locale, key, value in redundant_fields:
+                locale_file = get_locale_file_path(base_dir, locale)
+                locale_data = load_language_file(locale_file)
+                if key in locale_data:
+                    del locale_data[key]
+                    save_language_file(locale_file, locale_data)
+                    print(f"已删除冗余字段: {key} (语言: {locale})")
+        else:
+            print("保留冗余字段。")
+    else:
+        print("未发现冗余字段。")
+
+# 排序语言文件
+def sort_language_files(base_dir: str, core_locales: List[str], all_locales: List[str]) -> None:
+    for locale in all_locales:
+        locale_file = get_locale_file_path(base_dir, locale)
+        locale_data = load_language_file(locale_file)
+
+        sorted_data = {key: locale_data[key] for key in sorted(locale_data.keys())}
+
+        save_language_file(locale_file, sorted_data)
+        print(f"已对 {locale} 语言文件进行排序")
+
+# 删除指定目录及其内容
+def delete_directory(directory_path: str) -> None:
+    if os.path.exists(directory_path):
+        shutil.rmtree(directory_path)
+        print(f"已删除目录: {directory_path}")
+    else:
+        print(f"目录不存在: {directory_path}")
+
+# 命令行交互式选择
+def choose_action_interactive() -> str:
+    print("请选择操作：")
+    print("1 - 核心语言增量翻译")
+    print("2 - 非核心语言增量翻译")
+    print("3 - 删除冗余字段")
+    print("4 - 排序语言文件")
+    print("0 - 退出")
+
+    choice = input("请输入 0 / 1 / 2 / 3 / 4（或 q 退出）: ").strip().lower()
+
+    if choice in ["0", "q", "quit", "exit"]:
+        return "exit"
+
+    if choice == "1":
+        return "incremental_translate_core"
+    if choice == "2":
+        return "incremental_translate_non_core"
+    if choice == "3":
+        return "remove_redundant"
+    if choice == "4":
+        return "sort_files"
+
+    return "invalid"
+
+# 生成配置文件
+def init_config(base_dir: str) -> None:
+    config = {
+        "baseLocale": "zh_hans",
+        "coreLocales": ["en", "zh_Hant", "zh_Hans", "ja", "ko", "yue"],
+        "locales": ["en", "zh_Hant", "zh_Hans", "ja", "ko", "yue", "fr", "de"],
+    }
+    config_file = os.path.join(base_dir, 'strings_i18n.yaml')
+    with open(config_file, 'w', encoding='utf-8') as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    print(f"配置文件已生成: {config_file}")
 
 # 主函数
 def main():
-    args = parse_args()
+    base_dir = os.getcwd()  # 默认使用当前工作目录
+    config_file = os.path.join(base_dir, 'strings_i18n.yaml')
 
-    # 如果没有提供命令行参数，则启动交互模式
-    if args.init:
-        generate_yaml_config()
-    elif not any(vars(args).values()):
-        while interactive_mode():
-            pass
-    else:
-        # 继续执行翻译等任务
-        config = read_config()
-        api_key = args.api_key or os.getenv("OPENAI_API_KEY")
-        model = args.model
+    if not os.path.exists(config_file):
+        print("配置文件 strings_i18n.yaml 不存在！")
+        sys.exit(1)
 
-        if args.full:
-            execute_translation(config, api_key, model)
+    config = load_config(config_file)
+    base_locale = config.get('baseLocale', 'zh_hans')
+    core_locales = config.get('coreLocales', ['en', 'zh_Hant', 'zh_Hans', 'ja', 'ko', 'yue'])
+    all_locales = config.get('locales', core_locales)
+
+    while True:
+        action = choose_action_interactive()
+
+        if action == "exit":
+            break
+
+        if action == "incremental_translate_core":
+            translate_core(base_locale, core_locales, all_locales, base_dir, full_translation=False)
+        elif action == "incremental_translate_non_core":
+            translate_non_core(base_locale, core_locales, all_locales, base_dir, full_translation=False)
+        elif action == "remove_redundant":
+            remove_redundant_fields(base_locale, core_locales, all_locales, base_dir)
+        elif action == "sort_files":
+            sort_language_files(base_dir, core_locales, all_locales)
         else:
-            execute_translation(config, api_key, model)
-        print("操作完成！")
+            print("无效操作，请重新选择。")
 
 if __name__ == "__main__":
     main()
