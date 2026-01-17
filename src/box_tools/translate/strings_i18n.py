@@ -5,6 +5,31 @@ import sys
 from pathlib import Path
 from typing import List, Dict
 
+# BOX_TOOL 元数据（工具元数据示例）
+BOX_TOOL = {
+    "id": "i18n.strings",           # 唯一标识（类别.工具名）
+    "name": "strings_i18n",         # 工具名称
+    "category": "i18n",             # 分类（可选）
+    "summary": "iOS Xcode 多语言字符串工具：支持增量翻译、全量翻译、冗余字段删除及排序功能",  # 工具简介
+    "usage": [
+        "strings_i18n init",         # 初始化配置文件
+        "strings_i18n translate",    # 执行翻译
+        "strings_i18n sort",         # 排序语言文件
+        "strings_i18n remove_redundant",  # 删除冗余字段
+    ],
+    "options": [
+        {"flag": "--full-translation", "desc": "执行全量翻译"},
+        {"flag": "--core-locales", "desc": "核心语言"},
+        {"flag": "--non-core-locales", "desc": "非核心语言"},
+    ],
+    "examples": [
+        {"cmd": "strings_i18n init", "desc": "生成配置文件 strings_i18n.yaml"},
+        {"cmd": "strings_i18n translate --full-translation", "desc": "执行全量翻译"},
+        {"cmd": "strings_i18n sort", "desc": "对所有语言文件进行排序"},
+        {"cmd": "strings_i18n remove_redundant", "desc": "删除冗余字段"},
+    ],
+    "docs": "src/docs/strings_i18n.md",  # 文档路径（相对路径）
+}
 
 # 读取配置文件
 def load_config(file_path: str) -> Dict:
