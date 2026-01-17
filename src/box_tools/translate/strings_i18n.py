@@ -59,7 +59,7 @@ def create_config(config_path: str):
         "languages": "./languages.json",
         "prompt_en": "Translate the following text into the target language.",
         "lang_root": "./TimeTrails/TimeTrails/TimeTrails/SupportFiles/",  # 用于生成目录
-        "base_folder": "Base.lproj",
+        "base_folder": "Base.lproj",  # 这个是基础语言文件夹
         "lang_files": [
             "Localizable.strings",
             "InfoPlist.strings"
@@ -124,7 +124,7 @@ def incremental_translate(config: Dict, i18n_dir: Path, api_key: str):
     lang_files = config['lang_files']
     source_locale = config['source_locale']
 
-    # 核心语言的源文件路径：使用 base_folder + base_locale 来拼接
+    # 核心语言的源文件路径：使用 lang_root + base_folder + lang_files 来拼接
     base_folder_path = Path(lang_root) / base_folder / f"{base_locale}.lproj"
 
     # 如果源文件不存在，抛出错误
@@ -132,7 +132,7 @@ def incremental_translate(config: Dict, i18n_dir: Path, api_key: str):
         print(f"源文件 {base_folder_path} 不存在！")
         return
 
-    # 非核心语言的源文件路径：使用 source_locale 来拼接
+    # 非核心语言的源文件路径：使用 lang_root + source_locale + ".lproj" + lang_files 来拼接
     non_core_folder_path = Path(lang_root) / f"{source_locale}.lproj"
 
     # 加载目标语言
@@ -146,9 +146,9 @@ def incremental_translate(config: Dict, i18n_dir: Path, api_key: str):
 
         # 选择源文件路径：核心语言使用 base_folder + base_locale，非核心语言使用 source_locale
         if locale in config['core_locales']:
-            source_file = base_folder_path / f"{lang_files[0]}"  # 以 base_folder 为基础路径
+            source_file = base_folder_path / lang_files[0]  # 以 base_folder 为基础路径
         else:
-            source_file = non_core_folder_path / f"{lang_files[0]}"  # 非核心语言使用 source_locale 路径
+            source_file = non_core_folder_path / lang_files[0]  # 非核心语言使用 source_locale 路径
 
         target_file = Path(lang_root) / f"{locale}.lproj" / f"{locale}.strings"
 
