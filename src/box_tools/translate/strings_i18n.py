@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import sys
+import yaml
 from pathlib import Path
 from typing import List, Dict
 
@@ -33,8 +34,42 @@ BOX_TOOL = {
 
 # 读取配置文件
 def load_config(file_path: str) -> Dict:
+    if not os.path.exists(file_path):
+        print(f"配置文件 {file_path} 不存在！")
+        print("请使用 `strings_i18n init` 初始化配置文件。")
+        sys.exit(1)
+
+    # 检查 YAML 文件是否合规
     with open(file_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        try:
+            config = yaml.safe_load(f)
+            if not isinstance(config, dict):
+                raise ValueError("配置文件内容格式错误！")
+            return config
+        except yaml.YAMLError as e:
+            print(f"配置文件 {file_path} 格式错误！")
+            print(f"错误详情: {e}")
+            sys.exit(1)
+
+# 生成配置文件
+def init_config(base_dir: str) -> None:
+    config_file = os.path.join(base_dir, 'strings_i18n.yaml')
+
+    if os.path.exists(config_file):
+        print(f"配置文件 {config_file} 已存在，正在检查文件格式…")
+        config = load_config(config_file)
+        print(f"配置文件 {config_file} 格式正确。")
+    else:
+        print(f"配置文件 {config_file} 不存在，正在生成默认配置文件…")
+        config = {
+            "baseLocale": "zh_hans",
+            "coreLocales": ["en", "zh_Hant", "zh_Hans", "ja", "ko", "yue"],
+            "locales": ["en", "zh_Hant", "zh_Hans", "ja", "ko", "yue", "fr", "de"],
+        }
+
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+        print(f"配置文件 {config_file} 已生成。")
 
 # 读取语言文件（.strings 格式）
 def load_language_file(file_path: str) -> Dict[str, str]:
@@ -58,59 +93,49 @@ def save_language_file(file_path: str, data: Dict[str, str]) -> None:
 def get_locale_file_path(base_dir: str, locale: str) -> str:
     return os.path.join(base_dir, f"{locale}.lproj", "Localizable.strings")
 
-# 对核心语言进行增量翻译
+# 核心语言增量翻译
 def translate_core(base_locale: str, core_locales: List[str], all_locales: List[str], base_dir: str, full_translation: bool) -> None:
-    # 读取源语言文件（即 base_locale）
     base_locale_file = get_locale_file_path(base_dir, base_locale)
     base_data = load_language_file(base_locale_file)
 
     for locale in core_locales:
         if locale == base_locale:
-            continue  # 跳过源语言文件
+            continue
 
-        # 读取目标语言文件
         target_locale_file = get_locale_file_path(base_dir, locale)
         target_data = load_language_file(target_locale_file)
 
-        # 如果是增量翻译，跳过已经存在的翻译
         if not full_translation:
             for key in list(target_data.keys()):
                 if key in base_data:
-                    del target_data[key]  # 删除已有的翻译
+                    del target_data[key]
 
-        # 增量翻译：复制源语言的翻译到目标语言文件
         for key, value in base_data.items():
             if key not in target_data:
-                target_data[key] = value  # 增量翻译
+                target_data[key] = value
 
-        # 保存翻译结果
         save_language_file(target_locale_file, target_data)
 
-# 对非核心语言进行增量翻译
+# 非核心语言增量翻译
 def translate_non_core(base_locale: str, core_locales: List[str], all_locales: List[str], base_dir: str, full_translation: bool) -> None:
     non_core_locales = [loc for loc in all_locales if loc not in core_locales]
 
     for locale in non_core_locales:
-        # 读取源语言文件（即 base_locale）
         base_locale_file = get_locale_file_path(base_dir, base_locale)
         base_data = load_language_file(base_locale_file)
 
-        # 读取目标语言文件
         target_locale_file = get_locale_file_path(base_dir, locale)
         target_data = load_language_file(target_locale_file)
 
-        # 如果是增量翻译，跳过已经存在的翻译
         if not full_translation:
             for key in list(target_data.keys()):
                 if key in base_data:
-                    del target_data[key]  # 删除已有的翻译
+                    del target_data[key]
 
-        # 增量翻译：复制源语言的翻译到目标语言文件
         for key, value in base_data.items():
             if key not in target_data:
-                target_data[key] = value  # 增量翻译
+                target_data[key] = value
 
-        # 保存翻译结果
         save_language_file(target_locale_file, target_data)
 
 # 删除冗余字段：baseLocale中没有的字段，列出并判断是否删除
@@ -126,12 +151,10 @@ def remove_redundant_fields(base_locale: str, core_locales: List[str], all_local
         locale_file = get_locale_file_path(base_dir, locale)
         locale_data = load_language_file(locale_file)
 
-        # 检查冗余字段：如果字段在 base_locale 中没有，但在目标语言中有
         for key in list(locale_data.keys()):
             if key not in base_data:
                 redundant_fields.append((locale, key, locale_data[key]))
 
-    # 输出冗余字段，供判断是否删除
     if redundant_fields:
         print("以下字段在源语言中缺失，但在其他语言中存在：")
         for locale, key, value in redundant_fields:
@@ -196,15 +219,23 @@ def choose_action_interactive() -> str:
 
 # 生成配置文件
 def init_config(base_dir: str) -> None:
-    config = {
-        "baseLocale": "zh_hans",
-        "coreLocales": ["en", "zh_Hant", "zh_Hans", "ja", "ko", "yue"],
-        "locales": ["en", "zh_Hant", "zh_Hans", "ja", "ko", "yue", "fr", "de"],
-    }
     config_file = os.path.join(base_dir, 'strings_i18n.yaml')
-    with open(config_file, 'w', encoding='utf-8') as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-    print(f"配置文件已生成: {config_file}")
+
+    if os.path.exists(config_file):
+        print(f"配置文件 {config_file} 已存在，正在检查文件格式…")
+        config = load_config(config_file)
+        print(f"配置文件 {config_file} 格式正确。")
+    else:
+        print(f"配置文件 {config_file} 不存在，正在生成默认配置文件…")
+        config = {
+            "baseLocale": "zh_hans",
+            "coreLocales": ["en", "zh_Hant", "zh_Hans", "ja", "ko", "yue"],
+            "locales": ["en", "zh_Hant", "zh_Hans", "ja", "ko", "yue", "fr", "de"],
+        }
+
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+        print(f"配置文件 {config_file} 已生成。")
 
 # 主函数
 def main():
@@ -213,6 +244,7 @@ def main():
 
     if not os.path.exists(config_file):
         print("配置文件 strings_i18n.yaml 不存在！")
+        print("请使用 `strings_i18n init` 初始化配置文件。")
         sys.exit(1)
 
     config = load_config(config_file)
