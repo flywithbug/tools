@@ -82,18 +82,26 @@ def load_languages(languages_json: str) -> Dict:
     return languages
 
 # 生成 .strings 文件
+# 生成 .strings 文件
 def generate_strings_file(locale: str, lang_root: str, lang_files: List[str]):
+    # 根据 lang_root 和 locale 生成对应的语言目录
     locale_dir = Path(lang_root) / f"{locale}.lproj"
+
+    # 如果目录不存在，创建目录
     if not locale_dir.exists():
         print(f"Creating directory {locale_dir}...")
         locale_dir.mkdir(parents=True, exist_ok=True)
 
+    # 根据 lang_files 列表来生成指定的语言文件
     for lang_file in lang_files:
+        # 生成语言文件的完整路径
         locale_file = locale_dir / lang_file
+
+        # 如果文件不存在，则创建文件
         if not locale_file.exists():
             print(f"Creating {locale_file}...")
             with open(locale_file, 'w', encoding='utf-8') as f:
-                f.write(f"/* Localization for {locale} */\n")
+                f.write(f"/* Localization for {locale} */\n")  # 可根据需要自定义内容
         else:
             print(f"{locale_file} already exists.")
 
