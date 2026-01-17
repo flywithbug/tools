@@ -1,11 +1,7 @@
-from __future__ import annotations
-
-import argparse
+import yaml
 import json
 import os
 import re
-import sys
-import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -54,6 +50,8 @@ class StringsI18n:
 
     def load_config(self, config_path: str) -> Dict:
         """加载配置文件"""
+        if not Path(config_path).exists():
+            raise FileNotFoundError(f"配置文件 {config_path} 不存在，请先使用 `strings_i18n init` 生成")
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)  # Ensure we load the config properly as JSON
         return config
@@ -165,6 +163,19 @@ class StringsI18n:
             # 增量翻译，填充缺失的键
             self.incremental_translate(source_locale, locale)
 
+def create_config(config_path: str):
+    """创建默认配置文件"""
+    default_config = {
+        "baseLocale": "en",
+        "sourceLocale": "en",
+        "coreLocales": ["en"],
+        "targetLocales": ["zh_Hant", "fr", "de", "es", "pt", "ru"],
+        "prompt_en": "Translate the following text into the target language.",
+    }
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(default_config, f, indent=4, ensure_ascii=False)
+    print(f"Config file {config_path} created successfully!")
+
 def choose_action_interactive() -> str:
     print("请选择操作：")
     print("1 - 核心语言增量翻译")
@@ -188,8 +199,17 @@ def choose_action_interactive() -> str:
     return choose_action_interactive()
 
 def main() -> int:
-    """主程序执行逻辑"""
-    i18n = StringsI18n(config_path="strings_i18n.yaml", languages_json="languages.json", i18n_dir="i18n")
+    config_path = "strings_i18n.yaml"
+    languages_json = "languages.json"
+    i18n_dir = "i18n"
+
+    try:
+        i18n = StringsI18n(config_path=config_path, languages_json=languages_json, i18n_dir=i18n_dir)
+    except FileNotFoundError:
+        print(f"配置文件 {config_path} 未找到。")
+        print("正在创建配置文件...")
+        create_config(config_path)
+        i18n = StringsI18n(config_path=config_path, languages_json=languages_json, i18n_dir=i18n_dir)
 
     action = choose_action_interactive()
 
