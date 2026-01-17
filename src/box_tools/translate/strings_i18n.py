@@ -82,7 +82,6 @@ def load_languages(languages_json: str) -> Dict:
     return languages
 
 # 生成 .strings 文件
-# 生成 .strings 文件
 def generate_strings_file(locale: str, lang_root: str, lang_files: List[str]):
     # 根据 lang_root 和 locale 生成对应的语言目录
     locale_dir = Path(lang_root) / f"{locale}.lproj"
@@ -119,19 +118,41 @@ def translate_key(key: str, source_locale: str, target_locale: str, prompt_en: s
 
 # 执行增量翻译
 def incremental_translate(config: Dict, i18n_dir: Path, api_key: str):
-    source_locale = config['source_locale']
-    target_locales = [lang['code'] for lang in load_languages(config['languages']) if lang['code'] not in config['core_locales']]
     base_locale = config['base_locale']
-    prompt_en = config['prompt_en']
+    base_folder = config['base_folder']
     lang_root = config.get('lang_root', './TimeTrails/TimeTrails/TimeTrails/SupportFiles/')
     lang_files = config['lang_files']
+    source_locale = config['source_locale']
 
+    # 核心语言的源文件路径：使用 base_folder + base_locale 来拼接
+    base_folder_path = Path(lang_root) / base_folder / f"{base_locale}.lproj"
+
+    # 如果源文件不存在，抛出错误
+    if not base_folder_path.exists():
+        print(f"源文件 {base_folder_path} 不存在！")
+        return
+
+    # 非核心语言的源文件路径：使用 source_locale 来拼接
+    non_core_folder_path = Path(lang_root) / f"{source_locale}.lproj"
+
+    # 加载目标语言
+    target_locales = [lang['code'] for lang in load_languages(config['languages']) if lang['code'] not in config['core_locales']]
+    prompt_en = config['prompt_en']
+
+    # 遍历每个目标语言
     for locale in target_locales:
         print(f"正在翻译 {locale}...")
         generate_strings_file(locale, lang_root, lang_files)
-        source_file = Path(lang_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
+
+        # 选择源文件路径：核心语言使用 base_folder + base_locale，非核心语言使用 source_locale
+        if locale in config['core_locales']:
+            source_file = base_folder_path / f"{lang_files[0]}"  # 以 base_folder 为基础路径
+        else:
+            source_file = non_core_folder_path / f"{lang_files[0]}"  # 非核心语言使用 source_locale 路径
+
         target_file = Path(lang_root) / f"{locale}.lproj" / f"{locale}.strings"
 
+        # 如果源文件不存在，跳过
         if not source_file.exists():
             print(f"源文件 {source_file} 不存在！跳过 {locale}")
             continue
