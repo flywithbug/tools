@@ -15,8 +15,8 @@ try:
 except Exception:
     OpenAI = None  # type: ignore
 
-# 翻译能力来自 translate/comm/translate_flat.py
-from .comm.translate_flat import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
+# ✅ 使用同目录下 gpt 模块
+from .gpt import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
 
 
 BOX_TOOL = {
@@ -55,10 +55,26 @@ BOX_TOOL = {
 CONFIG_FILE = "slang_i18n.yaml"
 I18N_DIR = "i18n"
 
-# 你要求的默认语言集合
+# 默认语言集合
 DEFAULT_ALL_LOCALES = [
-    "en", "zh_Hant", "de", "es", "fil", "fr", "hi", "id", "ja",
-    "kk", "ko", "pt", "ru", "th", "uk", "vi", "tr", "nl"
+    "en",
+    "zh_Hant",
+    "de",
+    "es",
+    "fil",
+    "fr",
+    "hi",
+    "id",
+    "ja",
+    "kk",
+    "ko",
+    "pt",
+    "ru",
+    "th",
+    "uk",
+    "vi",
+    "tr",
+    "nl",
 ]
 DEFAULT_SOURCE_LOCALE = "en"
 DEFAULT_TARGET_LOCALES = [x for x in DEFAULT_ALL_LOCALES if x != DEFAULT_SOURCE_LOCALE]
@@ -89,6 +105,7 @@ EXIT_REDUNDANT_FOUND = 3
 def _require_yaml():
     try:
         import yaml  # type: ignore
+
         return yaml
     except Exception:
         raise SystemExit(
@@ -105,8 +122,7 @@ def _require_yaml():
 
 def _schema_error(msg: str) -> ValueError:
     return ValueError(
-        "slang_i18n.yaml 格式错误：\n"
-        f"- {msg}\n\n"
+        "slang_i18n.yaml 格式错误：\n" f"- {msg}\n\n"
         "期望结构示例：\n"
         "source_locale: en\n"
         "target_locales:\n"
@@ -218,8 +234,7 @@ def _has_any_subdir(i18n_dir: Path) -> bool:
 
 
 def get_active_groups(i18n_dir: Path) -> List[Path]:
-    """
-    规则：
+    """规则：
     - i18n/ 下如果存在任何子目录：只处理子目录，不处理 i18n/ 根目录
     - 否则（没有子目录）：处理 i18n/ 根目录
     """
@@ -234,10 +249,6 @@ def get_active_groups(i18n_dir: Path) -> List[Path]:
 # =========================================================
 
 def _to_camel(s: str) -> str:
-    """
-    snake_case / kebab-case / mixed -> camelCase
-    e.g. "user_profile" -> "userProfile", "assets" -> "assets"
-    """
     parts = [p for p in re.split(r"[_\-\s]+", s.strip()) if p]
     if not parts:
         return s
@@ -247,11 +258,9 @@ def _to_camel(s: str) -> str:
 
 
 def group_file_name(group: Path, locale: str) -> Path:
-    """
-    ✅ 你要的规则：
-    - i18n/ 根目录：{locale}.i18n.json  （保持不变）
+    """规则：
+    - i18n/ 根目录：{locale}.i18n.json
     - i18n/<module>/：{camelFolder}_{locale}.i18n.json
-      例如 i18n/user_profile/ -> userProfile_en.i18n.json
     """
     if group.name == I18N_DIR:
         return group / f"{locale}.i18n.json"
@@ -272,10 +281,9 @@ def load_json_obj(path: Path) -> Dict[str, Any]:
 
 
 def split_slang_json(path: Path, obj: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
-    """
-    slang flat json:
-    - 所有以 @@ 开头的是 metadata，不翻译，value 允许任意 JSON 类型（bool/int/obj/list/...）
-    - 其余 key 必须是 str -> str（才是需要翻译的内容）
+    """slang flat json:
+    - 所有以 @@ 开头的是 metadata，不翻译
+    - 其余 key 必须是 str -> str
     """
     meta: Dict[str, Any] = {}
     body: Dict[str, str] = {}
@@ -298,8 +306,7 @@ def split_slang_json(path: Path, obj: Dict[str, Any]) -> Tuple[Dict[str, Any], D
 
 
 def save_json(path: Path, meta: Dict[str, Any], body: Dict[str, str], sort_keys: bool) -> None:
-    """
-    输出顺序：
+    """输出顺序：
     1) @@locale（如果存在）
     2) 其它 @@meta（按 key 排序）
     3) 普通 key（按 key 排序可选）
@@ -328,19 +335,11 @@ def save_json(path: Path, meta: Dict[str, Any], body: Dict[str, str], sort_keys:
 # =========================================================
 
 def _match_locale_from_filename(filename: str, locales_sorted: List[str]) -> Optional[str]:
-    """
-    仅在能“明确识别 locale”时返回 locale，否则返回 None
-
-    ✅ 新规则：文件名后缀必须是 _{locale}.i18n.json 或 {locale}.i18n.json（根目录）
-    - i18n/<module>/: xxx_{locale}.i18n.json
-    - i18n/: {locale}.i18n.json
-    """
     if not filename.endswith(".i18n.json"):
         return None
 
-    stem = filename[:-len(".i18n.json")]
+    stem = filename[: -len(".i18n.json")]
 
-    # 优先长 locale，避免 zh vs zh_Hant 误匹配
     for loc in locales_sorted:
         if stem.endswith(f"_{loc}"):
             return loc
@@ -351,23 +350,20 @@ def _match_locale_from_filename(filename: str, locales_sorted: List[str]) -> Opt
 
 
 def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = True) -> None:
-    """
-    只规范化 i18n/<module>/ 下的文件名，使其前缀严格等于文件夹名的驼峰：
-    - 目标格式：{camelFolder}_{locale}.i18n.json
-    - 只对“能从文件名明确识别 locale”的文件动手（locale 必须在 locales 列表里）
-    - 不覆盖已有目标文件
+    """只规范化 i18n/<module>/ 下的文件名：{camelFolder}_{locale}.i18n.json
+
+    只对“能从文件名明确识别 locale”的文件动手；不覆盖已有目标文件。
     """
     if group.name == I18N_DIR:
-        return  # 根目录不做前缀重命名
+        return
 
     locales_sorted = sorted(set(locales), key=len, reverse=True)
-    expected_prefix = group.name
-    expected_prefix_camel = _to_camel(expected_prefix)
+    expected_prefix_camel = _to_camel(group.name)
 
     for p in group.glob("*.i18n.json"):
         loc = _match_locale_from_filename(p.name, locales_sorted)
         if not loc:
-            continue  # 无法明确识别 locale，不动
+            continue
 
         expected_name = f"{expected_prefix_camel}_{loc}.i18n.json"
         if p.name == expected_name:
@@ -389,9 +385,7 @@ def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = T
 # =========================================================
 
 def ensure_language_files_in_group(group: Path, src_locale: str, targets: List[str]) -> None:
-    """
-    只创建缺失的文件，创建内容仅包含 @@locale（不翻译 meta）
-    """
+    """只创建缺失的文件，创建内容仅包含 @@locale"""
     sort_keys = False
 
     src_path = group_file_name(group, src_locale)
@@ -552,14 +546,14 @@ def _compute_need_for_one(group: Path, cfg: Dict[str, Any], loc: str, incrementa
 # =========================================================
 
 def translate_group(
-        group: Path,
-        cfg: Dict[str, Any],
-        api_key: str,
-        model: str,
-        incremental: bool,
-        cleanup_extra: bool,
-        sort_keys: bool,
-        progress: Progress,
+    group: Path,
+    cfg: Dict[str, Any],
+    api_key: str,
+    model: str,
+    incremental: bool,
+    cleanup_extra: bool,
+    sort_keys: bool,
+    progress: Progress,
 ) -> None:
     src_locale = cfg["source_locale"]
     targets = cfg["target_locales"]
@@ -580,7 +574,6 @@ def translate_group(
         need = {k: v for k, v in src_body.items() if k not in tgt_body} if incremental else dict(src_body)
 
         if not need:
-            # keys=0：不显示任何进度/输出，但仍确保 @@locale
             tgt_meta = dict(tgt_meta)
             tgt_meta.setdefault("@@locale", loc)
             save_json(tgt_path, tgt_meta, tgt_body, sort_keys=sort_keys)
@@ -613,7 +606,6 @@ def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str,
     groups = get_active_groups(i18n_dir)
     targets = cfg["target_locales"]
 
-    # 统计每个模块需要翻译的 keys（跨所有 target locales 求和）
     group_need: Dict[Path, int] = {}
     total_need = 0
     for g in groups:
@@ -629,7 +621,6 @@ def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str,
         print("✅ 无需翻译：所有语言文件已齐全")
         return
 
-    # 只翻译需要翻译的模块
     for g in groups:
         if group_need.get(g, 0) <= 0:
             continue
@@ -684,7 +675,10 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
             cfg = read_config(cfg_path)
             prompt_on = bool((cfg.get("prompt_en") or "").strip())
             normalize_on = bool(cfg["options"].get("normalize_filenames", True))
-            print(f"✅ {CONFIG_FILE} OK (source={cfg['source_locale']} targets={len(cfg['target_locales'])} prompt_en={'ON' if prompt_on else 'OFF'} normalize_filenames={'ON' if normalize_on else 'OFF'})")
+            print(
+                f"✅ {CONFIG_FILE} OK (source={cfg['source_locale']} targets={len(cfg['target_locales'])} "
+                f"prompt_en={'ON' if prompt_on else 'OFF'} normalize_filenames={'ON' if normalize_on else 'OFF'})"
+            )
         except Exception as e:
             ok = False
             print(f"❌ {CONFIG_FILE} 解析失败：{e}")
@@ -692,6 +686,8 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
     ak = api_key or os.getenv("OPENAI_API_KEY")
     if not ak:
         print("⚠️ 未提供 API Key：--api-key 或环境变量 OPENAI_API_KEY（翻译时需要）")
+        print("   macOS/Linux: export OPENAI_API_KEY=\"sk-...\"")
+        print("   Windows(PowerShell): setx OPENAI_API_KEY \"sk-...\"")
     else:
         print("✅ API Key 已配置（来源：参数或环境变量）")
 
@@ -881,7 +877,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if m == "0":
                 print("🧊 已取消翻译")
                 return EXIT_OK
-            full = (m == "2")
+            full = m == "2"
 
         started = time.time()
         try:
@@ -896,7 +892,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         cost = time.time() - started
         print(f"✅ 翻译完成（{cost:.1f}s，模式={'全量' if full else '增量'}）")
 
-        # 可选：翻译后排序
+        # 翻译后可选排序
         try:
             if bool(cfg["options"]["sort_keys"]):
                 sort_all_json(i18n_dir, sort_keys=True)

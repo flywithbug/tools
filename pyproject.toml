@@ -1,11 +1,12 @@
 [project]
 name = "box"
-version = "0.1.12"
+version = "0.1.13"
 requires-python = ">=3.9"
-dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "openai", "PyYAML"]
+dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "openai", "PyYAML", "tiktoken"]
 
 [project.scripts]
 box = "box.box:main"
+gpt = "box_tools.translate.gpt:main"
 pub_publish = "box_tools.flutter.pub_publish:main"
 pub_upgrade = "box_tools.flutter.pub_upgrade:main"
 pub_version = "box_tools.flutter.pub_version:main"
