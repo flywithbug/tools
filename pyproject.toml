@@ -1,6 +1,6 @@
 [project]
 name = "box"
-version = "0.1.27"
+version = "0.1.28"
 requires-python = ">=3.9"
 dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "openai", "PyYAML", "tiktoken"]
 
@@ -12,7 +12,7 @@ pub_version = "box_tools.flutter.pub_version:main"
 riverpod_gen = "box_tools.flutter.riverpod_gen:main"
 slang_i18n = "box_tools.translate.slang_i18n:main"
 strings_i18n = "box_tools.translate.strings_i18n:main"
-translate = "box_tools.translate.translate:main"
+translate = "box_tools.translate.ai_translate:main"
 
 [build-system]
 requires = ["hatchling"]

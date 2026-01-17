@@ -28,9 +28,9 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### translate
 
+- **`translate`**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检
 - **`slang_i18n`**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）
 - **`strings_i18n`**：增量翻译和语言文件管理工具，支持排序、删除冗余字段等功能
-- **`translate`**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检
 
 ---
 
@@ -220,6 +220,39 @@ riverpod_gen Product --legacy
 
 ## translate
 
+### translate
+
+**简介**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检
+
+**命令**：`translate`
+
+**用法**
+
+```bash
+translate
+translate --help
+translate doctor
+translate translate --src-lang en --tgt-locale zh_Hant --in input.json --out output.json
+```
+
+**参数说明**
+
+- `doctor`：检查 OpenAI SDK / OPENAI_API_KEY 环境变量 / Python 环境
+- `translate`：翻译平铺 JSON（key 不变，只翻 value），输出为 JSON
+- `--model`：选择模型（默认 gpt-4o）
+- `--api-key`：显式传入 API key（优先于环境变量）
+
+**示例**
+
+- `translate`：显示简介 + 检查 OPENAI_API_KEY 是否已配置
+- `translate translate --src-lang en --tgt-locale zh_Hant --in i18n/en.json --out i18n/zh_Hant.json`：翻译一个平铺 JSON 文件
+
+**文档**
+
+- 未找到文档：`src/box_tools/translate/ai_translate.md`（请创建该文件）
+
+---
+
 ### slang_i18n
 
 **简介**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）
@@ -293,41 +326,6 @@ strings_i18n translate --api-key $OPENAI_API_KEY
 **文档**
 
 [src/box_tools/translate/strings_i18n.md](src/box_tools/translate/strings_i18n.md)
-
----
-
-### translate
-
-**简介**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检
-
-**命令**：`translate`
-
-**用法**
-
-```bash
-translate
-translate --help
-translate doctor
-translate translate --src-lang en --tgt-locale zh_Hant --in input.json --out output.json
-translate translate --src-lang en --tgt-locale ja --in input.json --out output.json --prompt-en 'Use polite tone'
-```
-
-**参数说明**
-
-- `doctor`：检查 OpenAI SDK / OPENAI_API_KEY 环境变量 / Python 环境
-- `translate`：翻译平铺 JSON（key 不变，只翻 value），输出为 JSON
-- `--model`：选择模型（默认 gpt-4o）
-- `--api-key`：显式传入 API key（优先于环境变量）
-
-**示例**
-
-- `translate`：显示简介 + 检查 OPENAI_API_KEY 是否已配置
-- `translate doctor`：更详细的环境自检
-- `translate translate --src-lang en --tgt-locale zh_Hant --in i18n/en.json --out i18n/zh_Hant.json`：翻译一个平铺 JSON 文件
-
-**文档**
-
-- 未找到文档：`src/box/gpt.md`（请创建该文件）
 
 ---
 

@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import random
 import re
-import sys
 import time
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, List, Optional
 
 try:
     from openai import OpenAI
@@ -19,40 +16,8 @@ except Exception:  # pragma: no cover
 
 
 # =========================================================
-# Tool metadata (for box tools listing / README generator)
-# =========================================================
-
-BOX_TOOL = {
-    "id": "ai.translate",
-    "name": "translate",
-    "category": "ai",
-    "summary": "OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检",
-    "usage": [
-        "translate",
-        "translate --help",
-        "translate doctor",
-        "translate translate --src-lang en --tgt-locale zh_Hant --in input.json --out output.json",
-        "translate translate --src-lang en --tgt-locale ja --in input.json --out output.json --prompt-en 'Use polite tone'",
-    ],
-    "options": [
-        {"flag": "doctor", "desc": "检查 OpenAI SDK / OPENAI_API_KEY 环境变量 / Python 环境"},
-        {"flag": "translate", "desc": "翻译平铺 JSON（key 不变，只翻 value），输出为 JSON"},
-        {"flag": "--model", "desc": "选择模型（默认 gpt-4o）"},
-        {"flag": "--api-key", "desc": "显式传入 API key（优先于环境变量）"},
-    ],
-    "examples": [
-        {"cmd": "translate", "desc": "显示简介 + 检查 OPENAI_API_KEY 是否已配置"},
-        {"cmd": "translate doctor", "desc": "更详细的环境自检"},
-        {"cmd": "translate translate --src-lang en --tgt-locale zh_Hant --in i18n/en.json --out i18n/zh_Hant.json", "desc": "翻译一个平铺 JSON 文件"},
-    ],
-    "docs": "src/box/gpt.md",
-}
-
-
-# =========================================================
 # Models (Enum)
 # =========================================================
-
 
 class OpenAIModel(str, Enum):
     GPT_4O = "gpt-4o"
@@ -67,7 +32,6 @@ class OpenAIModel(str, Enum):
 # Errors
 # =========================================================
 
-
 class TranslationError(RuntimeError):
     pass
 
@@ -75,7 +39,6 @@ class TranslationError(RuntimeError):
 # =========================================================
 # Internal fixed options
 # =========================================================
-
 
 @dataclass(frozen=True)
 class _Options:
@@ -99,7 +62,6 @@ class _Options:
 # =========================================================
 # Token estimation (best-effort)
 # =========================================================
-
 
 class _TokenEstimator:
     def __init__(self, model: str):
@@ -125,7 +87,6 @@ class _TokenEstimator:
 # =========================================================
 # Placeholder protection (single built-in regex)
 # =========================================================
-
 
 _PLACEHOLDER_RE = re.compile(
     r"(?:"
@@ -179,12 +140,11 @@ def _guard_placeholders(src: Dict[str, str], out: Dict[str, str]) -> Dict[str, s
 # Prompt builder (default prompt + extra)
 # =========================================================
 
-
 def _build_system_prompt(
-    *,
-    src_lang: str,
-    tgt_locale: str,
-    prompt_en: Optional[str],
+        *,
+        src_lang: str,
+        tgt_locale: str,
+        prompt_en: Optional[str],
 ) -> str:
     base = (
         "You are a professional localization translator for apps and web. "
@@ -210,13 +170,12 @@ def _build_user_payload(_tgt_locale: str, chunk: Dict[str, str]) -> str:
 # Chunking
 # =========================================================
 
-
 def _chunk_flat_dict(
-    src: Dict[str, str],
-    estimator: _TokenEstimator,
-    system_prompt: str,
-    tgt_locale: str,
-    opt: _Options,
+        src: Dict[str, str],
+        estimator: _TokenEstimator,
+        system_prompt: str,
+        tgt_locale: str,
+        opt: _Options,
 ) -> List[Dict[str, str]]:
     if not src:
         return []
@@ -257,7 +216,6 @@ def _chunk_flat_dict(
 # OpenAI helpers
 # =========================================================
 
-
 def _sleep_backoff(attempt: int, base: float, jitter: float) -> None:
     time.sleep((base**attempt) + random.uniform(0, jitter))
 
@@ -283,12 +241,12 @@ def _validate_keys(expected: Iterable[str], got: Dict[str, str], strict: bool) -
 
 
 def _chat_completion(
-    client: OpenAI,
-    model: str,
-    system_prompt: str,
-    user_content: str,
-    opt: _Options,
-    use_json_format: bool,
+        client: OpenAI,
+        model: str,
+        system_prompt: str,
+        user_content: str,
+        opt: _Options,
+        use_json_format: bool,
 ) -> str:
     kwargs = dict(
         model=model,
@@ -310,15 +268,14 @@ def _chat_completion(
 # Public API
 # =========================================================
 
-
 def translate_flat_dict(
-    *,
-    prompt_en: Optional[str],
-    src_dict: Dict[str, str],
-    src_lang: str,
-    tgt_locale: str,
-    model: Optional[str] = None,
-    api_key: str,
+        *,
+        prompt_en: Optional[str],
+        src_dict: Dict[str, str],
+        src_lang: str,
+        tgt_locale: str,
+        model: Optional[str] = None,
+        api_key: str,
 ) -> Dict[str, str]:
     """Translate a flat dict: {key: text} -> {key: translated_text}."""
 
@@ -398,191 +355,3 @@ def translate_flat_dict(
         raise TranslationError("Final key mismatch")
 
     return merged
-
-
-# =========================================================
-# CLI
-# =========================================================
-
-
-def _print_intro() -> None:
-    print("== translate ==")
-    print("这是工具集里的 OpenAI 小底座：")
-    print("- 平铺 JSON 翻译（key 不变，只翻 value）")
-    print("- 占位符/格式化 token 守护（避免 {name} / %s / ${x} 被翻坏）")
-    print("- 支持分块与重试（大 JSON 也能稳一点）")
-    print()
-
-
-def _print_api_key_help() -> None:
-    print("未检测到 OPENAI_API_KEY。你可以这样配置：")
-    print()
-    print("macOS / Linux (bash/zsh)：")
-    print("  export OPENAI_API_KEY=\"sk-...\"")
-    print("  # 你也可以把它写进 ~/.zshrc 或 ~/.bashrc")
-    print()
-    print("Windows PowerShell：")
-    print("  setx OPENAI_API_KEY \"sk-...\"")
-    print()
-    print("临时传入（优先级最高）：")
-    print("  translate translate ... --api-key sk-...")
-    print()
-
-
-def _get_api_key(explicit: Optional[str]) -> Optional[str]:
-    if explicit and explicit.strip():
-        return explicit.strip()
-    return (os.environ.get("OPENAI_API_KEY") or "").strip() or None
-
-
-def _cmd_doctor(_parser: argparse.ArgumentParser, _args: argparse.Namespace) -> int:
-    print("== translate doctor ==")
-    print(f"python: {sys.executable}")
-    print(f"python_version: {sys.version.split()[0]}")
-
-    if OpenAI is None:
-        print("openai_sdk: NOT INSTALLED")
-        print("  fix: pip install openai>=1.0.0")
-    else:
-        try:
-            import openai  # type: ignore
-
-            ver = getattr(openai, "__version__", "unknown")
-        except Exception:
-            ver = "unknown"
-        print(f"openai_sdk: OK ({ver})")
-
-    key = _get_api_key(None)
-    if key:
-        print("OPENAI_API_KEY: OK (已配置)")
-    else:
-        print("OPENAI_API_KEY: MISSING")
-        _print_api_key_help()
-
-    print("doctor: OK")
-    return 0
-
-
-def _read_json_file(path: Path) -> Dict[str, str]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise SystemExit("输入 JSON 必须是 object（平铺 key-value），不能是 array")
-    out: Dict[str, str] = {}
-    for k, v in data.items():
-        out[str(k)] = "" if v is None else str(v)
-    return out
-
-
-def _cmd_translate(_parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
-    api_key = _get_api_key(getattr(args, "api_key", None))
-    if not api_key:
-        print("❌ 缺少 OPENAI_API_KEY")
-        _print_api_key_help()
-        return 2
-
-    in_path = Path(args.input).expanduser().resolve()
-    out_path = Path(args.output).expanduser().resolve()
-
-    if not in_path.exists():
-        print(f"❌ 输入文件不存在: {in_path}")
-        return 2
-
-    src_dict = _read_json_file(in_path)
-
-    out = translate_flat_dict(
-        prompt_en=args.prompt_en,
-        src_dict=src_dict,
-        src_lang=args.src_lang,
-        tgt_locale=args.tgt_locale,
-        model=args.model,
-        api_key=api_key,
-    )
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-
-    print("translate: OK")
-    print(f"in : {in_path}")
-    print(f"out: {out_path}")
-    return 0
-
-
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="gpt",
-        description="OpenAI 小工具：平铺 JSON 翻译 + 环境自检（OPENAI_API_KEY）",
-    )
-
-    sub = p.add_subparsers(dest="cmd")
-
-    sp_doctor = sub.add_parser("doctor", help="检查 OpenAI SDK 与 OPENAI_API_KEY")
-    sp_doctor.set_defaults(func=_cmd_doctor)
-
-    sp_t = sub.add_parser("translate", help="翻译平铺 JSON（key 不变，只翻 value）")
-    sp_t.add_argument("--src-lang", required=True, help="源语言（如 en）")
-    sp_t.add_argument("--tgt-locale", required=True, help="目标语言/地区（如 zh_Hant / ja / fr）")
-    sp_t.add_argument("--in", dest="input", required=True, help="输入 JSON 文件")
-    sp_t.add_argument("--out", dest="output", required=True, help="输出 JSON 文件")
-    sp_t.add_argument("--prompt-en", default=None, help="额外英文提示词（追加到 system prompt）")
-    sp_t.add_argument(
-        "--model",
-        default=OpenAIModel.GPT_4O.value,
-        help="模型名（默认 gpt-4o）",
-    )
-    sp_t.add_argument(
-        "--api-key",
-        default=None,
-        help="显式传入 API key（优先于 OPENAI_API_KEY）",
-    )
-    sp_t.set_defaults(func=_cmd_translate)
-
-    return p
-
-
-def main(argv: Optional[List[str]] = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-
-    # Running without args -> intro + env hint (and show help summary)
-    if not argv:
-        _print_intro()
-        if _get_api_key(None):
-            print("OPENAI_API_KEY: OK (已配置)")
-        else:
-            print("OPENAI_API_KEY: MISSING")
-            _print_api_key_help()
-
-        print("常用命令：")
-        print("  translate doctor")
-        print("  translate translate --src-lang en --tgt-locale zh_Hant --in input.json --out output.json")
-        return 0
-
-    p = build_parser()
-    args = p.parse_args(argv)
-
-    # `translate --help` should behave normally
-    if not getattr(args, "cmd", None):
-        # No subcommand, but args present (e.g. --help already handled by argparse)
-        p.print_help()
-        return 0
-
-    func = getattr(args, "func", None)
-    if not func:
-        p.print_help()
-        return 0
-
-    return int(func(p, args))
-
-
-__all__ = ["OpenAIModel", "TranslationError", "translate_flat_dict", "main", "BOX_TOOL"]
-
-#
-# if __name__ == "__main__":
-#     try:
-#         raise SystemExit(main())
-#     except KeyboardInterrupt:
-#         # Ctrl+C：优雅退出，不打印 traceback
-#         print("\n已取消。")
-#         raise SystemExit(130)  # 130 = SIGINT 的惯例退出码
-#
