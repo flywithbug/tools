@@ -1,27 +1,26 @@
 import yaml
 import json
 import os
-import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# 确保从 comm 目录导入 translate 模块
+# 从 comm 目录导入 translate 模块
 from .comm.translate import OpenAIModel, TranslationError, translate_flat_dict
 
 # 工具元数据
 BOX_TOOL = {
-    "id": "flutter.strings_i18n",  # 工具的唯一标识符
-    "name": "strings_i18n",        # 工具名称
-    "category": "flutter",         # 工具分类
-    "summary": "增量翻译和语言文件管理工具，支持排序、删除冗余字段等功能",  # 工具简介
+    "id": "flutter.strings_i18n",
+    "name": "strings_i18n",
+    "category": "flutter",
+    "summary": "增量翻译和语言文件管理工具，支持排序、删除冗余字段等功能",
     "usage": [
-        "strings_i18n",                             # 基本命令
-        "strings_i18n init",                        # 生成配置文件
-        "strings_i18n doctor",                      # 检查环境和配置
-        "strings_i18n sort",                        # 排序语言文件
-        "strings_i18n check",                       # 检查冗余字段
-        "strings_i18n clean --yes",                 # 删除冗余字段（跳过确认）
-        "strings_i18n translate --api-key $OPENAI_API_KEY",  # 翻译命令
+        "strings_i18n",
+        "strings_i18n init",  # 初始化配置
+        "strings_i18n doctor",
+        "strings_i18n sort",
+        "strings_i18n check",
+        "strings_i18n clean --yes",
+        "strings_i18n translate --api-key $OPENAI_API_KEY",
     ],
     "options": [
         {"flag": "--api-key", "desc": "OpenAI API key（可通过环境变量传递）"},
@@ -36,8 +35,8 @@ BOX_TOOL = {
         {"cmd": "strings_i18n clean --yes", "desc": "删除所有冗余 key（不询问）"},
     ],
     "dependencies": [
-        "PyYAML>=6.0",         # 依赖 PyYAML
-        "openai>=1.0.0",       # 依赖 OpenAI
+        "PyYAML>=6.0",
+        "openai>=1.0.0",
     ],
 }
 
@@ -53,7 +52,7 @@ class StringsI18n:
         if not Path(config_path).exists():
             raise FileNotFoundError(f"配置文件 {config_path} 不存在，请先使用 `strings_i18n init` 生成")
         with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)  # Ensure we load the config properly as JSON
+            config = yaml.safe_load(f)  # 确保以 YAML 格式加载配置
         return config
 
     def load_languages(self, languages_json: str) -> Dict:
@@ -166,14 +165,14 @@ class StringsI18n:
 def create_config(config_path: str):
     """创建默认配置文件"""
     default_config = {
-        "baseLocale": "en",
+        "baseLocale": "zh_hans",
         "sourceLocale": "en",
-        "coreLocales": ["en"],
-        "targetLocales": ["zh_Hant", "fr", "de", "es", "pt", "ru"],
+        "coreLocales": ["en", "zh_hans", "zh_hant"],
         "prompt_en": "Translate the following text into the target language.",
+        "translatePath": "i18n",  # 假设目标文件存放路径为 i18n
     }
     with open(config_path, 'w', encoding='utf-8') as f:
-        json.dump(default_config, f, indent=4, ensure_ascii=False)
+        yaml.dump(default_config, f, allow_unicode=True)
     print(f"Config file {config_path} created successfully!")
 
 def choose_action_interactive() -> str:
