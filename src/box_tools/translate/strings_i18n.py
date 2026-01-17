@@ -1,7 +1,11 @@
-import yaml
+from __future__ import annotations
+
+import argparse
 import json
 import os
 import re
+import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -51,7 +55,7 @@ class StringsI18n:
     def load_config(self, config_path: str) -> Dict:
         """加载配置文件"""
         with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+            config = json.load(f)  # Ensure we load the config properly as JSON
         return config
 
     def load_languages(self, languages_json: str) -> Dict:
@@ -183,14 +187,15 @@ def choose_action_interactive() -> str:
     print("无效的输入，请重新选择。")
     return choose_action_interactive()
 
-if __name__ == '__main__':
-    # 创建 StringsI18n 实例并执行用户选择的操作
+def main() -> int:
+    """主程序执行逻辑"""
     i18n = StringsI18n(config_path="strings_i18n.yaml", languages_json="languages.json", i18n_dir="i18n")
 
     action = choose_action_interactive()
 
     if action == "exit":
         print("退出程序。")
+        return 0
     elif action == "core_translation":
         print("进行核心语言增量翻译...")
         i18n.incremental_translate(i18n.get_source_locale(), i18n.get_base_locale())
@@ -201,3 +206,8 @@ if __name__ == '__main__':
         i18n.remove_redundant_fields()
     elif action == "sort_language_files":
         i18n.sort_language_files()
+
+    return 0
+
+if __name__ == '__main__':
+    main()
