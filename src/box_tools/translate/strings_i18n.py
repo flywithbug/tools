@@ -5,10 +5,10 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .comm.translate  import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
+# 确保从 comm 目录导入 translate 模块
+from comm.translate import OpenAIModel, TranslationError, translate_flat_dict
 
-
-# 定义工具的元数据
+# 工具元数据
 BOX_TOOL = {
     "id": "flutter.strings_i18n",  # 工具的唯一标识符
     "name": "strings_i18n",        # 工具名称
