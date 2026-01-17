@@ -29,6 +29,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### translate
 
 - **`slang_i18n`**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）
+- **`strings_i18n`**：处理 Localizable.strings 文件的翻译工具，支持增量翻译、全量翻译以及生成 Swift 的 L10n 文件。
 - **`translate`**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检
 
 ---
@@ -254,6 +255,44 @@ slang_i18n translate --api-key $OPENAI_API_KEY
 **文档**
 
 [src/box_tools/translate/slang_i18n.md](src/box_tools/translate/slang_i18n.md)
+
+---
+
+### strings_i18n
+
+**简介**：处理 Localizable.strings 文件的翻译工具，支持增量翻译、全量翻译以及生成 Swift 的 L10n 文件。
+
+**命令**：`strings_i18n`
+
+**用法**
+
+```bash
+strings_i18n
+strings_i18n init
+strings_i18n doctor
+strings_i18n sort
+strings_i18n check
+strings_i18n clean --yes
+strings_i18n translate --api-key $OPENAI_API_KEY
+```
+
+**参数说明**
+
+- `--api-key`：OpenAI API key（也可用环境变量 OPENAI_API_KEY）
+- `--model`：翻译模型（默认 gpt-4o）
+- `--full`：全量翻译（默认增量翻译）
+- `--yes`：clean 删除冗余时跳过确认
+- `--no-exitcode-3`：check 发现冗余时仍返回 0（默认返回 3）
+
+**示例**
+
+- `strings_i18n init`：生成 strings_i18n.yaml 模板
+- `strings_i18n translate --api-key $OPENAI_API_KEY`：增量翻译缺失的 keys
+- `strings_i18n clean --yes`：删除所有冗余 key（不询问）
+
+**文档**
+
+[src/box_tools/translate/strings_i18n.md](src/box_tools/translate/strings_i18n.md)
 
 ---
 
