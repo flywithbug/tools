@@ -30,7 +30,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 - **`translate`**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检
 - **`slang_i18n`**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）
-- **`strings_i18n`**：增量翻译和语言文件管理工具，支持排序、删除冗余字段等功能
+- **`strings_i18n`**：iOS 项目多语言翻译工具，支持增量翻译、冗余检查、排序等功能
 
 ---
 
@@ -293,7 +293,7 @@ slang_i18n translate --api-key $OPENAI_API_KEY
 
 ### strings_i18n
 
-**简介**：增量翻译和语言文件管理工具，支持排序、删除冗余字段等功能
+**简介**：iOS 项目多语言翻译工具，支持增量翻译、冗余检查、排序等功能
 
 **命令**：`strings_i18n`
 
