@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from comm.translate  import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
+from .comm.translate  import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
 
 
 # 定义工具的元数据
