@@ -51,7 +51,7 @@ class StringsI18n:
         if not Path(config_path).exists():
             raise FileNotFoundError(f"配置文件 {config_path} 不存在，请先使用 `strings_i18n init` 生成")
         with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+            config = yaml.safe_load(f)  # 确保以 YAML 格式加载配置
         return config
 
     def load_languages(self, languages_json: str) -> Dict:
@@ -73,11 +73,18 @@ class StringsI18n:
         base_locale = self.get_base_locale()
         return [locale for locale in self.languages if locale != base_locale]
 
+    def get_source_locale(self) -> str:
+        """获取源语言"""
+        return self.config['source_locale']
+
     def generate_strings_file(self, locale: str):
         """根据多语言生成 .strings 文件"""
-        locale_file = self.i18n_dir / f"{locale}.strings"
+        strings_root = self.config.get('strings_root', 'i18n')  # 获取翻译文件的根目录
+        locale_file = Path(strings_root) / f"{locale}.lproj" / f"{locale}.strings"
         if not locale_file.exists():
             print(f"Creating {locale_file}...")
+            locale_dir = locale_file.parent
+            locale_dir.mkdir(parents=True, exist_ok=True)
             with open(locale_file, 'w', encoding='utf-8') as f:
                 f.write(f"/* Localization for {locale} */\n")
         else:
@@ -101,8 +108,9 @@ class StringsI18n:
 
     def incremental_translate(self, source_locale: str, target_locale: str):
         """增量翻译：只翻译缺失的键"""
-        source_file = self.i18n_dir / f"{source_locale}.strings"
-        target_file = self.i18n_dir / f"{target_locale}.strings"
+        strings_root = self.config.get('strings_root', 'i18n')  # 获取翻译文件的根目录
+        source_file = Path(strings_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
+        target_file = Path(strings_root) / f"{target_locale}.lproj" / f"{target_locale}.strings"
 
         if not source_file.exists():
             print(f"Error: {source_file} does not exist!")
@@ -163,6 +171,7 @@ def create_config(config_path: str):
         "source_locale": "en",
         "target_locales": ["zh_Hant", "zh_Hans", "ja", "fr", "es"],
         "prompt_en": "Translate the following text into the target language.",
+        "strings_root": "i18n",  # 翻译文件保存的根目录
         "options": {
             "sort_keys": True,
             "cleanup_extra_keys": True,
