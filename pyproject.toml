@@ -1,8 +1,8 @@
 [project]
 name = "box"
-version = "0.1.22"
+version = "0.1.23"
 requires-python = ">=3.9"
-dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "openai", "PyYAML", "tiktoken"]
+dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "openai", "PyYAML", "tiktoken", "translate"]
 
 [project.scripts]
 box = "box.box:main"
