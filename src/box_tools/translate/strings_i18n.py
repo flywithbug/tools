@@ -58,6 +58,7 @@ def create_config(config_path: str):
         "core_locales": ["zh_Hans", "zh_Hant", "en", "ja", "ko", "yue"],
         "languages": "./languages.json",
         "prompt_en": "Translate the following text into the target language.",
+        "lang_root": "./TimeTrails/TimeTrails/TimeTrails/SupportFiles/",  # 用于生成目录
         "options": {
             "sort_keys": True,
             "cleanup_extra_keys": True,
@@ -76,8 +77,8 @@ def load_languages(languages_json: str) -> Dict:
     return languages
 
 # 生成 .strings 文件
-def generate_strings_file(locale: str, strings_root: str):
-    locale_file = Path(strings_root) / f"{locale}.lproj" / f"{locale}.strings"
+def generate_strings_file(locale: str, lang_root: str):
+    locale_file = Path(lang_root) / f"{locale}.lproj" / f"{locale}.strings"
     if not locale_file.exists():
         print(f"Creating {locale_file}...")
         locale_dir = locale_file.parent
@@ -105,13 +106,13 @@ def incremental_translate(config: Dict, i18n_dir: Path, api_key: str):
     target_locales = [lang['code'] for lang in load_languages(config['languages']) if lang['code'] not in config['core_locales']]
     base_locale = config['base_locale']
     prompt_en = config['prompt_en']
-    strings_root = config.get('strings_root', './i18n')
+    lang_root = config.get('lang_root', './TimeTrails/TimeTrails/TimeTrails/SupportFiles/')
 
     for locale in target_locales:
         print(f"正在翻译 {locale}...")
-        generate_strings_file(locale, strings_root)
-        source_file = Path(strings_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
-        target_file = Path(strings_root) / f"{locale}.lproj" / f"{locale}.strings"
+        generate_strings_file(locale, lang_root)
+        source_file = Path(lang_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
+        target_file = Path(lang_root) / f"{locale}.lproj" / f"{locale}.strings"
 
         if not source_file.exists():
             print(f"源文件 {source_file} 不存在！跳过 {locale}")
@@ -141,8 +142,8 @@ def incremental_translate(config: Dict, i18n_dir: Path, api_key: str):
 # 删除冗余字段
 def remove_redundant_fields(config: Dict, i18n_dir: Path):
     source_locale = config['source_locale']
-    strings_root = config.get('strings_root', './i18n')
-    base_file = Path(strings_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
+    lang_root = config.get('lang_root', './TimeTrails/TimeTrails/TimeTrails/SupportFiles/')
+    base_file = Path(lang_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
 
     if not base_file.exists():
         print(f"基础语言文件 {base_file} 不存在！")
