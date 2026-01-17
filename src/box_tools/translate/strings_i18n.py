@@ -57,8 +57,14 @@ def init_config(base_dir: str) -> None:
 
     if os.path.exists(config_file):
         print(f"配置文件 {config_file} 已存在，正在检查文件格式…")
-        config = load_config(config_file)
-        print(f"配置文件 {config_file} 格式正确。")
+        try:
+            config = load_config(config_file)  # 通过 load_config 加载配置文件，检查格式
+            print(f"配置文件 {config_file} 格式正确。")
+        except Exception as e:
+            print(f"配置文件 {config_file} 格式错误！")
+            print(f"错误详情: {e}")
+            print("请手动修复配置文件格式或删除配置文件后重新运行 `strings_i18n init`。")
+            sys.exit(1)
     else:
         print(f"配置文件 {config_file} 不存在，正在生成默认配置文件…")
         config = {
@@ -70,6 +76,7 @@ def init_config(base_dir: str) -> None:
         with open(config_file, 'w', encoding='utf-8') as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
         print(f"配置文件 {config_file} 已生成。")
+
 
 # 读取语言文件（.strings 格式）
 def load_language_file(file_path: str) -> Dict[str, str]:
