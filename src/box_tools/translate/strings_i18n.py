@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # 确保从 comm 目录导入 translate 模块
-from comm.translate import OpenAIModel, TranslationError, translate_flat_dict
+from .comm.translate import OpenAIModel, TranslationError, translate_flat_dict
 
 # 工具元数据
 BOX_TOOL = {

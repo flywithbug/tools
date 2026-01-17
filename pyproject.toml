@@ -1,6 +1,6 @@
 [project]
 name = "box"
-version = "0.1.30"
+version = "0.1.31"
 requires-python = ">=3.9"
 dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "openai", "PyYAML", "tiktoken"]
 
