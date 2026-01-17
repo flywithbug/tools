@@ -234,4 +234,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        # Ctrl+C：优雅退出，不打印 traceback
+        print("\n已取消。")
+        raise SystemExit(130)  # 130 = SIGINT 的惯例退出码
+
