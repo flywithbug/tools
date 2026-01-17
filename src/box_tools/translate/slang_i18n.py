@@ -16,7 +16,7 @@ except Exception:
     OpenAI = None  # type: ignore
 
 # ✅ 使用同目录下 gpt 模块
-from .translate import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
+from comm.translate import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
 
 
 BOX_TOOL = {
