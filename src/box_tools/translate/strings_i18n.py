@@ -64,14 +64,19 @@ class StringsI18n:
         """获取基础语言"""
         return self.config['base_locale']
 
+    def get_base_roots(self) -> list:
+        """获取 base 根路径"""
+        return self.config['base_roots']
+
     def get_core_locales(self) -> list:
         """获取核心语言"""
         return self.config['core_locales']
 
     def get_target_locales(self) -> list:
         """获取目标语言"""
-        base_locale = self.get_base_locale()
-        return [locale for locale in self.languages if locale != base_locale]
+        # 从 languages.json 动态生成 target_locales
+        target_locales = [lang['code'] for lang in self.languages]
+        return target_locales
 
     def get_source_locale(self) -> str:
         """获取源语言"""
@@ -113,7 +118,16 @@ class StringsI18n:
 
         # 核心语言增量翻译：使用 base 目录中的语言文件作为源语言
         if target_locale == base_locale:
-            source_file = Path(strings_root) / f"{base_locale}.lproj" / f"{base_locale}.strings"
+            base_roots = self.get_base_roots()
+            source_file = None
+            for base_root in base_roots:
+                base_root_path = Path(base_root)
+                if base_root_path.exists():
+                    source_file = base_root_path
+                    break
+            if not source_file:
+                print(f"Error: Base root files not found!")
+                return
         else:
             # 非核心语言增量翻译：使用 source_locale 目录中的语言文件作为源语言
             source_file = Path(strings_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
@@ -225,13 +239,13 @@ def create_config(config_path: str):
         "base_locale": "zh_hans",  # 指定 base 目录下多语言的语言 code
         "source_locale": "en",  # 源语言
         "strings_root": "./TimeTrails/TimeTrails/TimeTrails/SupportFiles",  # 翻译文件保存的根目录
-        "target_locales": [
-            "zh_Hant",
-            "zh_Hans",
-            "ja",
-            "fr",
-            "es"
-        ]
+        "target_locales": [],  # 动态填充 target_locales
+        "base_roots": [
+            "./TimeTrails/TimeTrails/TimeTrails/SupportFiles/Base.lproj/Localizable.strings",
+            "./TimeTrails/TimeTrails/TimeTrails/SupportFiles/Base.lproj/InfoPlist.strings"
+        ],
+        "core_locales": ["zh_Hans", "zh_Hant", "en", "ja", "ko", "yue"],
+        "languages": "./languages.json"
     }
     with open(config_path, 'w', encoding='utf-8') as f:
         yaml.dump(default_config, f, allow_unicode=True)
