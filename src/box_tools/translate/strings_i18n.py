@@ -16,11 +16,11 @@ BOX_TOOL = {
     "usage": [
         "strings_i18n",
         "strings_i18n init",  # 初始化配置
-        "strings_i18n doctor",
-        "strings_i18n sort",
-        "strings_i18n check",
-        "strings_i18n clean --yes",
-        "strings_i18n translate --api-key $OPENAI_API_KEY",
+        "strings_i18n doctor",  # 环境自检
+        "strings_i18n sort",  # 排序
+        "strings_i18n check",  # 冗余检查
+        "strings_i18n clean --yes",  # 清理冗余
+        "strings_i18n translate --api-key $OPENAI_API_KEY",  # 翻译命令
     ],
     "options": [
         {"flag": "--api-key", "desc": "OpenAI API key（可通过环境变量传递）"},
@@ -35,14 +35,13 @@ BOX_TOOL = {
         {"cmd": "strings_i18n clean --yes", "desc": "删除所有冗余 key（不询问）"},
     ],
     "dependencies": [
-        "PyYAML>=6.0",
-        "openai>=1.0.0",
+        "PyYAML>=6.0",  # 依赖 PyYAML
+        "openai>=1.0.0",  # 依赖 OpenAI
     ],
 }
 
 class StringsI18n:
     def __init__(self, config_path: str, languages_json: str, i18n_dir: str):
-        # 加载配置文件和语言文件
         self.config = self.load_config(config_path)
         self.languages = self.load_languages(languages_json)
         self.i18n_dir = Path(i18n_dir)
@@ -52,7 +51,7 @@ class StringsI18n:
         if not Path(config_path).exists():
             raise FileNotFoundError(f"配置文件 {config_path} 不存在，请先使用 `strings_i18n init` 生成")
         with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)  # 确保以 YAML 格式加载配置
+            config = yaml.safe_load(f)
         return config
 
     def load_languages(self, languages_json: str) -> Dict:
@@ -63,7 +62,7 @@ class StringsI18n:
 
     def get_base_locale(self) -> str:
         """获取基础语言"""
-        return self.config['baseLocale']
+        return self.config['source_locale']
 
     def get_core_locales(self) -> list:
         """获取核心语言"""
@@ -73,10 +72,6 @@ class StringsI18n:
         """获取目标语言"""
         base_locale = self.get_base_locale()
         return [locale for locale in self.languages if locale != base_locale]
-
-    def get_source_locale(self) -> str:
-        """获取源语言"""
-        return self.config['sourceLocale']
 
     def generate_strings_file(self, locale: str):
         """根据多语言生成 .strings 文件"""
@@ -165,11 +160,15 @@ class StringsI18n:
 def create_config(config_path: str):
     """创建默认配置文件"""
     default_config = {
-        "baseLocale": "zh_hans",
-        "sourceLocale": "en",
-        "coreLocales": ["en", "zh_hans", "zh_hant"],
+        "source_locale": "en",
+        "target_locales": ["zh_Hant", "zh_Hans", "ja", "fr", "es"],
         "prompt_en": "Translate the following text into the target language.",
-        "translatePath": "i18n",  # 假设目标文件存放路径为 i18n
+        "options": {
+            "sort_keys": True,
+            "cleanup_extra_keys": True,
+            "incremental_translate": True,
+            "normalize_filenames": True,
+        },
     }
     with open(config_path, 'w', encoding='utf-8') as f:
         yaml.dump(default_config, f, allow_unicode=True)
