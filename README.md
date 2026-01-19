@@ -335,7 +335,7 @@ slang_i18n translate --api-key $OPENAI_API_KEY
 **参数说明**
 
 - `--api-key`：OpenAI API key（也可用环境变量 OPENAI_API_KEY）
-- `--model`：模型（默认 gpt-4o）
+- `--model`：模型（默认 gpt-4o，且可覆盖配置 openAIModel）
 - `--full`：全量翻译（默认增量翻译）
 - `--yes`：clean 删除冗余时跳过确认
 - `--no-exitcode-3`：check 发现冗余时仍返回 0（默认返回 3）
