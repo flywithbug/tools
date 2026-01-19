@@ -160,13 +160,18 @@ def _build_system_prompt(
     base = (
         "You are a professional localization translator for apps and web. "
         f"Translate from {src_lang} to {tgt_locale}. "
-        "Preserve brand names and URLs verbatim. "
+        "Translate all human-visible text naturally for a mobile UI. "
+        "Preserve product/brand names (proper nouns) and URLs verbatim. "
         f"Preserve ALL placeholders and formatting tokens EXACTLY as-is (e.g., {_PLACEHOLDER_EXAMPLES}). "
+        "A colon ':' is normal punctuation, not a placeholder—translate text on both sides if it is human-visible. "
+        "Abbreviations: keep technical acronyms (e.g., API, OTP, URL) if commonly kept; "
+        "translate abbreviations like FAQ when the target language usually uses a localized phrase. "
         "Return ONLY a single valid JSON object. "
         "The JSON keys MUST match the input keys exactly; translate ONLY the values. "
         "No extra commentary. No markdown. No code fences. "
         "The input JSON is a flat object mapping keys to strings. Output a JSON object with the SAME keys ONLY."
     )
+
 
     extra = (prompt_en or "").strip()
     return base if not extra else f"{base} {extra}"
