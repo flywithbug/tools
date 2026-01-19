@@ -639,6 +639,15 @@ def translate_group(
             api_key=api_key,
         )
 
+        # ✅ 新增：翻译完（本次 need 全量完成）后，打印 source -> target
+        # 说明：不按 chunk；只在 translate_flat_dict 返回后打印
+        print(f"   🧾 translated ({module_name} {src_locale} → {loc}) : {len(translated)} keys")
+        for k in need.keys():
+            src_text = need.get(k, "")
+            tgt_text = translated.get(k, "")
+            # 按你示例：source -> target（不额外打印 key）
+            print(f"     {src_text} -> {tgt_text}")
+
         tgt_body.update(translated)
         tgt_meta = dict(tgt_meta)
         tgt_meta.setdefault("@@locale", loc)
