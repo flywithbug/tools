@@ -251,12 +251,45 @@ def _slugify_anchor(s: str) -> str:
     s = re.sub(r"[^a-z0-9_\-\/]+", "-", s)
     s = s.replace("/", "-")
     s = re.sub(r"-{2,}", "-", s).strip("-")
-    return s or "tool"
+    return s or "section"
 
 
 def tool_anchor_id(t: Tool) -> str:
     # 用 dir_key + stem 保证唯一性（避免同名工具冲突）
     return _slugify_anchor(f"{t.dir_key}-{t.py_path.stem}")
+
+
+def section_anchor_id(title: str) -> str:
+    # README 章节标题锚点（显式，避免依赖渲染器规则）
+    return _slugify_anchor(title)
+
+
+def render_readme_toc(tools: List[Tool]) -> str:
+    """
+    README 顶部目录（TOC）
+    - 列出固定章节：工具总览、工具集文档索引
+    - 再按目录分组列出：分组标题 -> 工具
+    """
+    groups: Dict[str, List[Tool]] = {}
+    for t in tools:
+        groups.setdefault(t.dir_key, []).append(t)
+
+    group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
+
+    out: List[str] = []
+    out.append("## 目录\n\n")
+    out.append(f"- [工具总览](#{section_anchor_id('工具总览')})\n")
+    out.append(f"- [工具集文档索引](#{section_anchor_id('工具集文档索引')})\n")
+
+    for gk in group_keys:
+        title = make_group_title(gk, "")
+        out.append(f"- [{title}](#{section_anchor_id(title)})\n")
+        for t in sorted(groups[gk], key=lambda x: (0, "") if x.name.lower() == "box" else (1, x.py_path.stem.lower())):
+            a = tool_anchor_id(t)
+            out.append(f"  - [`{t.name}`](#{a})\n")
+
+    out.append("\n---\n\n")
+    return "".join(out)
 
 
 def render_overview(tools: List[Tool]) -> str:
@@ -273,7 +306,9 @@ def render_overview(tools: List[Tool]) -> str:
     group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
 
     out: List[str] = []
+    out.append(f'<a id="{section_anchor_id("工具总览")}"></a>\n\n')
     out.append("## 工具总览\n\n")
+
     for gk in group_keys:
         title = make_group_title(gk, "")
         out.append(f"### {title}\n\n")
@@ -311,7 +346,9 @@ def render_docs_index(tools: List[Tool]) -> str:
     group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
 
     out: List[str] = []
+    out.append(f'<a id="{section_anchor_id("工具集文档索引")}"></a>\n\n')
     out.append("## 工具集文档索引\n\n")
+
     for gk in group_keys:
         title = make_group_title(gk, "")
         out.append(f"### {title}\n\n")
@@ -335,7 +372,7 @@ def render_tool_detail(t: Tool) -> str:
     """
     out: List[str] = []
 
-    # ✅ 显式锚点：让“索引”稳定跳转（不依赖 Markdown 渲染器的自动锚点规则）
+    # ✅ 显式锚点：让“目录/索引”稳定跳转
     anchor = tool_anchor_id(t)
     out.append(f'<a id="{anchor}"></a>\n\n')
 
@@ -395,6 +432,9 @@ def render_readme(temp_header: str, tools: List[Tool]) -> str:
     out: List[str] = []
     out.append(temp_header.rstrip() + "\n\n")
 
+    # ✅ 顶部目录（TOC）
+    out.append(render_readme_toc(tools))
+
     # ✅ 总览（带索引链接 + 文档链接）
     out.append(render_overview(tools))
 
@@ -407,9 +447,11 @@ def render_readme(temp_header: str, tools: List[Tool]) -> str:
     ]
     other_tools = [t for t in tools if t not in box_tools]
 
+    # box 详情
     for t in box_tools:
         out.append(render_tool_detail(t))
 
+    # 其他工具：按目录分组输出（并给分组加显式锚点）
     groups: Dict[str, List[Tool]] = {}
     for t in other_tools:
         groups.setdefault(t.dir_key, []).append(t)
@@ -418,6 +460,7 @@ def render_readme(temp_header: str, tools: List[Tool]) -> str:
 
     for gk in group_keys:
         title = make_group_title(gk, "")
+        out.append(f'<a id="{section_anchor_id(title)}"></a>\n\n')
         out.append(f"## {title}\n\n")
         for t in sorted(groups[gk], key=lambda x: x.py_path.stem.lower()):
             out.append(render_tool_detail(t))
@@ -610,7 +653,7 @@ def ensure_project_dependencies(text: str, add_deps: List[str]) -> str:
     把 add_deps 合并进 [project].dependencies
     - 若 [project] 不存在：追加 [project] + dependencies，并以空行收尾
     - 若 dependencies 不存在：在 [project] block 末尾追加 dependencies，并以空行收尾
-    - 若存在：合并后回写，并以空行收尾（关键修复点）
+    - 若存在：合并后回写，并以空行收尾
     """
     if not add_deps:
         return text
@@ -624,7 +667,7 @@ def ensure_project_dependencies(text: str, add_deps: List[str]) -> str:
 
     block = text[m.start():m.end()]
 
-    # 注意：这里只处理“单行 dependencies = [ ... ]”
+    # 只处理“单行 dependencies = [ ... ]”
     dep_pat = re.compile(r'(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$')
     md = dep_pat.search(block)
 
@@ -683,7 +726,7 @@ def update_pyproject(tools: List[Tool], do_bump: bool) -> Tuple[str, int, List[s
     packages.sort(key=lambda s: (0, "") if s.lower() == "src/box" else (1, s.lower()))
     text = replace_wheel_packages_line(text, packages)
 
-    # project dependencies：合并工具依赖（✅ 修复：保证 [project] block 末尾有空行）
+    # project dependencies：合并工具依赖
     deps_added = collect_tool_dependencies(tools)
     text = ensure_project_dependencies(text, deps_added)
 

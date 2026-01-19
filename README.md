@@ -13,6 +13,26 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ## 工具集介绍
 
+## 目录
+
+- [工具总览](#section)
+- [工具集文档索引](#section)
+- [box（工具集管理）](#box)
+  - [`box`](#box-box)
+- [flutter](#flutter)
+  - [`pub_publish`](#box_tools-flutter-pub_publish)
+  - [`pub_upgrade`](#box_tools-flutter-pub_upgrade)
+  - [`pub_version`](#box_tools-flutter-pub_version)
+  - [`riverpod_gen`](#box_tools-flutter-riverpod_gen)
+- [translate](#translate)
+  - [`translate`](#box_tools-translate-ai_translate)
+  - [`slang_i18n`](#box_tools-translate-slang_i18n)
+  - [`strings_i18n`](#box_tools-translate-strings_i18n)
+
+---
+
+<a id="section"></a>
+
 ## 工具总览
 
 ### box（工具集管理）
@@ -33,6 +53,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - **[`strings_i18n`](#box_tools-translate-strings_i18n)**：iOS 项目多语言翻译工具，支持增量翻译、冗余检查、排序等功能（[文档](src/box_tools/translate/strings_i18n.md)）
 
 ---
+
+<a id="section"></a>
 
 ## 工具集文档索引
 
@@ -92,6 +114,8 @@ box tools --full
 [src/box/box.md](src/box/box.md)
 
 ---
+
+<a id="flutter"></a>
 
 ## flutter
 
@@ -248,6 +272,8 @@ riverpod_gen Product --legacy
 [src/box_tools/flutter/riverpod_gen.md](src/box_tools/flutter/riverpod_gen.md)
 
 ---
+
+<a id="translate"></a>
 
 ## translate
 
