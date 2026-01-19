@@ -35,7 +35,7 @@ BOX_TOOL = {
     ],
     "options": [
         {"flag": "--api-key", "desc": "OpenAI API key（也可用环境变量 OPENAI_API_KEY）"},
-        {"flag": "--model", "desc": "模型（默认 gpt-4o）"},
+        {"flag": "--model", "desc": "模型（默认 gpt-4o，且可覆盖配置 openAIModel）"},
         {"flag": "--full", "desc": "全量翻译（默认增量翻译）"},
         {"flag": "--yes", "desc": "clean 删除冗余时跳过确认"},
         {"flag": "--no-exitcode-3", "desc": "check 发现冗余时仍返回 0（默认返回 3）"},
@@ -60,6 +60,14 @@ EXIT_FAIL = 1
 EXIT_BAD = 2
 EXIT_REDUNDANT_FOUND = 3
 
+# ✅ openAIModel 配置允许值（按你要求枚举）
+ALLOWED_OPENAI_MODELS = (
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+)
+
 
 # =========================================================
 # Lazy import for PyYAML
@@ -80,6 +88,7 @@ def _require_yaml():
 
 # =========================================================
 # Config (NEW schema, no backward compatibility)
+#   - openAIModel: one of allowed model ids (default gpt-4o)
 #   - source_locale: {code, name_en}
 #   - target_locales: list[{code, name_en}]
 #   - prompts: {default_en, by_locale_en}
@@ -89,6 +98,7 @@ def _schema_error(msg: str) -> ValueError:
         "slang_i18n.yaml 格式错误：\n"
         f"- {msg}\n\n"
         "期望结构（新 schema）示例：\n"
+        "openAIModel: gpt-4o\n"
         "source_locale:\n"
         "  code: en\n"
         "  name_en: English\n"
@@ -125,9 +135,26 @@ def _need_bool(obj: Dict[str, Any], key: str, path: str) -> bool:
     return v
 
 
+def _need_openai_model(cfg: Dict[str, Any]) -> str:
+    v = cfg.get("openAIModel", OpenAIModel.GPT_4O.value)
+    if v is None:
+        v = OpenAIModel.GPT_4O.value
+    if not isinstance(v, str) or not v.strip():
+        raise _schema_error("openAIModel 必须是非空字符串")
+    v = v.strip()
+    if v not in set(ALLOWED_OPENAI_MODELS):
+        raise _schema_error(
+            "openAIModel 不合法："
+            f"{v!r}，可选：{', '.join(ALLOWED_OPENAI_MODELS)}"
+        )
+    return v
+
+
 def validate_config(cfg: Any) -> Dict[str, Any]:
     if not isinstance(cfg, dict):
         raise _schema_error("根节点必须是 YAML object/map")
+
+    openai_model = _need_openai_model(cfg)
 
     src_raw = cfg.get("source_locale")
     if not isinstance(src_raw, dict):
@@ -188,6 +215,7 @@ def validate_config(cfg: Any) -> Dict[str, Any]:
         raise _schema_error("options.normalize_filenames 必须是 bool（true/false）")
 
     return {
+        "openAIModel": openai_model,  # ✅ 新增
         "source_locale": {"code": src_code, "name_en": src_name_en},
         "target_locales": targets,  # list[{code,name_en}]
         "prompts": {
@@ -225,6 +253,14 @@ def _config_template_text() -> str:
 # - i18n/ 目录存在
 # - 若 i18n/ 下存在子目录：只处理子目录中的 *.i18n.json（视为模块）
 # - 若 i18n/ 下无子目录：处理 i18n/ 根目录中的 *.i18n.json
+
+# OpenAI 模型（默认 gpt-4o）
+# 可选值（枚举）：
+# - gpt-4o
+# - gpt-4o-mini
+# - gpt-4.1
+# - gpt-4.1-mini
+openAIModel: gpt-4o
 
 # 源语言（结构化：code + 英文语言名）
 source_locale:
@@ -349,6 +385,13 @@ def _target_name_en(cfg: Dict[str, Any], code: str) -> str:
         if x["code"] == code:
             return x["name_en"]
     return code
+
+
+def _cfg_openai_model(cfg: Dict[str, Any]) -> str:
+    v = str(cfg.get("openAIModel") or "").strip()
+    if not v:
+        return OpenAIModel.GPT_4O.value
+    return v
 
 
 # =========================================================
@@ -831,7 +874,7 @@ def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str,
         total_need += need_sum
 
     prog = Progress(total_keys=total_need)
-    print(f"🧮 Total keys to translate: {total_need}（模式={'全量' if full else '增量'}）")
+    print(f"🧮 Total keys to translate: {total_need}（模式={'全量' if full else '增量'}，model={model}）")
     if total_need == 0:
         print("✅ 无需翻译：所有语言文件已齐全")
         return
@@ -891,8 +934,9 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
             prompt_on = bool((cfg.get("prompts", {}).get("default_en") or "").strip())
             normalize_on = bool(cfg["options"].get("normalize_filenames", True))
             src = cfg["source_locale"]
+            model_cfg = _cfg_openai_model(cfg)
             print(
-                f"✅ {CONFIG_FILE} OK (source={src['code']}({src['name_en']}) targets={len(targets)} "
+                f"✅ {CONFIG_FILE} OK (model={model_cfg} source={src['code']}({src['name_en']}) targets={len(targets)} "
                 f"default_prompt={'ON' if prompt_on else 'OFF'} normalize_filenames={'ON' if normalize_on else 'OFF'})"
             )
         except Exception as e:
@@ -976,7 +1020,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="动作（不填则进入交互菜单）",
     )
     p.add_argument("--api-key", default=None, help="OpenAI API key（也可用环境变量 OPENAI_API_KEY）")
-    p.add_argument("--model", default=OpenAIModel.GPT_4O.value, help="模型（默认 gpt-4o）")
+    p.add_argument(
+        "--model",
+        default=None,
+        help=f"模型（命令行优先；不传则使用配置 openAIModel；允许：{', '.join(ALLOWED_OPENAI_MODELS)}）",
+    )
     p.add_argument("--full", action="store_true", help="全量翻译（默认增量翻译）")
     p.add_argument("--yes", action="store_true", help="clean 删除冗余时跳过确认")
     p.add_argument("--no-exitcode-3", action="store_true", help="check 发现冗余时仍返回 0（默认返回 3）")
@@ -988,7 +1036,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
     cfg_path = Path.cwd() / CONFIG_FILE
-    model = args.model
 
     action = args.action
     interactive = False
@@ -1027,6 +1074,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         i18n_dir = ensure_i18n_dir()
     except Exception as e:
         print(str(e))
+        return EXIT_BAD
+
+    # ✅ 模型选择：命令行 --model > 配置 openAIModel > 默认
+    model = (args.model or "").strip() or _cfg_openai_model(cfg) or OpenAIModel.GPT_4O.value
+    if model not in set(ALLOWED_OPENAI_MODELS):
+        print(f"❌ model 不合法：{model!r}，可选：{', '.join(ALLOWED_OPENAI_MODELS)}")
         return EXIT_BAD
 
     try:
@@ -1107,7 +1160,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return EXIT_FAIL
 
         cost = time.time() - started
-        print(f"✅ 翻译完成（{cost:.1f}s，模式={'全量' if full else '增量'}）")
+        print(f"✅ 翻译完成（{cost:.1f}s，模式={'全量' if full else '增量'}，model={model}）")
 
         # 翻译后可选排序
         try:
