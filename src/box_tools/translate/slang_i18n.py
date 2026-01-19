@@ -314,21 +314,40 @@ target_locales:
 prompts:
   default_en: |
     Translate UI strings naturally for a mobile app.
-    Keep placeholders/variables unchanged.
-    Keep punctuation appropriate for the target language.
+    Be concise, clear, and consistent.
 
   by_locale_en:
     zh_Hant: |
       Use Taiwan Traditional Chinese UI style.
-      Prefer common Taiwan wording (e.g., “帳號”, “登入”, “請稍後再試”).
+      Add spaces between Chinese and English characters when both appear in the same sentence, for readability.
+      Keep financial/crypto UI terms consistent.
+
+      Preferred term mapping examples (not strict word-by-word translation):
+        - "Long/Short" → 做多/做空
+        - "Deposit/Withdraw" → 充值/提現
+        - "Position" → 倉位
+        - "Order" → 訂單
+        - "Subscription" → 申購
+        - "Points" → 積分
+        - "Affiliate" → 代理商
+        - "Account" → 賬戶
+        - "Size" → 數量
+        - "Bonus" → 體驗金
+        - "Omni Spot Swap" → "Omni 現貨賬戶"
 
     ja: |
       Use polite and concise Japanese UI tone.
       Prefer natural app wording.
+      Avoid overly long sentences.
 
     ko: |
       Use natural Korean UI style.
       Prefer concise mobile UI wording.
+
+    fil: |
+      Use natural and concise Filipino UI wording.
+      Avoid overly literal translations from English.
+      Prefer system-style error phrasing (e.g., "May problema..." / "Nagkaroon ng isyu...") when appropriate.
 
 # 选项（布尔值）
 options:
