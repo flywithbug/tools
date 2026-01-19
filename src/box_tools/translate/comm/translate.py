@@ -24,8 +24,6 @@ class OpenAIModel(str, Enum):
     GPT_4O_MINI = "gpt-4o-mini"
     GPT_4_1 = "gpt-4.1"
     GPT_4_1_MINI = "gpt-4.1-mini"
-    GPT_4_1_NANO = "gpt-4.1-nano"
-    O3_MINI = "o3-mini"
 
 
 # =========================================================
@@ -42,7 +40,7 @@ class TranslationError(RuntimeError):
 
 @dataclass(frozen=True)
 class _Options:
-    context_limit: int = 16000
+    context_limit: int = 128_000
     safety_ratio: float = 0.70
     max_chunk_items: int = 250
 
