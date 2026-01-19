@@ -798,7 +798,7 @@ def translate_group(
         )
 
         # 翻译完（本次 need 全量完成）后打印 source -> target
-        print(f"   🧾 translated ({module_name} {src_code} → {tgt_code}) : {len(translated)} keys")
+        print(f" 🧾 translated ({module_name} {src_name_en} → {tgt_name_en}) : {len(translated)} keys")
         for k in need.keys():
             src_text = need.get(k, "")
             tgt_text = translated.get(k, "")
@@ -810,7 +810,7 @@ def translate_group(
         save_json(tgt_path, tgt_meta, tgt_body, sort_keys=sort_keys)
 
         progress.bump(len(translated))
-        print(f"   📈 {progress.done_keys}/{progress.total_keys} ({progress.percent()}%) {progress.eta_text()}")
+        print(f"  📈 {progress.done_keys}/{progress.total_keys} ({progress.percent()}%) {progress.eta_text()}")
 
 
 def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str, full: bool) -> None:
