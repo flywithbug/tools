@@ -166,12 +166,19 @@ def _build_system_prompt(
 
         "Requirements: "
         f"- Output must be written entirely in {tgt_locale}. Do not output any other language. "
+        "- Do NOT mix languages in normal words or sentences. "
         "- Translate all human-visible text, including short titles/labels before a colon "
-        '(e.g., "Account Disabled:", "Error:", "Warning:"). '
+        '(e.g., "Account Disabled:", "Network Error:", "Payment Failed:", "Error:", "Warning:"). '
         "- Do not keep an English title followed by a translated sentence; translate the whole string consistently. "
+        "- Do NOT treat generic UI titles in Title Case as brand names; translate them "
+        '(e.g., "Account Disabled", "Network Error", "Payment Failed"). '
 
         "Preserve product/brand names (proper nouns) and URLs verbatim. "
+        "Only preserve brand/product names when they are explicit proper nouns (e.g., specific app/product/feature names), "
+        "not generic UI messages. "
+
         f"Preserve ALL placeholders and formatting tokens EXACTLY as-is (e.g., {_PLACEHOLDER_EXAMPLES}). "
+        "Keep placeholders/variables unchanged (e.g., {x}, %s, %@, ${var}). "
         "Keep formatting intact (punctuation, line breaks, spacing) while making the wording natural. "
         "A colon ':' is normal punctuation, not a placeholder—translate text on both sides if it is human-visible. "
 
