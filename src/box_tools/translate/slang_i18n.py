@@ -101,7 +101,6 @@ EXIT_REDUNDANT_FOUND = 3
 # =========================================================
 # Lazy import for PyYAML
 # =========================================================
-
 def _require_yaml():
     try:
         import yaml  # type: ignore
@@ -119,7 +118,6 @@ def _require_yaml():
 # =========================================================
 # Config validate
 # =========================================================
-
 def _schema_error(msg: str) -> ValueError:
     return ValueError(
         "slang_i18n.yaml 格式错误：\n" f"- {msg}\n\n"
@@ -221,7 +219,6 @@ def init_config(path: Path) -> None:
 # =========================================================
 # i18n scanning helpers
 # =========================================================
-
 def ensure_i18n_dir() -> Path:
     p = Path.cwd() / I18N_DIR
     if not p.exists() or not p.is_dir():
@@ -247,7 +244,6 @@ def get_active_groups(i18n_dir: Path) -> List[Path]:
 # =========================================================
 # Filename helpers (camelCase folder + _locale suffix)
 # =========================================================
-
 def _to_camel(s: str) -> str:
     parts = [p for p in re.split(r"[_\-\s]+", s.strip()) if p]
     if not parts:
@@ -272,9 +268,47 @@ def group_file_name(group: Path, locale: str) -> Path:
 # =========================================================
 # JSON helpers (meta/body split)
 # =========================================================
-
 def load_json_obj(path: Path) -> Dict[str, Any]:
-    obj = json.loads(path.read_text(encoding="utf-8"))
+    """
+    读取 JSON object。若 JSON 解析失败，会输出：
+    - 具体文件 path
+    - 错误原因（e.msg）
+    - 行/列/char 位置
+    - 错误行附近上下文（带指针）
+    """
+    text = path.read_text(encoding="utf-8")
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as e:
+        line = e.lineno
+        col = e.colno
+        lines = text.splitlines()
+
+        # 上下文：错误行前后各 2 行
+        start = max(1, line - 2)
+        end = min(len(lines), line + 2)
+
+        ctx: List[str] = []
+        for i in range(start, end + 1):
+            prefix = ">>" if i == line else "  "
+            ctx.append(f"{prefix} {i:4d} | {lines[i-1]}")
+
+        # 指针：尽量对齐到显示行
+        # 说明：这里用一个经验偏移，让 ^ 出现在 “| ” 后的列附近
+        pointer = " " * (col + 8) + "^"
+        ctx.append(pointer)
+
+        raise ValueError(
+            "❌ JSON 解析失败\n"
+            f"- file: {path}\n"
+            f"- error: {e.msg}\n"
+            f"- at: line {line}, column {col} (char {e.pos})\n"
+            "----- context -----\n"
+            + "\n".join(ctx)
+            + "\n-------------------"
+        ) from None
+
     if not isinstance(obj, dict):
         raise ValueError(f"❌ JSON 必须是 object：{path}")
     return obj
@@ -333,7 +367,6 @@ def save_json(path: Path, meta: Dict[str, Any], body: Dict[str, str], sort_keys:
 # =========================================================
 # Filename normalization (accurate + conservative)
 # =========================================================
-
 def _match_locale_from_filename(filename: str, locales_sorted: List[str]) -> Optional[str]:
     if not filename.endswith(".i18n.json"):
         return None
@@ -383,7 +416,6 @@ def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = T
 # =========================================================
 # Ensure language files
 # =========================================================
-
 def ensure_language_files_in_group(group: Path, src_locale: str, targets: List[str]) -> None:
     """只创建缺失的文件，创建内容仅包含 @@locale"""
     sort_keys = False
@@ -415,7 +447,6 @@ def ensure_all_language_files(i18n_dir: Path, cfg: Dict[str, Any]) -> None:
 # =========================================================
 # Sort
 # =========================================================
-
 def sort_all_json(i18n_dir: Path, sort_keys: bool) -> None:
     for g in get_active_groups(i18n_dir):
         for p in g.glob("*.i18n.json"):
@@ -426,7 +457,6 @@ def sort_all_json(i18n_dir: Path, sort_keys: bool) -> None:
 # =========================================================
 # Redundant check/delete (only body keys)
 # =========================================================
-
 @dataclass
 class RedundantItem:
     group: str
@@ -441,20 +471,42 @@ def collect_redundant(cfg: Dict[str, Any], i18n_dir: Path) -> List[RedundantItem
 
     items: List[RedundantItem] = []
     for group in get_active_groups(i18n_dir):
+        module_name = group.name if group.name != I18N_DIR else "i18n"
+
         src_path = group_file_name(group, src_locale)
-        _, src_body = split_slang_json(src_path, load_json_obj(src_path))
+        try:
+            _, src_body = split_slang_json(src_path, load_json_obj(src_path))
+        except Exception as e:
+            raise ValueError(
+                "❌ 读取源语言文件失败\n"
+                f"- module={module_name}\n"
+                f"- locale={src_locale}\n"
+                f"- file={src_path}\n"
+                f"{e}"
+            ) from None
+
         src_keys = set(src_body.keys())
 
         for loc in targets:
             tgt_path = group_file_name(group, loc)
-            _, tgt_body = split_slang_json(tgt_path, load_json_obj(tgt_path))
+            try:
+                _, tgt_body = split_slang_json(tgt_path, load_json_obj(tgt_path))
+            except Exception as e:
+                raise ValueError(
+                    "❌ 读取目标语言文件失败\n"
+                    f"- module={module_name}\n"
+                    f"- locale={loc}\n"
+                    f"- file={tgt_path}\n"
+                    f"{e}"
+                ) from None
+
             tgt_keys = set(tgt_body.keys())
 
             extra = sorted(tgt_keys - src_keys)
             if extra:
                 items.append(
                     RedundantItem(
-                        group=(group.name if group.name != I18N_DIR else "i18n"),
+                        group=module_name,
                         file=tgt_path,
                         locale=loc,
                         extra_keys=extra,
@@ -493,7 +545,6 @@ def delete_redundant(items: List[RedundantItem], sort_keys: bool) -> None:
 # =========================================================
 # Progress (group/locale level)
 # =========================================================
-
 @dataclass
 class Progress:
     total_keys: int
@@ -544,16 +595,15 @@ def _compute_need_for_one(group: Path, cfg: Dict[str, Any], loc: str, incrementa
 # =========================================================
 # Translation
 # =========================================================
-
 def translate_group(
-    group: Path,
-    cfg: Dict[str, Any],
-    api_key: str,
-    model: str,
-    incremental: bool,
-    cleanup_extra: bool,
-    sort_keys: bool,
-    progress: Progress,
+        group: Path,
+        cfg: Dict[str, Any],
+        api_key: str,
+        model: str,
+        incremental: bool,
+        cleanup_extra: bool,
+        sort_keys: bool,
+        progress: Progress,
 ) -> None:
     src_locale = cfg["source_locale"]
     targets = cfg["target_locales"]
@@ -639,7 +689,6 @@ def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str,
 # =========================================================
 # Doctor
 # =========================================================
-
 def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
     ok = True
 
@@ -699,7 +748,6 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
 # =========================================================
 # Interactive (pub_version style)
 # =========================================================
-
 def _read_choice(prompt: str, valid: Iterable[str]) -> str:
     valid_set = {v.lower() for v in valid}
     while True:
@@ -746,7 +794,6 @@ def choose_action_interactive() -> str:
 # =========================================================
 # CLI
 # =========================================================
-
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="slang_i18n",
@@ -912,4 +959,3 @@ if __name__ == "__main__":
         # Ctrl+C：优雅退出，不打印 traceback
         print("\n已取消。")
         raise SystemExit(130)  # 130 = SIGINT 的惯例退出码
-
