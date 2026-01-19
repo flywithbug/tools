@@ -43,7 +43,7 @@ class _Options:
     context_limit: int = 128_000
 
     # ✅ Input (system + user payload) must not exceed this fraction of context_limit.
-    # You asked: "cannot exceed half of API token limit" => 0.70
+    # You asked: "cannot exceed of API token limit" => 0.70
     input_budget_ratio: float = 0.70
 
     # Additional safety headroom (messages overhead, token counting drift).
@@ -313,6 +313,11 @@ def translate_flat_dict(
         opt: Optional[_Options] = None,
 ) -> Dict[str, str]:
     """Translate a flat dict: {key: text} -> {key: translated_text}."""
+    print('-----------------------------------------')
+    print('src_lang: ', src_lang)
+    print('tgt_locale: ', tgt_locale)
+    print('translate_flat_dict')
+    print('-----------------------------------------')
     if not OpenAI:
         raise SystemExit("OpenAI SDK 未安装，请先 pip install openai>=1.0.0")
 
