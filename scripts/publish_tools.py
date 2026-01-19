@@ -240,9 +240,31 @@ def collect_tools() -> List[Tool]:
 # README rendering
 # -------------------------
 
+def _slugify_anchor(s: str) -> str:
+    """
+    生成稳定、Markdown 友好的锚点 id
+    - 小写
+    - 非 [a-z0-9_-] 都替换成 -
+    - 合并连续 -
+    """
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9_\-\/]+", "-", s)
+    s = s.replace("/", "-")
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s or "tool"
+
+
+def tool_anchor_id(t: Tool) -> str:
+    # 用 dir_key + stem 保证唯一性（避免同名工具冲突）
+    return _slugify_anchor(f"{t.dir_key}-{t.py_path.stem}")
+
+
 def render_overview(tools: List[Tool]) -> str:
     """
-    “工具总览”：按目录分组列出 tool name + summary。
+    “工具总览”：按目录分组列出 tool name + summary，
+    并为每个工具提供：
+    - 跳转到 README 内工具详情的索引链接
+    - 直达文档链接（若存在）
     """
     groups: Dict[str, List[Tool]] = {}
     for t in tools:
@@ -261,12 +283,47 @@ def render_overview(tools: List[Tool]) -> str:
             key=lambda t: (0, "") if t.name.lower() == "box" else (1, t.py_path.stem.lower())
         )
         for t in group_tools_sorted:
+            a = tool_anchor_id(t)
             s = t.summary or ""
-            if s:
-                out.append(f"- **`{t.name}`**：{s}\n")
+            if t.md_path.exists():
+                doc_part = f"（[文档]({t.rel_md})）"
             else:
-                out.append(f"- **`{t.name}`**\n")
+                doc_part = f"（文档缺失：`{t.rel_md}`）"
+
+            if s:
+                out.append(f"- **[`{t.name}`](#{a})**：{s}{doc_part}\n")
+            else:
+                out.append(f"- **[`{t.name}`](#{a})**{doc_part}\n")
         out.append("\n")
+    out.append("---\n\n")
+    return "".join(out)
+
+
+def render_docs_index(tools: List[Tool]) -> str:
+    """
+    “工具集文档索引”：按目录分组列出 tool -> docs.md
+    方便把 README 当作统一入口页使用。
+    """
+    groups: Dict[str, List[Tool]] = {}
+    for t in tools:
+        groups.setdefault(t.dir_key, []).append(t)
+
+    group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
+
+    out: List[str] = []
+    out.append("## 工具集文档索引\n\n")
+    for gk in group_keys:
+        title = make_group_title(gk, "")
+        out.append(f"### {title}\n\n")
+
+        for t in sorted(groups[gk], key=lambda x: (0, "") if x.name.lower() == "box" else (1, x.py_path.stem.lower())):
+            if t.md_path.exists():
+                out.append(f"- **{t.name}**：[{t.rel_md}]({t.rel_md})\n")
+            else:
+                out.append(f"- **{t.name}**：未找到文档 `{t.rel_md}`（请创建该文件或在 BOX_TOOL['docs'] 指定）\n")
+
+        out.append("\n")
+
     out.append("---\n\n")
     return "".join(out)
 
@@ -277,6 +334,10 @@ def render_tool_detail(t: Tool) -> str:
     文档链接优先 BOX_TOOL["docs"]，否则同名 md。
     """
     out: List[str] = []
+
+    # ✅ 显式锚点：让“索引”稳定跳转（不依赖 Markdown 渲染器的自动锚点规则）
+    anchor = tool_anchor_id(t)
+    out.append(f'<a id="{anchor}"></a>\n\n')
 
     if t.name.lower() == "box":
         out.append("## box（工具集管理）\n\n")
@@ -333,7 +394,12 @@ def render_tool_detail(t: Tool) -> str:
 def render_readme(temp_header: str, tools: List[Tool]) -> str:
     out: List[str] = []
     out.append(temp_header.rstrip() + "\n\n")
+
+    # ✅ 总览（带索引链接 + 文档链接）
     out.append(render_overview(tools))
+
+    # ✅ 工具集文档索引（集中入口）
+    out.append(render_docs_index(tools))
 
     box_tools = [
         t for t in tools
@@ -559,7 +625,6 @@ def ensure_project_dependencies(text: str, add_deps: List[str]) -> str:
     block = text[m.start():m.end()]
 
     # 注意：这里只处理“单行 dependencies = [ ... ]”
-    # （你现在脚本也是这样生成的，最稳定）
     dep_pat = re.compile(r'(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$')
     md = dep_pat.search(block)
 

@@ -17,22 +17,45 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### box（工具集管理）
 
-- **`box`**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表
+- **[`box`](#box-box)**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表（[文档](src/box/box.md)）
 
 ### flutter
 
-- **`pub_publish`**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）
-- **`pub_upgrade`**：升级 pubspec.yaml 中的私服 hosted/url 依赖（比对清单 + 确认；release 分支可选跟随 x.y.*）
-- **`pub_version`**：升级 pubspec.yaml 的 version（支持交互选择 minor/patch）
-- **`riverpod_gen`**：生成 Riverpod StateNotifier + State 模板文件（notifier/state）
+- **[`pub_publish`](#box_tools-flutter-pub_publish)**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）（[文档](src/box_tools/flutter/pub_publish.md)）
+- **[`pub_upgrade`](#box_tools-flutter-pub_upgrade)**：升级 pubspec.yaml 中的私服 hosted/url 依赖（比对清单 + 确认；release 分支可选跟随 x.y.*）（[文档](src/box_tools/flutter/pub_upgrade.md)）
+- **[`pub_version`](#box_tools-flutter-pub_version)**：升级 pubspec.yaml 的 version（支持交互选择 minor/patch）（[文档](src/box_tools/flutter/pub_version.md)）
+- **[`riverpod_gen`](#box_tools-flutter-riverpod_gen)**：生成 Riverpod StateNotifier + State 模板文件（notifier/state）（[文档](src/box_tools/flutter/riverpod_gen.md)）
 
 ### translate
 
-- **`translate`**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检
-- **`slang_i18n`**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）
-- **`strings_i18n`**：iOS 项目多语言翻译工具，支持增量翻译、冗余检查、排序等功能
+- **[`translate`](#box_tools-translate-ai_translate)**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检（文档缺失：`src/box_tools/translate/ai_translate.md`）
+- **[`slang_i18n`](#box_tools-translate-slang_i18n)**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）（[文档](src/box_tools/translate/slang_i18n.md)）
+- **[`strings_i18n`](#box_tools-translate-strings_i18n)**：iOS 项目多语言翻译工具，支持增量翻译、冗余检查、排序等功能（[文档](src/box_tools/translate/strings_i18n.md)）
 
 ---
+
+## 工具集文档索引
+
+### box（工具集管理）
+
+- **box**：[src/box/box.md](src/box/box.md)
+
+### flutter
+
+- **pub_publish**：[src/box_tools/flutter/pub_publish.md](src/box_tools/flutter/pub_publish.md)
+- **pub_upgrade**：[src/box_tools/flutter/pub_upgrade.md](src/box_tools/flutter/pub_upgrade.md)
+- **pub_version**：[src/box_tools/flutter/pub_version.md](src/box_tools/flutter/pub_version.md)
+- **riverpod_gen**：[src/box_tools/flutter/riverpod_gen.md](src/box_tools/flutter/riverpod_gen.md)
+
+### translate
+
+- **translate**：未找到文档 `src/box_tools/translate/ai_translate.md`（请创建该文件或在 BOX_TOOL['docs'] 指定）
+- **slang_i18n**：[src/box_tools/translate/slang_i18n.md](src/box_tools/translate/slang_i18n.md)
+- **strings_i18n**：[src/box_tools/translate/strings_i18n.md](src/box_tools/translate/strings_i18n.md)
+
+---
+
+<a id="box-box"></a>
 
 ## box（工具集管理）
 
@@ -72,6 +95,8 @@ box tools --full
 
 ## flutter
 
+<a id="box_tools-flutter-pub_publish"></a>
+
 ### pub_publish
 
 **简介**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）
@@ -109,6 +134,8 @@ pub_publish --msg hotfix --dry-run
 [src/box_tools/flutter/pub_publish.md](src/box_tools/flutter/pub_publish.md)
 
 ---
+
+<a id="box_tools-flutter-pub_upgrade"></a>
 
 ### pub_upgrade
 
@@ -149,6 +176,8 @@ pub_upgrade --private-host dart.cloudsmith.io --private-host my.private.repo
 
 ---
 
+<a id="box_tools-flutter-pub_version"></a>
+
 ### pub_version
 
 **简介**：升级 pubspec.yaml 的 version（支持交互选择 minor/patch）
@@ -179,6 +208,8 @@ pub_version minor --file path/to/pubspec.yaml
 [src/box_tools/flutter/pub_version.md](src/box_tools/flutter/pub_version.md)
 
 ---
+
+<a id="box_tools-flutter-riverpod_gen"></a>
 
 ### riverpod_gen
 
@@ -220,6 +251,8 @@ riverpod_gen Product --legacy
 
 ## translate
 
+<a id="box_tools-translate-ai_translate"></a>
+
 ### translate
 
 **简介**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检
@@ -252,6 +285,8 @@ translate translate --src-lang en --tgt-locale zh_Hant --in input.json --out out
 - 未找到文档：`src/box_tools/translate/ai_translate.md`（请创建该文件）
 
 ---
+
+<a id="box_tools-translate-slang_i18n"></a>
 
 ### slang_i18n
 
@@ -290,6 +325,8 @@ slang_i18n translate --api-key $OPENAI_API_KEY
 [src/box_tools/translate/slang_i18n.md](src/box_tools/translate/slang_i18n.md)
 
 ---
+
+<a id="box_tools-translate-strings_i18n"></a>
 
 ### strings_i18n
 
