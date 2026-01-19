@@ -313,11 +313,6 @@ def translate_flat_dict(
         opt: Optional[_Options] = None,
 ) -> Dict[str, str]:
     """Translate a flat dict: {key: text} -> {key: translated_text}."""
-    print('-----------------------------------------')
-    print('src_lang: ', src_lang)
-    print('tgt_locale: ', tgt_locale)
-    print('translate_flat_dict')
-    print('-----------------------------------------')
     if not OpenAI:
         raise SystemExit("OpenAI SDK 未安装，请先 pip install openai>=1.0.0")
 
