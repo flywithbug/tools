@@ -41,7 +41,7 @@ BOX_TOOL = {
         {"flag": "--no-exitcode-3", "desc": "check 发现冗余时仍返回 0（默认返回 3）"},
     ],
     "examples": [
-        {"cmd": "slang_i18n init", "desc": "生成 slang_i18n.yaml 模板（新 schema：target_locales 含 code+name_en）"},
+        {"cmd": "slang_i18n init", "desc": "生成 slang_i18n.yaml 模板（新 schema：source/target 都含 code+name_en）"},
         {"cmd": "slang_i18n translate --api-key $OPENAI_API_KEY", "desc": "增量翻译缺失的 keys"},
         {"cmd": "slang_i18n clean --yes", "desc": "删除所有冗余 key（不询问）"},
     ],
@@ -80,13 +80,18 @@ def _require_yaml():
 
 # =========================================================
 # Config (NEW schema, no backward compatibility)
+#   - source_locale: {code, name_en}
+#   - target_locales: list[{code, name_en}]
+#   - prompts: {default_en, by_locale_en}
 # =========================================================
 def _schema_error(msg: str) -> ValueError:
     return ValueError(
         "slang_i18n.yaml 格式错误：\n"
         f"- {msg}\n\n"
         "期望结构（新 schema）示例：\n"
-        "source_locale: en\n"
+        "source_locale:\n"
+        "  code: en\n"
+        "  name_en: English\n"
         "target_locales:\n"
         "  - code: zh_Hant\n"
         "    name_en: Traditional Chinese\n"
@@ -124,12 +129,13 @@ def validate_config(cfg: Any) -> Dict[str, Any]:
     if not isinstance(cfg, dict):
         raise _schema_error("根节点必须是 YAML object/map")
 
-    src = cfg.get("source_locale")
-    if not isinstance(src, str) or not src.strip():
-        raise _schema_error("source_locale 必须是非空字符串，例如 en")
-    src = src.strip()
+    src_raw = cfg.get("source_locale")
+    if not isinstance(src_raw, dict):
+        raise _schema_error("source_locale 必须是 object/map（包含 code / name_en）")
+    src_code = _need_nonempty_str(src_raw, "code", "source_locale")
+    src_name_en = _need_nonempty_str(src_raw, "name_en", "source_locale")
 
-    # target_locales: list[ {code, name_en, (optional) prompt_en} ]
+    # target_locales: list[ {code, name_en} ]
     targets_raw = cfg.get("target_locales")
     if not isinstance(targets_raw, list) or not targets_raw:
         raise _schema_error("target_locales 必须是非空数组（每项为 {code, name_en}）")
@@ -141,8 +147,8 @@ def validate_config(cfg: Any) -> Dict[str, Any]:
             raise _schema_error(f"target_locales[{i}] 必须是 object/map（包含 code / name_en）")
         code = _need_nonempty_str(it, "code", f"target_locales[{i}]")
         name_en = _need_nonempty_str(it, "name_en", f"target_locales[{i}]")
-        if code == src:
-            raise _schema_error(f"target_locales[{i}].code 不应等于 source_locale（{src}）")
+        if code == src_code:
+            raise _schema_error(f"target_locales[{i}].code 不应等于 source_locale.code（{src_code}）")
         if code in seen:
             raise _schema_error(f"target_locales[{i}].code 重复：{code}")
         seen.add(code)
@@ -182,7 +188,7 @@ def validate_config(cfg: Any) -> Dict[str, Any]:
         raise _schema_error("options.normalize_filenames 必须是 bool（true/false）")
 
     return {
-        "source_locale": src,
+        "source_locale": {"code": src_code, "name_en": src_name_en},
         "target_locales": targets,  # list[{code,name_en}]
         "prompts": {
             "default_en": default_en,
@@ -220,10 +226,13 @@ def _config_template_text() -> str:
 # - 若 i18n/ 下存在子目录：只处理子目录中的 *.i18n.json（视为模块）
 # - 若 i18n/ 下无子目录：处理 i18n/ 根目录中的 *.i18n.json
 
-# 源语言（通常是 en）
-source_locale: en
+# 源语言（结构化：code + 英文语言名）
+source_locale:
+  code: en
+  name_en: English
 
-# 目标语言列表：每项包含 code + 英文语言名（用于提示词强约束，避免“翻串语言”）
+# 目标语言列表：每项包含 code + 英文语言名
+# 注意：code 用于文件读写与命名；name_en 用于翻译提示词与 translate_flat_dict 入参（更稳定，避免串语言）
 target_locales:
   - code: zh_Hant
     name_en: Traditional Chinese
@@ -260,10 +269,10 @@ target_locales:
   - code: nl
     name_en: Dutch
 
-# 提示词（英文）：支持默认 + 按 locale code 覆盖
+# 提示词（英文）：支持默认 + 按 locale code “追加”
 # 说明：
-# - default_en：所有语言通用的基础提示词
-# - by_locale_en：针对某些语言做风格/地区/术语的特殊约束（key 为 locale code）
+# - default_en：所有语言通用的基础提示词（永远生效）
+# - by_locale_en：针对某些语言做风格/地区/术语的特殊约束（key 为 locale code；不会覆盖 default_en，而是追加）
 # - 工具会在运行时自动拼接一段“强约束 guard”，明确目标语言必须是 name_en 对应语言，
 #   并禁止输出与目标不符的语言（尤其是防止输出中文串到西语/德语里）。
 prompts:
@@ -323,6 +332,14 @@ def init_config(path: Path) -> None:
     print(f"📝 已生成 {CONFIG_FILE}（新 schema，含详细注释）")
 
 
+def _source_code(cfg: Dict[str, Any]) -> str:
+    return str(cfg["source_locale"]["code"])
+
+
+def _source_name_en(cfg: Dict[str, Any]) -> str:
+    return str(cfg["source_locale"]["name_en"])
+
+
 def _target_codes(cfg: Dict[str, Any]) -> List[str]:
     return [x["code"] for x in cfg["target_locales"]]
 
@@ -371,16 +388,16 @@ def _to_camel(s: str) -> str:
     return head + tail
 
 
-def group_file_name(group: Path, locale: str) -> Path:
+def group_file_name(group: Path, locale_code: str) -> Path:
     """规则：
     - i18n/ 根目录：{locale}.i18n.json
     - i18n/<module>/：{camelFolder}_{locale}.i18n.json
     """
     if group.name == I18N_DIR:
-        return group / f"{locale}.i18n.json"
+        return group / f"{locale_code}.i18n.json"
 
     prefix = _to_camel(group.name)
-    return group / f"{prefix}_{locale}.i18n.json"
+    return group / f"{prefix}_{locale_code}.i18n.json"
 
 
 # =========================================================
@@ -388,7 +405,6 @@ def group_file_name(group: Path, locale: str) -> Path:
 # =========================================================
 def load_json_obj(path: Path) -> Dict[str, Any]:
     text = path.read_text(encoding="utf-8")
-
     try:
         obj = json.loads(text)
     except json.JSONDecodeError as e:
@@ -485,14 +501,14 @@ def _match_locale_from_filename(filename: str, locales_sorted: List[str]) -> Opt
     return None
 
 
-def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = True) -> None:
+def normalize_group_filenames(group: Path, locale_codes: List[str], verbose: bool = True) -> None:
     """只规范化 i18n/<module>/ 下的文件名：{camelFolder}_{locale}.i18n.json
     只对“能从文件名明确识别 locale”的文件动手；不覆盖已有目标文件。
     """
     if group.name == I18N_DIR:
         return
 
-    locales_sorted = sorted(set(locales), key=len, reverse=True)
+    locales_sorted = sorted(set(locale_codes), key=len, reverse=True)
     expected_prefix_camel = _to_camel(group.name)
 
     for p in group.glob("*.i18n.json"):
@@ -518,32 +534,32 @@ def normalize_group_filenames(group: Path, locales: List[str], verbose: bool = T
 # =========================================================
 # Ensure language files
 # =========================================================
-def ensure_language_files_in_group(group: Path, src_locale: str, targets: List[str]) -> None:
+def ensure_language_files_in_group(group: Path, src_code: str, targets_code: List[str]) -> None:
     """只创建缺失的文件，创建内容仅包含 @@locale"""
     sort_keys = False
 
-    src_path = group_file_name(group, src_locale)
+    src_path = group_file_name(group, src_code)
     if not src_path.exists():
-        save_json(src_path, {"@@locale": src_locale}, {}, sort_keys=sort_keys)
+        save_json(src_path, {"@@locale": src_code}, {}, sort_keys=sort_keys)
         print(f"➕ Created {src_path}")
 
-    for loc in targets:
-        p = group_file_name(group, loc)
+    for code in targets_code:
+        p = group_file_name(group, code)
         if not p.exists():
-            save_json(p, {"@@locale": loc}, {}, sort_keys=sort_keys)
+            save_json(p, {"@@locale": code}, {}, sort_keys=sort_keys)
             print(f"➕ Created {p}")
 
 
 def ensure_all_language_files(i18n_dir: Path, cfg: Dict[str, Any]) -> None:
     groups = get_active_groups(i18n_dir)
-    locales = [cfg["source_locale"], *_target_codes(cfg)]
+    locale_codes = [_source_code(cfg), *_target_codes(cfg)]
 
     if bool(cfg["options"].get("normalize_filenames", True)):
         for g in groups:
-            normalize_group_filenames(g, locales=locales, verbose=True)
+            normalize_group_filenames(g, locale_codes=locale_codes, verbose=True)
 
     for g in groups:
-        ensure_language_files_in_group(g, cfg["source_locale"], _target_codes(cfg))
+        ensure_language_files_in_group(g, _source_code(cfg), _target_codes(cfg))
 
 
 # =========================================================
@@ -568,36 +584,36 @@ class RedundantItem:
 
 
 def collect_redundant(cfg: Dict[str, Any], i18n_dir: Path) -> List[RedundantItem]:
-    src_locale = cfg["source_locale"]
+    src_code = _source_code(cfg)
     targets = _target_codes(cfg)
 
     items: List[RedundantItem] = []
     for group in get_active_groups(i18n_dir):
         module_name = group.name if group.name != I18N_DIR else "i18n"
 
-        src_path = group_file_name(group, src_locale)
+        src_path = group_file_name(group, src_code)
         try:
             _, src_body = split_slang_json(src_path, load_json_obj(src_path))
         except Exception as e:
             raise ValueError(
                 "❌ 读取源语言文件失败\n"
                 f"- module={module_name}\n"
-                f"- locale={src_locale}\n"
+                f"- locale={src_code}\n"
                 f"- file={src_path}\n"
                 f"{e}"
             ) from None
 
         src_keys = set(src_body.keys())
 
-        for loc in targets:
-            tgt_path = group_file_name(group, loc)
+        for code in targets:
+            tgt_path = group_file_name(group, code)
             try:
                 _, tgt_body = split_slang_json(tgt_path, load_json_obj(tgt_path))
             except Exception as e:
                 raise ValueError(
                     "❌ 读取目标语言文件失败\n"
                     f"- module={module_name}\n"
-                    f"- locale={loc}\n"
+                    f"- locale={code}\n"
                     f"- file={tgt_path}\n"
                     f"{e}"
                 ) from None
@@ -605,7 +621,7 @@ def collect_redundant(cfg: Dict[str, Any], i18n_dir: Path) -> List[RedundantItem
             tgt_keys = set(tgt_body.keys())
             extra = sorted(tgt_keys - src_keys)
             if extra:
-                items.append(RedundantItem(group=module_name, file=tgt_path, locale=loc, extra_keys=extra))
+                items.append(RedundantItem(group=module_name, file=tgt_path, locale=code, extra_keys=extra))
     return items
 
 
@@ -671,10 +687,10 @@ class Progress:
         return f"ETA: {sec//3600}h{(sec%3600)//60:02d}m"
 
 
-def _compute_need_for_one(group: Path, cfg: Dict[str, Any], loc: str, incremental: bool, cleanup_extra: bool) -> int:
-    src_locale = cfg["source_locale"]
-    src_path = group_file_name(group, src_locale)
-    tgt_path = group_file_name(group, loc)
+def _compute_need_for_one(group: Path, cfg: Dict[str, Any], tgt_code: str, incremental: bool, cleanup_extra: bool) -> int:
+    src_code = _source_code(cfg)
+    src_path = group_file_name(group, src_code)
+    tgt_path = group_file_name(group, tgt_code)
 
     _, src_body = split_slang_json(src_path, load_json_obj(src_path))
     _, tgt_body = split_slang_json(tgt_path, load_json_obj(tgt_path))
@@ -687,24 +703,25 @@ def _compute_need_for_one(group: Path, cfg: Dict[str, Any], loc: str, incrementa
 
 
 # =========================================================
-# Prompt builder (per-locale)
+# Prompt builder (per target code)
+#   - prompts.default_en 永远生效
+#   - prompts.by_locale_en[code] 为追加，不覆盖 default_en
+#   - guard 最后兜底，并使用 name_en 强约束目标语言
 # =========================================================
-def _build_prompt_for_locale(cfg: Dict[str, Any], src_locale: str, tgt_locale: str) -> str:
+def _build_prompt_for_target(cfg: Dict[str, Any], src_code: str, src_name_en: str, tgt_code: str, tgt_name_en: str) -> str:
     prompts = cfg.get("prompts") or {}
     default_en = (prompts.get("default_en") or "").strip()
     by_locale = prompts.get("by_locale_en") or {}
-    override_en = (by_locale.get(tgt_locale) or "").strip()
+    locale_extra_en = (by_locale.get(tgt_code) or "").strip()
 
-    name_en = _target_name_en(cfg, tgt_locale).strip() or tgt_locale
-
-    # 强约束 guard：强制目标语言，减少“翻串语言”
     guard = (
         "You are translating UI strings for a mobile app.\n"
-        f"Source locale: {src_locale}\n"
-        f"Target locale: {tgt_locale}\n"
-        f"Target language (English name): {name_en}\n"
+        f"Source locale code: {src_code}\n"
+        f"Source language (English name): {src_name_en}\n"
+        f"Target locale code: {tgt_code}\n"
+        f"Target language (English name): {tgt_name_en}\n"
         "Rules:\n"
-        f"- Output MUST be written in {name_en}.\n"
+        f"- Output MUST be written in {tgt_name_en}.\n"
         "- Do NOT output any other language.\n"
         "- Do NOT output Chinese unless the target language is Chinese.\n"
         "- Keep placeholders/variables/formatting unchanged.\n"
@@ -714,14 +731,16 @@ def _build_prompt_for_locale(cfg: Dict[str, Any], src_locale: str, tgt_locale: s
     parts: List[str] = []
     if default_en:
         parts.append(default_en)
-    if override_en:
-        parts.append(override_en)
+    if locale_extra_en:
+        parts.append(locale_extra_en)
     parts.append(guard)
     return "\n\n".join(parts).strip() + "\n"
 
 
 # =========================================================
 # Translation
+#   - 文件读写：用 code（src_code / tgt_code）
+#   - translate_flat_dict 入参：src_lang 用 source.name_en；tgt_locale 用 target.name_en（更稳定）
 # =========================================================
 def translate_group(
         group: Path,
@@ -733,16 +752,17 @@ def translate_group(
         sort_keys: bool,
         progress: Progress,
 ) -> None:
-    src_locale = cfg["source_locale"]
-    targets = _target_codes(cfg)
+    src_code = _source_code(cfg)
+    src_name_en = _source_name_en(cfg)
+    targets_code = _target_codes(cfg)
 
-    src_path = group_file_name(group, src_locale)
+    src_path = group_file_name(group, src_code)
     _, src_body = split_slang_json(src_path, load_json_obj(src_path))
 
     module_name = group.name if group.name != I18N_DIR else "i18n"
 
-    for loc in targets:
-        tgt_path = group_file_name(group, loc)
+    for tgt_code in targets_code:
+        tgt_path = group_file_name(group, tgt_code)
         tgt_meta, tgt_body = split_slang_json(tgt_path, load_json_obj(tgt_path))
 
         if cleanup_extra:
@@ -752,25 +772,33 @@ def translate_group(
 
         if not need:
             tgt_meta = dict(tgt_meta)
-            tgt_meta.setdefault("@@locale", loc)
+            tgt_meta.setdefault("@@locale", tgt_code)
             save_json(tgt_path, tgt_meta, tgt_body, sort_keys=sort_keys)
             continue
 
-        print(f"🌍 {module_name}: {src_locale} → {loc}  (+{len(need)} keys)")
+        tgt_name_en = _target_name_en(cfg, tgt_code)
 
-        prompt_for_loc = _build_prompt_for_locale(cfg, src_locale=src_locale, tgt_locale=loc)
+        print(f"🌍 {module_name}: {src_code} → {tgt_code}  (+{len(need)} keys)")
+
+        prompt_for_target = _build_prompt_for_target(
+            cfg,
+            src_code=src_code,
+            src_name_en=src_name_en,
+            tgt_code=tgt_code,
+            tgt_name_en=tgt_name_en,
+        )
 
         translated = translate_flat_dict(
-            prompt_en=prompt_for_loc,
+            prompt_en=prompt_for_target,
             src_dict=need,
-            src_lang=src_locale,
-            tgt_locale=loc,
+            src_lang=src_name_en,      # ✅ 使用配置里的 name_en
+            tgt_locale=tgt_name_en,    # ✅ 使用配置里的 name_en
             model=model,
             api_key=api_key,
         )
 
         # 翻译完（本次 need 全量完成）后打印 source -> target
-        print(f"   🧾 translated ({module_name} {src_locale} → {loc}) : {len(translated)} keys")
+        print(f"   🧾 translated ({module_name} {src_code} → {tgt_code}) : {len(translated)} keys")
         for k in need.keys():
             src_text = need.get(k, "")
             tgt_text = translated.get(k, "")
@@ -778,7 +806,7 @@ def translate_group(
 
         tgt_body.update(translated)
         tgt_meta = dict(tgt_meta)
-        tgt_meta.setdefault("@@locale", loc)
+        tgt_meta.setdefault("@@locale", tgt_code)
         save_json(tgt_path, tgt_meta, tgt_body, sort_keys=sort_keys)
 
         progress.bump(len(translated))
@@ -797,8 +825,8 @@ def translate_all(i18n_dir: Path, cfg: Dict[str, Any], api_key: str, model: str,
     total_need = 0
     for g in groups:
         need_sum = 0
-        for loc in targets:
-            need_sum += _compute_need_for_one(g, cfg, loc, incremental=incremental, cleanup_extra=cleanup_extra)
+        for code in targets:
+            need_sum += _compute_need_for_one(g, cfg, code, incremental=incremental, cleanup_extra=cleanup_extra)
         group_need[g] = need_sum
         total_need += need_sum
 
@@ -862,8 +890,9 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
             targets = _target_codes(cfg)
             prompt_on = bool((cfg.get("prompts", {}).get("default_en") or "").strip())
             normalize_on = bool(cfg["options"].get("normalize_filenames", True))
+            src = cfg["source_locale"]
             print(
-                f"✅ {CONFIG_FILE} OK (source={cfg['source_locale']} targets={len(targets)} "
+                f"✅ {CONFIG_FILE} OK (source={src['code']}({src['name_en']}) targets={len(targets)} "
                 f"default_prompt={'ON' if prompt_on else 'OFF'} normalize_filenames={'ON' if normalize_on else 'OFF'})"
             )
         except Exception as e:
