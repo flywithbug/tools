@@ -342,7 +342,7 @@ slang_i18n translate --api-key $OPENAI_API_KEY
 
 **示例**
 
-- `slang_i18n init`：生成 slang_i18n.yaml 模板
+- `slang_i18n init`：生成 slang_i18n.yaml 模板（新 schema：target_locales 含 code+name_en）
 - `slang_i18n translate --api-key $OPENAI_API_KEY`：增量翻译缺失的 keys
 - `slang_i18n clean --yes`：删除所有冗余 key（不询问）
 
