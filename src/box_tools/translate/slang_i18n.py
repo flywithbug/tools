@@ -747,9 +747,6 @@ def _compute_need_for_one(group: Path, cfg: Dict[str, Any], tgt_code: str, incre
 
 # =========================================================
 # Prompt builder (per target code)
-#   - prompts.default_en 永远生效
-#   - prompts.by_locale_en[code] 为追加，不覆盖 default_en
-#   - guard 最后兜底，并使用 name_en 强约束目标语言
 # =========================================================
 def _build_prompt_for_target(cfg: Dict[str, Any], src_code: str, src_name_en: str, tgt_code: str, tgt_name_en: str) -> str:
     prompts = cfg.get("prompts") or {}
@@ -782,8 +779,6 @@ def _build_prompt_for_target(cfg: Dict[str, Any], src_code: str, src_name_en: st
 
 # =========================================================
 # Translation
-#   - 文件读写：用 code（src_code / tgt_code）
-#   - translate_flat_dict 入参：src_lang 用 source.name_en；tgt_locale 用 target.name_en（更稳定）
 # =========================================================
 def translate_group(
         group: Path,
@@ -834,13 +829,12 @@ def translate_group(
         translated = translate_flat_dict(
             prompt_en=prompt_for_target,
             src_dict=need,
-            src_lang=src_name_en,      # ✅ 使用配置里的 name_en
-            tgt_locale=tgt_name_en,    # ✅ 使用配置里的 name_en
+            src_lang=src_name_en,
+            tgt_locale=tgt_name_en,
             model=model,
             api_key=api_key,
         )
 
-        # 翻译完（本次 need 全量完成）后打印 source -> target
         print(f" 🧾 translated ({module_name} {src_name_en} → {tgt_name_en}) : {len(translated)} keys")
         for k in need.keys():
             src_text = need.get(k, "")
@@ -957,7 +951,7 @@ def doctor(cfg_path: Path, api_key: Optional[str]) -> None:
 
 
 # =========================================================
-# Interactive
+# Interactive (优化展示和交互)
 # =========================================================
 def _read_choice(prompt: str, valid: Iterable[str]) -> str:
     valid_set = {v.lower() for v in valid}
@@ -970,6 +964,28 @@ def _read_choice(prompt: str, valid: Iterable[str]) -> str:
         print(f"请输入 {' / '.join(sorted(valid_set))}（或 q 退出）")
 
 
+def _read_choice_default(prompt: str, valid: Iterable[str], default: str) -> str:
+    """
+    支持回车默认值：
+    - 回车 => default
+    - q/quit/exit => "0"
+    """
+    valid_set = {v.lower() for v in valid}
+    default2 = default.strip().lower()
+    if default2 not in valid_set:
+        raise ValueError(f"default 必须在 valid 中：default={default2} valid={sorted(valid_set)}")
+
+    while True:
+        s = input(prompt).strip().lower()
+        if not s:
+            return default2
+        if s in ("q", "quit", "exit"):
+            return "0"
+        if s in valid_set:
+            return s
+        print(f"请输入 {' / '.join(sorted(valid_set))}（回车默认 {default2}，或 q 退出）")
+
+
 def _ensure_api_key_interactive(passed: Optional[str]) -> Optional[str]:
     if passed:
         return passed
@@ -980,29 +996,88 @@ def _ensure_api_key_interactive(passed: Optional[str]) -> Optional[str]:
     return s or None
 
 
-def choose_action_interactive() -> str:
-    print("请选择操作：")
-    print("1 - 排序（sort）")
-    print("2 - 翻译（默认增量，可选全量）")
-    print("3 - 检查冗余（check）")
-    print("4 - 删除冗余（clean）")
-    print("5 - doctor")
-    print("6 - init")
-    print("0 - 退出")
-    choice = _read_choice(
-        "请输入 0 / 1 / 2 / 3 / 4 / 5 / 6（或 q 退出）: ",
-        valid=["0", "1", "2", "3", "4", "5", "6"],
+def _interactive_context_line(cfg_path: Path) -> str:
+    i18n_ok = (Path.cwd() / I18N_DIR).is_dir()
+    cfg_ok = cfg_path.exists()
+    key_ok = bool((os.getenv("OPENAI_API_KEY") or "").strip())
+    return (
+        f"[ctx] i18n={'OK' if i18n_ok else 'MISSING'}  "
+        f"config={'OK' if cfg_ok else 'MISSING'}  "
+        f"OPENAI_API_KEY={'OK' if key_ok else 'MISSING'}"
     )
-    if choice == "0":
-        return "exit"
-    return {
-        "1": "sort",
-        "2": "translate",
-        "3": "check",
-        "4": "clean",
-        "5": "doctor",
-        "6": "init",
-    }[choice]
+
+
+def _read_menu_action(prompt: str, aliases: Dict[str, str], default: Optional[str]) -> str:
+    while True:
+        s = input(prompt).strip().lower()
+
+        if not s:
+            if default:
+                return default
+            print("请输入选项（输入 h 查看帮助）")
+            continue
+
+        if s in ("q", "quit", "exit", "0"):
+            return "exit"
+
+        if s in ("h", "help", "?"):
+            return "help"
+
+        if s in aliases:
+            return aliases[s]
+
+        print("无效输入：请输入数字/命令（输入 h 查看帮助，q 退出）")
+
+
+def choose_action_interactive(cfg_path: Path) -> str:
+    menu = [
+        ("1", "sort",      "排序（sort）",                 ["sort", "s"]),
+        ("2", "translate", "翻译（translate：默认增量）",   ["translate", "t"]),
+        ("3", "check",     "检查冗余（check）",            ["check", "c"]),
+        ("4", "clean",     "删除冗余（clean）",            ["clean", "rm"]),
+        ("5", "doctor",    "环境诊断（doctor）",           ["doctor", "d"]),
+        ("6", "init",      "生成/校验配置（init）",         ["init", "i"]),
+    ]
+
+    aliases: Dict[str, str] = {}
+    for num, action, _label, als in menu:
+        aliases[num] = action
+        for a in als:
+            aliases[a.lower()] = action
+
+    default_action = "doctor"
+
+    while True:
+        print("")
+        print("== slang_i18n 交互模式 ==")
+        print(_interactive_context_line(cfg_path))
+        print("")
+
+        for num, _action, label, als in menu:
+            alias_text = ", ".join(als)
+            print(f"{num}. {label}    ({alias_text})")
+
+        print("0. 退出（q/quit/exit 也可以）")
+        print("h. 帮助（help/?）")
+        print("")
+
+        choice = _read_menu_action(
+            prompt=f"请选择操作（默认 {default_action}，回车采用默认）: ",
+            aliases=aliases,
+            default=default_action,
+        )
+
+        if choice == "help":
+            print("")
+            print("输入方式示例：")
+            print("  2            -> translate")
+            print("  translate 或 t-> translate")
+            print("  sort 或 s     -> sort")
+            print("  h/help/?      -> 显示帮助")
+            print("  q/0/exit      -> 退出")
+            continue
+
+        return choice
 
 
 # =========================================================
@@ -1041,7 +1116,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     interactive = False
     if not action:
         interactive = True
-        action = choose_action_interactive()
+        action = choose_action_interactive(cfg_path)
         if action == "exit":
             return EXIT_OK
 
@@ -1141,13 +1216,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             return EXIT_BAD
 
         full = bool(args.full)
+
+        # ✅ 交互模式下：翻译模式选择页（回车默认=1 增量）
         if interactive and args.action is None:
             print(f"🤖 当前模式：{'全量' if full else '增量'}")
-            m = _read_choice("选择翻译模式：1 增量 / 2 全量 / 0 取消: ", valid=["0", "1", "2"])
+            m = _read_choice_default(
+                "选择翻译模式：1 增量（默认） / 2 全量 / 0 取消（回车=1）: ",
+                valid=["0", "1", "2"],
+                default="1",
+            )
             if m == "0":
                 print("🧊 已取消翻译")
                 return EXIT_OK
-            full = m == "2"
+            full = (m == "2")
 
         started = time.time()
         try:
