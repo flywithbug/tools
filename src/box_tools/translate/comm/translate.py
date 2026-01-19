@@ -160,17 +160,34 @@ def _build_system_prompt(
     base = (
         "You are a professional localization translator for apps and web. "
         f"Translate from {src_lang} to {tgt_locale}. "
-        "Translate all human-visible text naturally for a mobile UI. "
+
+        "Translate UI strings naturally for a mobile UI. "
+        "Be concise, clear, and consistent. "
+
+        "Requirements: "
+        f"- Output must be written entirely in {tgt_locale}. Do not output any other language. "
+        "- Translate all human-visible text, including short titles/labels before a colon "
+        '(e.g., "Account Disabled:", "Error:", "Warning:"). '
+        "- Do not keep an English title followed by a translated sentence; translate the whole string consistently. "
+
         "Preserve product/brand names (proper nouns) and URLs verbatim. "
         f"Preserve ALL placeholders and formatting tokens EXACTLY as-is (e.g., {_PLACEHOLDER_EXAMPLES}). "
+        "Keep formatting intact (punctuation, line breaks, spacing) while making the wording natural. "
         "A colon ':' is normal punctuation, not a placeholder—translate text on both sides if it is human-visible. "
-        "Abbreviations: keep technical acronyms (e.g., API, OTP, URL) if commonly kept; "
-        "translate abbreviations like FAQ when the target language usually uses a localized phrase. "
+
+        "Abbreviations: "
+        "- Keep international technical/brand abbreviations that are normally written in English "
+        "(e.g., Wi-Fi, GPS, API, URL, OTP, 2FA, iOS, Android, PDF, USD). "
+        "- If an English abbreviation is commonly translated into normal words in the target language "
+        "(based on real local usage), translate it naturally (e.g., FAQ → localized common wording). "
+        "- If unsure, prefer the form native users expect in a mobile UI. "
+
         "Return ONLY a single valid JSON object. "
         "The JSON keys MUST match the input keys exactly; translate ONLY the values. "
         "No extra commentary. No markdown. No code fences. "
         "The input JSON is a flat object mapping keys to strings. Output a JSON object with the SAME keys ONLY."
     )
+
 
 
     extra = (prompt_en or "").strip()
