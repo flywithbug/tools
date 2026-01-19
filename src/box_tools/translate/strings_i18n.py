@@ -1,278 +1,1578 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+strings_i18n.py — iOS .strings 多語言管理工具（Refactor: slang_i18n style）
+
+目录约定（Xcode）：
+- Base.lproj 与 en.lproj / zh-Hant.lproj 等同级
+- Base.lproj 下的 *.strings 视为"需要处理的文件清单"
+- 其他语言目录：{code}.lproj
+- 每个语言目录里应包含与 Base 相同文件名的 *.strings
+
+配置文件：strings_i18n.yaml（NEW schema, 带注释模板）
+languages.json：语言清单（用于 sync & init 生成 target_locales 等）
+翻译：使用 ./comm/translate.py 中的 translate_flat_dict（flat dict 翻译）
+
+功能（actions）：
+- init               生成 strings_i18n.yaml（若存在则校验不覆盖）
+- doctor             检查依赖 / 目录结构 / 配置 / API Key
+- scan               扫描 Base.lproj 的 *.strings 文件
+- sync               按 languages.json 补齐 {code}.lproj + *.strings
+- sort               对所有语言的 *.strings 做排序（按 Base key 顺序 + prefix 分组 + 保留注释/空行）
+- dupcheck           重复 key 检查（先汇总显示）
+- dedupe             删除重复 key（先汇总显示，最后确认一次；--keep first/last；--yes 跳过确认）
+- check              冗余 key 检查（Base 没有、目标有）
+- clean              删除冗余 key（先汇总显示，最后确认一次；--yes 跳过确认）
+- translate-core     增量翻译：base_locale → core_locales（源：Base.lproj/*.strings）
+- translate-target   增量翻译：source_locale → target_locales（源：{source_code}.lproj/*.strings）
+
+Exit codes:
+- 0 成功
+- 1 执行失败
+- 2 环境/配置错误
+- 3 check/dupcheck 发现问题（默认返回 3，便于 CI）
+"""
+
+from __future__ import annotations
+
+import argparse
 import json
 import os
-import yaml
+import re
+import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
-import openai  # 假设使用 OpenAI API 进行翻译
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-# BOX_TOOL 信息，便于 box 工具集的管理
+try:
+    from openai import OpenAI  # noqa: F401
+except Exception:
+    OpenAI = None  # type: ignore
+
+# ✅ 使用同目录下 comm/translate 模块（与 slang_i18n 对齐）
+from .comm.translate import OpenAIModel, TranslationError, translate_flat_dict  # type: ignore
+
+
+# =========================================================
+# BOX_TOOL (对齐 slang_i18n)
+# =========================================================
 BOX_TOOL = {
-    "id": "flutter.strings_i18n",
+    "id": "ios.strings_i18n",
     "name": "strings_i18n",
-    "category": "flutter",
-    "summary": "iOS 项目多语言翻译工具，支持增量翻译、冗余检查、排序等功能",
+    "category": "ios",
+    "summary": "iOS/Xcode .strings 多语言：扫描/同步/排序/重复与冗余清理/增量翻译（支持交互）",
     "usage": [
         "strings_i18n",
-        "strings_i18n init",  # 初始化配置
-        "strings_i18n doctor",  # 环境自检
-        "strings_i18n sort",  # 排序
-        "strings_i18n check",  # 冗余检查
-        "strings_i18n clean --yes",  # 清理冗余
-        "strings_i18n translate --api-key $OPENAI_API_KEY",  # 翻译命令
+        "strings_i18n init",
+        "strings_i18n doctor",
+        "strings_i18n scan",
+        "strings_i18n sync",
+        "strings_i18n sort",
+        "strings_i18n dupcheck",
+        "strings_i18n dedupe --yes --keep first",
+        "strings_i18n check",
+        "strings_i18n clean --yes",
+        "strings_i18n translate-core --api-key $OPENAI_API_KEY",
+        "strings_i18n translate-target --api-key $OPENAI_API_KEY",
     ],
     "options": [
-        {"flag": "--api-key", "desc": "OpenAI API key（可通过环境变量传递）"},
-        {"flag": "--model", "desc": "指定翻译模型（默认为 gpt-4o）"},
-        {"flag": "--full", "desc": "全量翻译（默认增量翻译）"},
-        {"flag": "--yes", "desc": "clean 删除冗余时跳过确认"},
-        {"flag": "--no-exitcode-3", "desc": "check 发现冗余时仍返回 0（默认返回 3）"},
-    ],
-    "examples": [
-        {"cmd": "strings_i18n init", "desc": "生成 strings_i18n.yaml 配置文件"},
-        {"cmd": "strings_i18n translate --api-key $OPENAI_API_KEY", "desc": "增量翻译缺失的 keys"},
-        {"cmd": "strings_i18n clean --yes", "desc": "删除所有冗余 key（不询问）"},
+        {"flag": "--config", "desc": "配置文件路径（默认 strings_i18n.yaml）"},
+        {"flag": "--languages", "desc": "languages.json 路径（默认 languages.json）"},
+        {"flag": "--api-key", "desc": "OpenAI API key（也可用环境变量 OPENAI_API_KEY）"},
+        {"flag": "--model", "desc": "模型（命令行优先；不传则用配置 openAIModel；默认 gpt-4o）"},
+        {"flag": "--full", "desc": "全量翻译（默认增量：只补缺失/空值 key）"},
+        {"flag": "--yes", "desc": "clean/dedupe 删除时跳过确认"},
+        {"flag": "--keep", "desc": "dedupe 保留策略：first/last（默认 first）"},
+        {"flag": "--no-exitcode-3", "desc": "check/dupcheck 发现问题时仍返回 0（默认返回 3）"},
+        {"flag": "--dry-run", "desc": "预览模式（不写入文件）"},
     ],
     "dependencies": [
-        "PyYAML>=6.0",  # 依赖 PyYAML
-        "openai>=1.0.0",  # 依赖 OpenAI
+        "PyYAML>=6.0",
+        "openai>=1.0.0",
     ],
 }
 
-# 读取配置文件
-def load_config(config_path: str) -> Dict:
-    if not Path(config_path).exists():
-        raise FileNotFoundError(f"配置文件 {config_path} 不存在，请先使用 `strings_i18n init` 生成")
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-    return config
 
-# 生成 strings_i18n.yaml 配置模板
-def create_config(config_path: str):
-    default_config = {
-        "source_locale": "en",
-        "base_locale": "zh_hans",
-        "base_roots": [
-            "./TimeTrails/TimeTrails/TimeTrails/SupportFiles/Base.lproj/Localizable.strings",
-            "./TimeTrails/TimeTrails/TimeTrails/SupportFiles/Base.lproj/InfoPlist.strings"
-        ],
-        "core_locales": ["zh_Hans", "zh_Hant", "en", "ja", "ko", "yue"],
-        "languages": "./languages.json",
-        "prompt_en": "Translate the following text into the target language.",
-        "lang_root": "./TimeTrails/TimeTrails/TimeTrails/SupportFiles/",  # 用于生成目录
-        "base_folder": "Base.lproj",  # 这个是基础语言文件夹
-        "lang_files": [
-            "Localizable.strings",
-            "InfoPlist.strings"
-        ],
+# =========================================================
+# Constants / Exit codes
+# =========================================================
+CONFIG_FILE = "strings_i18n.yaml"
+LANG_FILE = "languages.json"
+
+EXIT_OK = 0
+EXIT_FAIL = 1
+EXIT_BAD = 2
+EXIT_FOUND = 3
+
+ALLOWED_OPENAI_MODELS = (
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+)
+
+
+# =========================================================
+# Lazy import for PyYAML
+# =========================================================
+def _require_yaml():
+    try:
+        import yaml  # type: ignore
+        return yaml
+    except Exception:
+        raise SystemExit(
+            "❌ 缺少依赖 PyYAML（import yaml 失败）\n"
+            "修复方式：\n"
+            "1) pipx 安装：pipx inject box pyyaml\n"
+            "2) 或在 pyproject.toml dependencies 加入 PyYAML>=6.0 后重新发布/安装\n"
+        )
+
+
+# =========================================================
+# Config schema (NEW)
+# =========================================================
+def _schema_error(msg: str) -> ValueError:
+    return ValueError(
+        "strings_i18n.yaml 格式错误：\n"
+        f"- {msg}\n\n"
+        "期望结构（新 schema）示例：\n"
+        "openAIModel: gpt-4o\n"
+        "lang_root: ./TimeTrails/TimeTrails/SupportFiles/\n"
+        "base_folder: Base.lproj\n"
+        "languages: ./languages.json\n"
+        "base_locale:\n"
+        "  - code: zh-Hans\n"
+        "    name_en: Simplified Chinese\n"
+        "source_locale:\n"
+        "  - code: en\n"
+        "    name_en: English\n"
+        "core_locales:\n"
+        "  - code: zh-Hant\n"
+        "    name_en: Traditional Chinese\n"
+        "target_locales:\n"
+        "  - code: de\n"
+        "    name_en: German\n"
+        "prompts:\n"
+        "  default_en: |\n"
+        "    Translate UI strings naturally.\n"
+        "  by_locale_en:\n"
+        "    zh-Hant: |\n"
+        "      Use Taiwan Traditional Chinese UI style.\n"
+        "options:\n"
+        "  sort_keys: true\n"
+        "  cleanup_extra_keys: true\n"
+        "  incremental_translate: true\n"
+    )
+
+
+def _need_nonempty_str(obj: Dict[str, Any], key: str, path: str) -> str:
+    v = obj.get(key)
+    if not isinstance(v, str) or not v.strip():
+        raise _schema_error(f"{path}.{key} 必须是非空字符串")
+    return v.strip()
+
+
+def _need_bool(obj: Dict[str, Any], key: str, path: str) -> bool:
+    v = obj.get(key)
+    if not isinstance(v, bool):
+        raise _schema_error(f"{path}.{key} 必须是 bool（true/false）")
+    return v
+
+
+def _need_openai_model(cfg: Dict[str, Any]) -> str:
+    v = cfg.get("openAIModel", OpenAIModel.GPT_4O.value)
+    if v is None:
+        v = OpenAIModel.GPT_4O.value
+    if not isinstance(v, str) or not v.strip():
+        raise _schema_error("openAIModel 必须是非空字符串")
+    v = v.strip()
+    if v not in set(ALLOWED_OPENAI_MODELS):
+        raise _schema_error(f"openAIModel 不合法：{v!r}，可选：{', '.join(ALLOWED_OPENAI_MODELS)}")
+    return v
+
+
+def _parse_locale_list(cfg: Dict[str, Any], key: str) -> List[Dict[str, str]]:
+    raw = cfg.get(key)
+    if not isinstance(raw, list) or not raw:
+        raise _schema_error(f"{key} 必须是非空数组（每项为 {{code,name_en}}）")
+    out: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    for i, it in enumerate(raw):
+        if not isinstance(it, dict):
+            raise _schema_error(f"{key}[{i}] 必须是 object/map（包含 code / name_en）")
+        code = _need_nonempty_str(it, "code", f"{key}[{i}]")
+        name_en = _need_nonempty_str(it, "name_en", f"{key}[{i}]")
+        if code in seen:
+            raise _schema_error(f"{key}[{i}].code 重复：{code}")
+        seen.add(code)
+        out.append({"code": code, "name_en": name_en})
+    return out
+
+
+def validate_config(cfg: Any) -> Dict[str, Any]:
+    if not isinstance(cfg, dict):
+        raise _schema_error("根节点必须是 YAML object/map")
+
+    openai_model = _need_openai_model(cfg)
+
+    lang_root = cfg.get("lang_root")
+    base_folder = cfg.get("base_folder")
+    languages_path = cfg.get("languages", "./languages.json")
+
+    if not isinstance(lang_root, str) or not lang_root.strip():
+        raise _schema_error("lang_root 必须是非空字符串")
+    if not isinstance(base_folder, str) or not base_folder.strip():
+        raise _schema_error("base_folder 必须是非空字符串（通常 Base.lproj）")
+    if not isinstance(languages_path, str) or not languages_path.strip():
+        raise _schema_error("languages 必须是非空字符串（languages.json 路径）")
+
+    prompts = cfg.get("prompts") or {}
+    if not isinstance(prompts, dict):
+        raise _schema_error("prompts 必须是 object/map（可省略）")
+    default_en = prompts.get("default_en", "")
+    if default_en is None:
+        default_en = ""
+    if not isinstance(default_en, str):
+        raise _schema_error("prompts.default_en 必须是字符串（可为空）")
+    by_locale_en = prompts.get("by_locale_en", {}) or {}
+    if not isinstance(by_locale_en, dict):
+        raise _schema_error("prompts.by_locale_en 必须是 object/map（可省略）")
+    by_locale_en2: Dict[str, str] = {}
+    for k, v in by_locale_en.items():
+        if not isinstance(k, str) or not k.strip():
+            raise _schema_error("prompts.by_locale_en 的 key 必须是非空字符串（locale code）")
+        if not isinstance(v, str):
+            raise _schema_error(f"prompts.by_locale_en[{k!r}] 必须是字符串")
+        by_locale_en2[k.strip()] = v
+
+    opts = cfg.get("options")
+    if not isinstance(opts, dict):
+        raise _schema_error("options 必须是 object/map")
+
+    normalize_filenames = opts.get("normalize_filenames", True)
+    if not isinstance(normalize_filenames, bool):
+        raise _schema_error("options.normalize_filenames 必须是 bool（true/false）")
+
+    base_locale = _parse_locale_list(cfg, "base_locale")
+    source_locale = _parse_locale_list(cfg, "source_locale")
+    core_locales = _parse_locale_list(cfg, "core_locales")
+    target_locales = _parse_locale_list(cfg, "target_locales")
+
+    return {
+        "openAIModel": openai_model,
+        "lang_root": lang_root.strip(),
+        "base_folder": base_folder.strip(),
+        "languages": languages_path.strip(),
+        "base_locale": base_locale,
+        "source_locale": source_locale,
+        "core_locales": core_locales,
+        "target_locales": target_locales,
+        "prompts": {"default_en": default_en, "by_locale_en": by_locale_en2},
         "options": {
-            "sort_keys": True,
-            "cleanup_extra_keys": True,
-            "incremental_translate": True,
-            "normalize_filenames": True,
+            "sort_keys": _need_bool(opts, "sort_keys", "options"),
+            "cleanup_extra_keys": _need_bool(opts, "cleanup_extra_keys", "options"),
+            "incremental_translate": _need_bool(opts, "incremental_translate", "options"),
+            "normalize_filenames": normalize_filenames,
         },
     }
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(default_config, f, allow_unicode=True, sort_keys=False)
-    print(f"已生成配置文件：{config_path}")
 
-# 加载语言文件
-def load_languages(languages_json: str) -> Dict:
-    with open(languages_json, 'r', encoding='utf-8') as f:
-        languages = json.load(f)
-    return languages
 
-# 生成 .strings 文件
-def generate_strings_file(locale: str, lang_root: str, lang_files: List[str]):
-    # 根据 lang_root 和 locale 生成对应的语言目录
-    locale_dir = Path(lang_root) / f"{locale}.lproj"
+def read_config(path: Path) -> Dict[str, Any]:
+    yaml = _require_yaml()
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return validate_config(raw)
 
-    # 如果目录不存在，创建目录
-    if not locale_dir.exists():
-        print(f"Creating directory {locale_dir}...")
-        locale_dir.mkdir(parents=True, exist_ok=True)
 
-    # 根据 lang_files 列表来生成指定的语言文件
-    for lang_file in lang_files:
-        # 生成语言文件的完整路径
-        locale_file = locale_dir / lang_file
+def read_config_or_throw(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(f"❌ 未找到 {CONFIG_FILE}（请先 strings_i18n init）")
+    return read_config(path)
 
-        # 如果文件不存在，则创建文件
-        if not locale_file.exists():
-            print(f"Creating {locale_file}...")
-            with open(locale_file, 'w', encoding='utf-8') as f:
-                f.write(f"/* Localization for {locale} */\n")  # 可根据需要自定义内容
-        else:
-            print(f"{locale_file} already exists.")
 
-# 翻译单个键
-def translate_key(key: str, source_locale: str, target_locale: str, prompt_en: str, api_key: str) -> str:
-    # 调用 OpenAI API 进行翻译
-    translation = openai.Completion.create(
-        model="gpt-4",  # 可以根据需求选择不同的模型
-        prompt=f"{prompt_en}\n{key}",
-        max_tokens=500,
-        temperature=0.5,
-        api_key=api_key
-    )
-    return translation['choices'][0]['text'].strip()
+def _config_template_text() -> str:
+    # 模板文本：为了保留注释（对齐 slang 的"模板文本 init"思路）
+    return """# strings_i18n.yaml
+# iOS/Xcode .strings 多语言配置（NEW schema）
+#
+# 目录约定（在项目根目录运行）：
+# - {lang_root}/{base_folder} 必须存在（通常 Base.lproj）
+# - Base.lproj 与其它 *.lproj 同级（Xcode 约定）
+# - 需要处理的文件：扫描 Base.lproj 下的 *.strings
+#
+# languages.json：用于 sync 补齐语言目录/文件、以及 init 生成 target_locales
 
-# 执行增量翻译
-def incremental_translate(config: Dict, i18n_dir: Path, api_key: str):
-    base_locale = config['base_locale']
-    base_folder = config['base_folder']
-    lang_root = config.get('lang_root', './TimeTrails/TimeTrails/TimeTrails/SupportFiles/')
-    lang_files = config['lang_files']
-    source_locale = config['source_locale']
+# OpenAI 模型（默认 gpt-4o）
+# 可选值（枚举）：
+# - gpt-4o
+# - gpt-4o-mini
+# - gpt-4.1
+# - gpt-4.1-mini
+openAIModel: gpt-4o
 
-    # 核心语言的源文件路径：使用 lang_root + base_folder + lang_files 来拼接
-    base_folder_path = Path(lang_root) / base_folder / f"{base_locale}.lproj"
+# 语言目录根路径（相对项目根目录）
+lang_root: ./TimeTrails/TimeTrails/SupportFiles/
 
-    # 如果源文件不存在，抛出错误
-    if not base_folder_path.exists():
-        print(f"源文件 {base_folder_path} 不存在！")
+# Base 目录名（通常 Base.lproj）
+base_folder: Base.lproj
+
+# languages.json 路径（相对项目根目录）
+languages: ./languages.json
+
+# 基础语言（用于 translate-core：Base.lproj -> core_locales）
+base_locale:
+  - code: zh-Hans
+    name_en: Simplified Chinese
+
+# 源语言（用于 translate-target：{source}.lproj -> target_locales）
+source_locale:
+  - code: en
+    name_en: English
+
+# 核心语言（常驻优先翻译）
+core_locales:
+  - code: zh-Hant
+    name_en: Traditional Chinese
+  - code: en
+    name_en: English
+  - code: ja
+    name_en: Japanese
+  - code: ko
+    name_en: Korean
+
+# 目标语言（通常由 init 从 languages.json 自动生成，并排除 core_locales）
+target_locales:
+  - code: de
+    name_en: German
+  - code: es
+    name_en: Spanish
+
+# 提示词（英文）：支持 default + by_locale "追加"
+prompts:
+  default_en: |
+    Translate UI strings naturally for a mobile app.
+    Be concise, clear, and consistent.
+    Preserve placeholders and formatting tokens unchanged.
+
+  by_locale_en:
+    zh-Hant: |
+      Use Taiwan-style Traditional Chinese for UI.
+      Prefer common Taiwan wording (e.g., "帳號", "登入", "請稍後再試").
+
+    ja: |
+      Use polite and concise Japanese UI tone suitable for mobile apps.
+
+    ko: |
+      Use natural Korean UI style suitable for mobile apps.
+
+# 选项（布尔值）
+options:
+  # sort 会按 Base key 顺序 + prefix 分组输出；此开关用于未来扩展（当前默认 true）
+  sort_keys: true
+
+  # translate 时是否先过滤目标文件里的冗余 key（避免幽灵 key 扩散）
+  cleanup_extra_keys: true
+
+  # 是否增量翻译：true=只补缺失/空值；false=全量覆盖（等价 --full）
+  incremental_translate: true
+
+  # 预留：是否规范化文件名（iOS .strings 通常不需要重命名，保持 false/true 都不影响核心功能）
+  normalize_filenames: true
+"""
+
+
+def init_config(cfg_path: Path, project_root: Path, languages_path: Path) -> None:
+    _require_yaml()  # ensure deps
+
+    if cfg_path.exists():
+        _ = read_config(cfg_path)  # 存在就校验，不覆盖
+        print(f"✅ {CONFIG_FILE} 已存在且格式正确（不会覆盖）")
         return
 
-    # 非核心语言的源文件路径：使用 lang_root + source_locale + ".lproj" + lang_files 来拼接
-    non_core_folder_path = Path(lang_root) / f"{source_locale}.lproj"
+    # 生成模板
+    cfg_path.write_text(_config_template_text(), encoding="utf-8")
+    print(f"📝 已生成 {CONFIG_FILE}（新 schema，含详细注释）")
 
-    # 加载目标语言
-    target_locales = [lang['code'] for lang in load_languages(config['languages']) if lang['code'] not in config['core_locales']]
-    prompt_en = config['prompt_en']
+    # 如果 languages.json 存在：尽力生成/更新 target_locales（不覆盖整个 yaml，只给提示）
+    if not languages_path.exists():
+        print(f"⚠️ 未找到 {languages_path}，无法自动从 languages.json 补齐 target_locales（可稍后再运行 init）")
+        return
 
-    # 遍历每个目标语言
-    for locale in target_locales:
-        print(f"正在翻译 {locale}...")
-        generate_strings_file(locale, lang_root, lang_files)
+    print("ℹ️ 已生成配置模板。建议下一步：strings_i18n doctor / scan / sync")
 
-        # 选择源文件路径：核心语言使用 base_folder + base_locale，非核心语言使用 source_locale
-        if locale in config['core_locales']:
-            source_file = base_folder_path / lang_files[0]  # 以 base_folder 为基础路径
+
+# =========================================================
+# languages.json helpers
+# =========================================================
+def load_languages_json(path: Path) -> List[Dict[str, str]]:
+    if not path.exists():
+        raise FileNotFoundError(f"❌ 找不到 languages.json：{path}")
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("❌ languages.json 顶层必须是 list")
+
+    out: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    for it in data:
+        if not isinstance(it, dict):
+            continue
+        code = str(it.get("code", "")).strip()
+        name_en = str(it.get("name_en", "")).strip()
+        if not code or not name_en:
+            continue
+        if code.lower() in ("base", "base.lproj"):
+            continue
+        if code in seen:
+            continue
+        seen.add(code)
+        out.append({"code": code, "name_en": name_en})
+
+    out.sort(key=lambda x: x["code"].lower())
+    return out
+
+
+def code_to_lproj(code: str) -> str:
+    return code if code.endswith(".lproj") else f"{code}.lproj"
+
+
+# =========================================================
+# iOS/Xcode scanning helpers
+# =========================================================
+def project_paths(project_root: Path, cfg: Dict[str, Any]) -> Tuple[Path, Path]:
+    lang_root = (project_root / Path(cfg["lang_root"])).resolve()
+    base_dir = (lang_root / Path(cfg["base_folder"])).resolve()
+    return lang_root, base_dir
+
+
+def scan_base_strings(base_dir: Path) -> List[Path]:
+    if not base_dir.exists() or not base_dir.is_dir():
+        raise FileNotFoundError(f"❌ Base 目录不存在：{base_dir}")
+    files = [p for p in base_dir.iterdir() if p.is_file() and p.suffix == ".strings"]
+    files.sort(key=lambda p: p.name.lower())
+    if not files:
+        raise FileNotFoundError(f"❌ Base 目录下未找到任何 *.strings：{base_dir}")
+    return files
+
+
+def ensure_dir(p: Path, dry: bool) -> bool:
+    if p.exists():
+        if not p.is_dir():
+            raise FileExistsError(f"路径存在但不是目录：{p}")
+        return False
+    if not dry:
+        p.mkdir(parents=True, exist_ok=True)
+    return True
+
+
+def ensure_file(p: Path, dry: bool) -> bool:
+    if p.exists():
+        if not p.is_file():
+            raise FileExistsError(f"路径存在但不是文件：{p}")
+        return False
+    if not dry:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("", encoding="utf-8")
+    return True
+
+
+def sync_language_dirs_and_files(
+        *,
+        lang_root_dir: Path,
+        base_files: List[Path],
+        locale_codes: List[str],
+        dry: bool,
+) -> Dict[str, Any]:
+    created_dirs: List[str] = []
+    created_files: List[str] = []
+    existing_dirs = 0
+    existing_files = 0
+
+    for code in locale_codes:
+        lproj_dir = lang_root_dir / code_to_lproj(code)
+        if ensure_dir(lproj_dir, dry):
+            created_dirs.append(str(lproj_dir))
         else:
-            source_file = non_core_folder_path / lang_files[0]  # 非核心语言使用 source_locale 路径
+            existing_dirs += 1
 
-        target_file = Path(lang_root) / f"{locale}.lproj" / f"{locale}.strings"
+        for bf in base_files:
+            target = lproj_dir / bf.name
+            if ensure_file(target, dry):
+                created_files.append(str(target))
+            else:
+                existing_files += 1
 
-        # 如果源文件不存在，跳过
-        if not source_file.exists():
-            print(f"源文件 {source_file} 不存在！跳过 {locale}")
+    return {
+        "created_dirs": created_dirs,
+        "created_files": created_files,
+        "existing_dirs": existing_dirs,
+        "existing_files": existing_files,
+    }
+
+
+# =========================================================
+# .strings parse / sort (保留注释/空行)
+# =========================================================
+ENTRY_RE = re.compile(
+    r'^\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*=\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*;\s*(?://.*)?$'
+)
+COMMENT_START_RE = re.compile(r"^\s*/\*")
+COMMENT_END_RE = re.compile(r"\*/\s*$")
+LINE_COMMENT_RE = re.compile(r"^\s*//")
+
+
+@dataclass
+class StringsEntry:
+    key: str
+    value: str
+    comments: List[str]
+    raw_before: List[str]
+
+
+@dataclass
+class ParsedStrings:
+    header: List[str]
+    entries: List[StringsEntry]
+    tail: List[str]
+
+
+def parse_strings_file(path: Path) -> ParsedStrings:
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    header: List[str] = []
+    tail: List[str] = []
+    entries: List[StringsEntry] = []
+    pending_comments: List[str] = []
+    pending_misc: List[str] = []
+    in_comment = False
+    seen_entry = False
+
+    for line in lines:
+        if in_comment:
+            pending_comments.append(line)
+            if COMMENT_END_RE.search(line):
+                in_comment = False
             continue
 
-        with open(source_file, 'r', encoding='utf-8') as f:
-            source_lines = f.readlines()
+        if COMMENT_START_RE.search(line):
+            in_comment = True
+            pending_comments.append(line)
+            if COMMENT_END_RE.search(line):
+                in_comment = False
+            continue
 
-        target_dict = {}
-        if target_file.exists():
-            with open(target_file, 'r', encoding='utf-8') as f:
-                target_lines = f.readlines()
-                target_dict = {line.split('=')[0].strip(): line.strip().split('=')[1].strip() for line in target_lines}
+        if LINE_COMMENT_RE.search(line):
+            pending_comments.append(line)
+            continue
 
-        # 增量翻译：仅翻译缺失的 key
-        for line in source_lines:
-            key, value = line.split('=') if '=' in line else (None, None)
-            if key and key.strip() not in target_dict:
-                print(f"添加缺失的键：{key.strip()}")
-                translation = translate_key(key.strip(), source_locale, locale, prompt_en, api_key)
-                target_lines.append(f"{key.strip()} = {translation};\n")
+        m = ENTRY_RE.match(line)
+        if m:
+            seen_entry = True
+            entries.append(
+                StringsEntry(
+                    key=m.group(1),
+                    value=m.group(2),
+                    comments=pending_comments,
+                    raw_before=pending_misc,
+                )
+            )
+            pending_comments = []
+            pending_misc = []
+            continue
 
-        # 将更新后的内容写回目标文件
-        with open(target_file, 'w', encoding='utf-8') as f:
-            f.writelines(target_lines)
+        if not seen_entry:
+            header.append(line)
+        else:
+            pending_misc.append(line)
 
-# 删除冗余字段
-def remove_redundant_fields(config: Dict, i18n_dir: Path):
-    source_locale = config['source_locale']
-    lang_root = config.get('lang_root', './TimeTrails/TimeTrails/TimeTrails/SupportFiles/')
-    base_file = Path(lang_root) / f"{source_locale}.lproj" / f"{source_locale}.strings"
+    if not seen_entry:
+        header = pending_comments + pending_misc
+        pending_comments, pending_misc = [], []
 
-    if not base_file.exists():
-        print(f"基础语言文件 {base_file} 不存在！")
-        return
+    if pending_comments or pending_misc:
+        tail.extend(pending_comments)
+        tail.extend(pending_misc)
 
-    with open(base_file, 'r', encoding='utf-8') as f:
-        base_lines = f.readlines()
+    return ParsedStrings(header, entries, tail)
 
-    base_keys = {line.split('=')[0].strip() for line in base_lines if '=' in line}
 
-    for locale in os.listdir(i18n_dir):
-        target_file = Path(i18n_dir) / f"{locale}.lproj" / f"{locale}.strings"
-        if target_file.exists():
-            with open(target_file, 'r', encoding='utf-8') as f:
-                target_lines = f.readlines()
+def prefix_of_key(key: str) -> str:
+    return key.split(".", 1)[0] if "." in key else key
 
-            target_keys = {line.split('=')[0].strip() for line in target_lines if '=' in line}
-            redundant_keys = target_keys - base_keys
 
-            if redundant_keys:
-                print(f"冗余字段在 {locale}.strings 文件中:")
-                for key in redundant_keys:
-                    print(f"  {key}")
-                delete = input(f"是否删除冗余字段在 {locale}.strings 中的键？(y/n): ").strip().lower()
-                if delete == "y":
-                    target_lines = [line for line in target_lines if line.split('=')[0].strip() not in redundant_keys]
-                    with open(target_file, 'w', encoding='utf-8') as f:
-                        f.writelines(target_lines)
-                    print(f"冗余字段已从 {locale}.strings 中删除")
-                else:
-                    print(f"跳过删除 {locale}.strings 文件中的冗余字段")
+def format_entry(e: StringsEntry) -> List[str]:
+    return e.comments + e.raw_before + [f'"{e.key}" = "{e.value}";\n']
 
-# 排序语言文件
-def sort_language_files(i18n_dir: Path):
-    print(f"对语言文件进行排序：{i18n_dir}")
-    for locale_dir in Path(i18n_dir).glob("*.lproj"):
-        strings_file = locale_dir / f"{locale_dir.name}.strings"
-        if strings_file.exists():
-            with open(strings_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            lines.sort()
-            with open(strings_file, 'w', encoding='utf-8') as f:
-                f.writelines(lines)
 
-# 交互式选择操作
+def sort_one_file(base_file: Path, target_file: Path, dry: bool) -> bool:
+    base = parse_strings_file(base_file)
+    tgt = parse_strings_file(target_file)
+
+    base_order = [e.key for e in base.entries]
+    base_set = set(base_order)
+
+    tgt_multi: Dict[str, List[StringsEntry]] = {}
+    for e in tgt.entries:
+        tgt_multi.setdefault(e.key, []).append(e)
+
+    # 1) in-base: follow base key order (keep duplicates as-is, just relocate)
+    in_base: List[StringsEntry] = []
+    for k in base_order:
+        if k in tgt_multi:
+            in_base.extend(tgt_multi[k])
+
+    # 2) extras: keys not in base, sorted by key
+    extras: List[StringsEntry] = []
+    extra_keys = sorted((k for k in tgt_multi.keys() if k not in base_set), key=str.lower)
+    for k in extra_keys:
+        extras.extend(tgt_multi[k])
+
+    all_entries = in_base + extras
+
+    # 3) prefix grouping (keep first-seen prefix order)
+    grouped: Dict[str, List[StringsEntry]] = {}
+    group_order: List[str] = []
+    for e in all_entries:
+        pref = prefix_of_key(e.key)
+        if pref not in grouped:
+            grouped[pref] = []
+            group_order.append(pref)
+        grouped[pref].append(e)
+
+    out: List[str] = tgt.header[:]
+    first = True
+    for pref in group_order:
+        if not first:
+            out.extend(["\n", "\n"])
+        first = False
+        for e in grouped[pref]:
+            out.extend(format_entry(e))
+
+    if tgt.tail:
+        if out and not out[-1].endswith("\n"):
+            out.append("\n")
+        out.extend(tgt.tail)
+
+    new_content = "".join(out)
+    old_content = target_file.read_text(encoding="utf-8", errors="replace")
+
+    changed = new_content != old_content
+    if changed and not dry:
+        target_file.write_text(new_content, encoding="utf-8")
+    return changed
+
+
+def sort_all(
+        *,
+        lang_root_dir: Path,
+        base_dir: Path,
+        base_files: List[Path],
+        locale_codes: List[str],
+        dry: bool,
+) -> Dict[str, int]:
+    total = 0
+    changed = 0
+    missing = 0
+
+    for code in locale_codes:
+        lproj = lang_root_dir / code_to_lproj(code)
+        for bf in base_files:
+            total += 1
+            target = lproj / bf.name
+            if not target.exists():
+                missing += 1
+                continue
+            if sort_one_file(base_dir / bf.name, target, dry):
+                changed += 1
+
+    return {"total": total, "changed": changed, "missing": missing}
+
+
+# =========================================================
+# Duplicate / Redundant helpers (batch confirm once)
+# =========================================================
+def find_duplicates(entries: List[StringsEntry]) -> Dict[str, List[int]]:
+    idx: Dict[str, List[int]] = {}
+    for i, e in enumerate(entries):
+        idx.setdefault(e.key, []).append(i)
+    return {k: v for k, v in idx.items() if len(v) > 1}
+
+
+def filter_entries_with_carry(parsed: ParsedStrings, keep_predicate) -> ParsedStrings:
+    new_entries: List[StringsEntry] = []
+    carry: List[str] = []
+
+    for e in parsed.entries:
+        keep = keep_predicate(e)
+        if keep:
+            if carry:
+                e = StringsEntry(
+                    key=e.key,
+                    value=e.value,
+                    comments=carry + e.comments,
+                    raw_before=e.raw_before,
+                )
+                carry = []
+            new_entries.append(e)
+        else:
+            carry.extend(e.comments)
+            carry.extend(e.raw_before)
+
+    new_tail = parsed.tail[:]
+    if carry:
+        new_tail = carry + new_tail
+    return ParsedStrings(parsed.header[:], new_entries, new_tail)
+
+
+def write_parsed_strings(path: Path, parsed: ParsedStrings, dry: bool) -> bool:
+    out: List[str] = []
+    out.extend(parsed.header)
+    for e in parsed.entries:
+        out.extend(format_entry(e))
+    out.extend(parsed.tail)
+
+    new_content = "".join(out)
+    old_content = path.read_text(encoding="utf-8", errors="replace")
+    changed = new_content != old_content
+    if changed and not dry:
+        path.write_text(new_content, encoding="utf-8")
+    return changed
+
+
+def collect_existing_target_files(
+        *,
+        lang_root_dir: Path,
+        base_files: List[Path],
+        locale_codes: List[str],
+) -> List[Path]:
+    out: List[Path] = []
+    for code in locale_codes:
+        lproj = lang_root_dir / code_to_lproj(code)
+        for bf in base_files:
+            p = lproj / bf.name
+            if p.exists():
+                out.append(p)
+    return out
+
+
+def dupcheck_report(files: List[Path]) -> Dict[str, Dict[str, int]]:
+    report: Dict[str, Dict[str, int]] = {}
+    for p in files:
+        parsed = parse_strings_file(p)
+        dups = find_duplicates(parsed.entries)
+        if dups:
+            report[str(p)] = {k: len(v) for k, v in dups.items()}
+    return report
+
+
+def dedupe_batch(files: List[Path], keep: str, dry: bool) -> Dict[str, int]:
+    changed_files = 0
+    for p in files:
+        parsed = parse_strings_file(p)
+        dups = find_duplicates(parsed.entries)
+        if not dups:
+            continue
+
+        if keep == "first":
+            seen: Set[str] = set()
+
+            def keep_pred(e: StringsEntry) -> bool:
+                if e.key in seen:
+                    return False
+                seen.add(e.key)
+                return True
+
+        else:
+            last_idx: Dict[str, int] = {}
+            for i, e in enumerate(parsed.entries):
+                last_idx[e.key] = i
+            cur = {"i": -1}
+
+            def keep_pred(e: StringsEntry) -> bool:
+                cur["i"] += 1
+                return last_idx.get(e.key) == cur["i"]
+
+        new_parsed = filter_entries_with_carry(parsed, keep_pred)
+        if write_parsed_strings(p, new_parsed, dry):
+            changed_files += 1
+
+    return {"changed_files": changed_files}
+
+
+def redundant_report(
+        *,
+        base_dir: Path,
+        base_files: List[Path],
+        targets: List[Path],
+) -> Dict[str, Dict[str, List[str]]]:
+    base_keys_map: Dict[str, Set[str]] = {}
+    for bf in base_files:
+        base_path = base_dir / bf.name
+        base_keys_map[bf.name] = {e.key for e in parse_strings_file(base_path).entries}
+
+    rep: Dict[str, Dict[str, List[str]]] = {}
+    for t in targets:
+        parsed = parse_strings_file(t)
+
+        # 找到该 target 对应的 base 文件名（按文件名）
+        base_name = t.name
+        base_keys = base_keys_map.get(base_name, set())
+
+        extra = sorted({e.key for e in parsed.entries if e.key not in base_keys}, key=str.lower)
+        if extra:
+            rep.setdefault(str(t), {})
+            rep[str(t)][base_name] = extra
+
+    return rep
+
+
+def clean_redundant_batch(report: Dict[str, Dict[str, List[str]]], dry: bool) -> Dict[str, int]:
+    changed_files = 0
+    removed_keys = 0
+
+    for file_path, per_base in report.items():
+        redundant_keys: Set[str] = set()
+        for _, ks in per_base.items():
+            redundant_keys.update(ks)
+
+        p = Path(file_path)
+        parsed = parse_strings_file(p)
+        new_parsed = filter_entries_with_carry(parsed, lambda e: e.key not in redundant_keys)
+
+        if write_parsed_strings(p, new_parsed, dry):
+            changed_files += 1
+        removed_keys += len(redundant_keys)
+
+    return {"changed_files": changed_files, "removed_keys": removed_keys, "files": len(report)}
+
+
+# =========================================================
+# Translation helpers
+# =========================================================
+def _get_api_key(passed: Optional[str]) -> Optional[str]:
+    if passed:
+        return passed
+    env = os.getenv("OPENAI_API_KEY", "").strip()
+    if env:
+        return env
+    s = input("未检测到 OPENAI_API_KEY。请输入 apiKey（直接回车取消翻译）: ").strip()
+    return s or None
+
+
+def _fmt_pct(n: int, total: int) -> str:
+    if total <= 0:
+        return "0.0%"
+    return f"{(n * 100.0 / total):5.1f}%"
+
+
+def _fmt_eta(elapsed_s: float, done: int, total: int) -> str:
+    if done <= 0 or total <= 0:
+        return "--:--"
+    remain = max(total - done, 0)
+    rate = elapsed_s / done
+    eta = int(remain * rate)
+    mm = eta // 60
+    ss = eta % 60
+    return f"{mm:02d}:{ss:02d}"
+
+
+def _prompt_for_target(cfg: Dict[str, Any], src_code: str, src_name_en: str, tgt_code: str, tgt_name_en: str) -> Optional[str]:
+    prompts = cfg.get("prompts") or {}
+    default_en = (prompts.get("default_en") or "").strip()
+    by_locale = prompts.get("by_locale_en") or {}
+    extra = (by_locale.get(tgt_code) or by_locale.get(tgt_code.replace("_", "-")) or "").strip()
+
+    guard = (
+        "You are translating UI strings for an iOS app.\n"
+        f"Source locale code: {src_code}\n"
+        f"Source language (English name): {src_name_en}\n"
+        f"Target locale code: {tgt_code}\n"
+        f"Target language (English name): {tgt_name_en}\n"
+        "Rules:\n"
+        f"- Output MUST be written in {tgt_name_en}.\n"
+        "- Do NOT output any other language.\n"
+        "- Do NOT output Chinese unless the target language is Chinese.\n"
+        "- Keep placeholders/variables/formatting tokens unchanged.\n"
+        "- Keep meaning accurate and natural for iOS UI.\n"
+    ).strip()
+
+    parts: List[str] = []
+    if default_en:
+        parts.append(default_en)
+    if extra:
+        parts.append(extra)
+    parts.append(guard)
+    combo = "\n\n".join(parts).strip()
+    return combo or None
+
+
+def _parsed_to_first_dict(parsed: ParsedStrings) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for e in parsed.entries:
+        if e.key not in out:
+            out[e.key] = e.value
+    return out
+
+
+def _update_or_append_entries(parsed: ParsedStrings, updates: Dict[str, str]) -> ParsedStrings:
+    if not updates:
+        return parsed
+
+    seen: Set[str] = set()
+    new_entries: List[StringsEntry] = []
+    for e in parsed.entries:
+        if e.key in updates and e.key not in seen:
+            seen.add(e.key)
+            new_entries.append(StringsEntry(e.key, updates[e.key], e.comments, e.raw_before))
+        else:
+            new_entries.append(e)
+
+    existing = {e.key for e in parsed.entries}
+    for k, v in updates.items():
+        if k not in existing:
+            new_entries.append(StringsEntry(k, v, [], []))
+
+    return ParsedStrings(parsed.header[:], new_entries, parsed.tail[:])
+
+
+def incremental_translate_one_file(
+        *,
+        cfg: Dict[str, Any],
+        api_key: str,
+        model: str,
+        src_file: Path,
+        src_name_en: str,
+        tgt_file: Path,
+        tgt_code: str,
+        tgt_name_en: str,
+        full: bool,
+        cleanup_extra: bool,
+        dry: bool,
+) -> Dict[str, int]:
+    src_parsed = parse_strings_file(src_file)
+    src_map = _parsed_to_first_dict(src_parsed)
+    if not src_map:
+        return {"needed": 0, "changed": 0}
+
+    tgt_parsed = parse_strings_file(tgt_file)
+    tgt_map = _parsed_to_first_dict(tgt_parsed)
+
+    if cleanup_extra:
+        tgt_map = {k: v for k, v in tgt_map.items() if k in src_map}
+
+    if full:
+        need = dict(src_map)
+    else:
+        need = {k: v for k, v in src_map.items() if (k not in tgt_map) or (str(tgt_map.get(k, "")).strip() == "")}
+
+    if not need:
+        return {"needed": 0, "changed": 0}
+
+    prompt_en = _prompt_for_target(cfg, src_code="(strings)", src_name_en=src_name_en, tgt_code=tgt_code, tgt_name_en=tgt_name_en)
+    translated = translate_flat_dict(
+        prompt_en=prompt_en,
+        src_dict=need,
+        src_lang=src_name_en,
+        tgt_locale=tgt_name_en,
+        model=model,
+        api_key=api_key,
+    )
+
+    new_parsed = _update_or_append_entries(tgt_parsed, translated)
+    changed = write_parsed_strings(tgt_file, new_parsed, dry)
+    return {"needed": len(need), "changed": 1 if changed else 0}
+
+
+def translate_batch(
+        *,
+        project_root: Path,
+        cfg: Dict[str, Any],
+        base_dir: Path,
+        base_files: List[Path],
+        lang_root_dir: Path,
+        src_dir: Path,
+        src_name_en: str,
+        targets: List[Dict[str, str]],
+        api_key: str,
+        model: str,
+        full: bool,
+        dry: bool,
+) -> Dict[str, int]:
+    cleanup_extra = bool(cfg["options"]["cleanup_extra_keys"])
+    effective_tasks = 0
+
+    # 预扫描：只统计 needed>0 的任务
+    for t in targets:
+        tgt_code = t["code"]
+        tgt_lproj = lang_root_dir / code_to_lproj(tgt_code)
+        ensure_dir(tgt_lproj, dry=True)
+        for bf in base_files:
+            src_file = src_dir / bf.name
+            if not src_file.exists():
+                continue
+            tgt_file = tgt_lproj / bf.name
+            ensure_file(tgt_file, dry=True)
+            r = incremental_translate_one_file(
+                cfg=cfg,
+                api_key=api_key,
+                model=model,
+                src_file=src_file,
+                src_name_en=src_name_en,
+                tgt_file=tgt_file,
+                tgt_code=tgt_code,
+                tgt_name_en=t["name_en"],
+                full=full,
+                cleanup_extra=cleanup_extra,
+                dry=True,
+            )
+            if r["needed"] > 0:
+                effective_tasks += 1
+
+    if effective_tasks == 0:
+        print("✅ 无需翻译：所有目标文件已齐全")
+        return {"effective_tasks": 0, "files_changed": 0, "keys_translated": 0}
+
+    print(f"🧮 有效任务数（需翻译）：{effective_tasks:,} 个；模式={'全量' if full else '增量'}；model={model}")
+    done = 0
+    changed_files = 0
+    translated_keys = 0
+    start = time.time()
+
+    for t in targets:
+        tgt_code = t["code"]
+        tgt_name_en = t["name_en"]
+        tgt_lproj = lang_root_dir / code_to_lproj(tgt_code)
+        ensure_dir(tgt_lproj, dry)
+
+        for bf in base_files:
+            src_file = src_dir / bf.name
+            if not src_file.exists():
+                continue
+            tgt_file = tgt_lproj / bf.name
+            ensure_file(tgt_file, dry)
+
+            r = incremental_translate_one_file(
+                cfg=cfg,
+                api_key=api_key,
+                model=model,
+                src_file=src_file,
+                src_name_en=src_name_en,
+                tgt_file=tgt_file,
+                tgt_code=tgt_code,
+                tgt_name_en=tgt_name_en,
+                full=full,
+                cleanup_extra=cleanup_extra,
+                dry=dry,
+            )
+            if r["needed"] <= 0:
+                continue
+
+            done += 1
+            translated_keys += int(r["needed"])
+            changed_files += int(r["changed"])
+
+            elapsed = time.time() - start
+            eta = _fmt_eta(elapsed, done, effective_tasks)
+            pct = _fmt_pct(done, effective_tasks)
+            flag = "+written" if r["changed"] else "nochange"
+            print(f"[{done:>4}/{effective_tasks:<4} | {pct} | ETA {eta}] {tgt_code}/{bf.name} need={r['needed']:<4} | {flag}")
+
+    elapsed = time.time() - start
+    mm, ss = divmod(int(elapsed), 60)
+    print(f"✅ 翻译完成：用时 {mm:02d}:{ss:02d}；有效任务 {effective_tasks:,}；改动文件 {changed_files:,}；翻译 keys {translated_keys:,}")
+    return {"effective_tasks": effective_tasks, "files_changed": changed_files, "keys_translated": translated_keys}
+
+
+# =========================================================
+# Doctor
+# =========================================================
+def doctor(cfg_path: Path, api_key: Optional[str], languages_path: Path, project_root: Path) -> None:
+    ok = True
+
+    if OpenAI is None:
+        ok = False
+        print("❌ OpenAI SDK 不可用：pipx: pipx inject box 'openai>=1.0.0'")
+    else:
+        print("✅ OpenAI SDK OK")
+
+    try:
+        _require_yaml()
+        print("✅ PyYAML OK")
+    except SystemExit as e:
+        ok = False
+        print(str(e).strip())
+
+    if not cfg_path.exists():
+        ok = False
+        print(f"❌ 未找到 {CONFIG_FILE}（请先 strings_i18n init）")
+        cfg = None
+    else:
+        try:
+            cfg = read_config(cfg_path)
+            print(f"✅ {CONFIG_FILE} OK（model={cfg.get('openAIModel')}）")
+        except Exception as e:
+            ok = False
+            cfg = None
+            print(f"❌ {CONFIG_FILE} 解析失败：{e}")
+
+    if not languages_path.exists():
+        ok = False
+        print(f"❌ 未找到 languages.json：{languages_path}")
+    else:
+        try:
+            langs = load_languages_json(languages_path)
+            print(f"✅ languages.json OK（{len(langs)} languages）")
+        except Exception as e:
+            ok = False
+            print(f"❌ languages.json 解析失败：{e}")
+
+    if cfg is not None:
+        try:
+            lang_root_dir, base_dir = project_paths(project_root, cfg)
+            if base_dir.exists() and base_dir.is_dir():
+                base_files = [p.name for p in scan_base_strings(base_dir)]
+                print(f"✅ Base.lproj OK（{len(base_files)} files: {', '.join(base_files)}）")
+            else:
+                ok = False
+                print(f"❌ Base 目录不存在：{base_dir}")
+        except Exception as e:
+            ok = False
+            print(f"❌ 目录结构检查失败：{e}")
+
+    ak = api_key or os.getenv("OPENAI_API_KEY")
+    if not ak:
+        print("⚠️ 未提供 API Key：--api-key 或环境变量 OPENAI_API_KEY（翻译时需要）")
+    else:
+        print("✅ API Key 已配置（来源：参数或环境变量）")
+
+    if not ok:
+        raise SystemExit(EXIT_BAD)
+    print("✅ doctor 完成")
+
+
+# =========================================================
+# Interactive (slang_i18n style)
+# =========================================================
+def _read_choice(prompt: str, valid: Iterable[str]) -> str:
+    valid_set = {v.lower() for v in valid}
+    while True:
+        s = input(prompt).strip().lower()
+        if s in valid_set:
+            return s
+        if s in ("q", "quit", "exit"):
+            return "0"
+        print(f"请输入 {' / '.join(sorted(valid_set))}（或 q 退出）")
+
+
 def choose_action_interactive() -> str:
-    print("请选择操作：")
-    print("1 - 核心语言增量翻译")
-    print("2 - 非核心语言增量翻译")
-    print("3 - 删除冗余字段")
-    print("4 - 排序语言文件")
+    print("=== strings_i18n 操作台 ===")
+    print("1 - doctor")
+    print("2 - scan（扫描 Base.lproj/*.strings）")
+    print("3 - sync（按 languages.json 补齐 *.lproj 与文件）")
+    print("4 - sort（按 Base 顺序排序所有语言文件）")
+    print("5 - dupcheck（重复 key 检查）")
+    print("6 - dedupe（删除重复 key）")
+    print("7 - check（冗余 key 检查：Base 没有但目标有）")
+    print("8 - clean（删除冗余 key）")
+    print("9 - translate-core（base_locale → core_locales）")
+    print("10 - translate-target（source_locale → target_locales）")
+    print("11 - init（生成 strings_i18n.yaml）")
     print("0 - 退出")
-
-    choice = input("请输入 0 / 1 / 2 / 3 / 4（或 q 退出）: ").strip().lower()
-
-    if choice == "0" or choice == "q":
+    choice = _read_choice("请输入 0 / 1 / ... / 11（或 q 退出）: ", valid=[str(i) for i in range(0, 12)])
+    if choice == "0":
         return "exit"
-    if choice == "1":
-        return "core_translation"
-    if choice == "2":
-        return "non_core_translation"
-    if choice == "3":
-        return "remove_redundant_fields"
-    if choice == "4":
-        return "sort_language_files"
+    return {
+        "1": "doctor",
+        "2": "scan",
+        "3": "sync",
+        "4": "sort",
+        "5": "dupcheck",
+        "6": "dedupe",
+        "7": "check",
+        "8": "clean",
+        "9": "translate-core",
+        "10": "translate-target",
+        "11": "init",
+    }[choice]
 
-    print("无效的输入，请重新选择。")
-    return choose_action_interactive()
 
-# 主函数，驱动程序逻辑
-def main() -> int:
-    config_path = "strings_i18n.yaml"
-    config = load_config(config_path)
-    action = choose_action_interactive()
+# =========================================================
+# CLI
+# =========================================================
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="strings_i18n",
+        description="iOS/Xcode .strings 多语言：扫描/同步/排序/重复&冗余清理/增量翻译（支持交互）",
+    )
+    p.add_argument(
+        "action",
+        nargs="?",
+        choices=[
+            "init",
+            "doctor",
+            "scan",
+            "sync",
+            "sort",
+            "dupcheck",
+            "dedupe",
+            "check",
+            "clean",
+            "translate-core",
+            "translate-target",
+        ],
+        help="动作（不填则进入交互菜单）",
+    )
+    p.add_argument("--config", default=CONFIG_FILE, help="配置文件路径（默认 strings_i18n.yaml）")
+    p.add_argument("--languages", default=LANG_FILE, help="languages.json 路径（默认 languages.json）")
+    p.add_argument("--project-root", default=".", help="项目根目录（默认当前目录）")
+    p.add_argument("--api-key", default=None, help="OpenAI API key（也可用环境变量 OPENAI_API_KEY）")
+    p.add_argument("--model", default=None, help=f"模型（命令行优先；不传则用配置 openAIModel；允许：{', '.join(ALLOWED_OPENAI_MODELS)}）")
+    p.add_argument("--full", action="store_true", help="全量翻译（默认增量）")
+    p.add_argument("--yes", action="store_true", help="删除时跳过确认（clean/dedupe）")
+    p.add_argument("--keep", default="first", choices=["first", "last"], help="dedupe 保留策略（默认 first）")
+    p.add_argument("--no-exitcode-3", action="store_true", help="check/dupcheck 发现问题时仍返回 0（默认返回 3）")
+    p.add_argument("--dry-run", action="store_true", help="预览模式（不写入文件）")
+    return p
 
-    if action == "exit":
-        print("退出程序。")
-        return 0
 
-    # 根据选择的操作执行不同功能
-    if action == "core_translation":
-        incremental_translate(config, Path("./i18n"), api_key="YOUR_OPENAI_API_KEY")
-    elif action == "non_core_translation":
-        incremental_translate(config, Path("./i18n"), api_key="YOUR_OPENAI_API_KEY")
-    elif action == "remove_redundant_fields":
-        remove_redundant_fields(config, Path("./i18n"))
-    elif action == "sort_language_files":
-        sort_language_files(Path("./i18n"))
+def _cfg_one(cfg: Dict[str, Any], key: str) -> Dict[str, str]:
+    lst = cfg.get(key)
+    if not isinstance(lst, list) or not lst or not isinstance(lst[0], dict):
+        raise ValueError(f"配置缺少或格式错误：{key}（需要 list[dict] 且至少 1 个）")
+    if not lst[0].get("code") or not lst[0].get("name_en"):
+        raise ValueError(f"配置 {key}[0] 需要包含 code 与 name_en")
+    return {"code": str(lst[0]["code"]).strip(), "name_en": str(lst[0]["name_en"]).strip()}
 
-    return 0
+
+def _cfg_list(cfg: Dict[str, Any], key: str) -> List[Dict[str, str]]:
+    lst = cfg.get(key, [])
+    if not isinstance(lst, list):
+        raise ValueError(f"配置字段格式错误：{key}（需要 list）")
+    out: List[Dict[str, str]] = []
+    for it in lst:
+        if isinstance(it, dict) and it.get("code") and it.get("name_en"):
+            out.append({"code": str(it["code"]).strip(), "name_en": str(it["name_en"]).strip()})
+    return out
+
+
+def _pick_model(args_model: Optional[str], cfg: Dict[str, Any]) -> str:
+    m = (args_model or "").strip() or str(cfg.get("openAIModel") or "").strip() or OpenAIModel.GPT_4O.value
+    if m not in set(ALLOWED_OPENAI_MODELS):
+        raise ValueError(f"❌ model 不合法：{m!r}，可选：{', '.join(ALLOWED_OPENAI_MODELS)}")
+    return m
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    args = build_parser().parse_args(argv)
+
+    project_root = Path(args.project_root).expanduser().resolve()
+    cfg_path = Path(args.config).expanduser()
+    if not cfg_path.is_absolute():
+        cfg_path = project_root / cfg_path
+
+    languages_path = Path(args.languages).expanduser()
+    if not languages_path.is_absolute():
+        languages_path = project_root / languages_path
+
+    action = args.action
+    interactive = False
+    if not action:
+        interactive = True
+        action = choose_action_interactive()
+        if action == "exit":
+            return EXIT_OK
+
+    if action == "init":
+        try:
+            init_config(cfg_path, project_root=project_root, languages_path=languages_path)
+            return EXIT_OK
+        except Exception as e:
+            print(str(e))
+            return EXIT_BAD
+
+    if action == "doctor":
+        try:
+            doctor(cfg_path, api_key=args.api_key, languages_path=languages_path, project_root=project_root)
+            return EXIT_OK
+        except SystemExit as e:
+            return int(getattr(e, "code", EXIT_BAD))
+        except Exception as e:
+            print(str(e))
+            return EXIT_BAD
+
+    # below require cfg + project structure
+    try:
+        cfg = read_config_or_throw(cfg_path)
+    except Exception as e:
+        print(str(e))
+        return EXIT_BAD
+
+    # model selection: CLI > config > default
+    try:
+        model = _pick_model(args.model, cfg)
+    except Exception as e:
+        print(str(e))
+        return EXIT_BAD
+
+    # paths
+    try:
+        lang_root_dir, base_dir = project_paths(project_root, cfg)
+        base_files = scan_base_strings(base_dir)
+    except Exception as e:
+        print(str(e))
+        return EXIT_BAD
+
+    # languages.json
+    try:
+        langs = load_languages_json(languages_path)
+        all_codes = [x["code"] for x in langs]
+    except Exception as e:
+        print(str(e))
+        return EXIT_BAD
+
+    dry = bool(args.dry_run)
+
+    if action == "scan":
+        print(f"✅ Base 目录：{base_dir}")
+        print("✅ Base 文件清单：")
+        for p in base_files:
+            print(f"  • {p.name}")
+        return EXIT_OK
+
+    if action == "sync":
+        try:
+            result = sync_language_dirs_and_files(
+                lang_root_dir=lang_root_dir,
+                base_files=base_files,
+                locale_codes=all_codes,
+                dry=dry,
+            )
+            if result["created_dirs"]:
+                print("➕ 创建目录：")
+                for d in result["created_dirs"]:
+                    print(f"  • {d}")
+            if result["created_files"]:
+                print("➕ 创建文件：")
+                for f in result["created_files"]:
+                    print(f"  • {f}")
+            print(f"✅ 已存在：目录 {result['existing_dirs']:,}；文件 {result['existing_files']:,}")
+            if dry:
+                print("（dry-run：未写入）")
+            return EXIT_OK
+        except Exception as e:
+            print(f"❌ sync 失败：{e}")
+            return EXIT_FAIL
+
+    if action == "sort":
+        try:
+            res = sort_all(
+                lang_root_dir=lang_root_dir,
+                base_dir=base_dir,
+                base_files=base_files,
+                locale_codes=all_codes,
+                dry=dry,
+            )
+            print(f"✅ sort 完成：处理 {res['total']:,}；改动 {res['changed']:,}；缺失 {res['missing']:,}")
+            if dry:
+                print("（dry-run：未写入）")
+            return EXIT_OK
+        except Exception as e:
+            print(f"❌ sort 失败：{e}")
+            return EXIT_FAIL
+
+    # build existing target list for dup/redundant
+    existing_targets = collect_existing_target_files(
+        lang_root_dir=lang_root_dir,
+        base_files=base_files,
+        locale_codes=all_codes,
+    )
+
+    if action == "dupcheck":
+        try:
+            rep = dupcheck_report(existing_targets)
+            if not rep:
+                print("✅ 未发现重复 key")
+                return EXIT_OK
+
+            files_n = len(rep)
+            groups_n = sum(len(v) for v in rep.values())
+            print(f"⚠️ 发现重复：涉及 {files_n} 个文件，共 {groups_n} 组重复 key")
+            for fp, m in sorted(rep.items(), key=lambda kv: (-len(kv[1]), kv[0].lower())):
+                items = sorted(m.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+                show = items[:20]
+                print(f"\n- {fp}（{len(items)} 组）")
+                for k, c in show:
+                    print(f"  • {k}  x{c}")
+                if len(items) > len(show):
+                    print(f"  ... 另外还有 {len(items) - len(show)} 组未显示")
+
+            if args.no_exitcode_3:
+                return EXIT_OK
+            return EXIT_FOUND
+        except Exception as e:
+            print(f"❌ dupcheck 失败：{e}")
+            return EXIT_FAIL
+
+    if action == "dedupe":
+        try:
+            rep = dupcheck_report(existing_targets)
+            if not rep:
+                print("✅ 未发现重复 key")
+                return EXIT_OK
+
+            # 一次性确认
+            if not args.yes:
+                ans = _read_choice("确认批量删除以上重复 key？请输入 1 删除 / 0 取消: ", valid=["0", "1"])
+                if ans != "1":
+                    print("🧊 已取消")
+                    return EXIT_OK
+
+            targets = [Path(p) for p in rep.keys()]
+            r = dedupe_batch(targets, keep=args.keep, dry=dry)
+            print(f"✅ dedupe 完成：改动文件 {r['changed_files']:,}（keep={args.keep}）")
+            if dry:
+                print("（dry-run：未写入）")
+            return EXIT_OK
+        except Exception as e:
+            print(f"❌ dedupe 失败：{e}")
+            return EXIT_FAIL
+
+    if action == "check":
+        try:
+            rep = redundant_report(base_dir=base_dir, base_files=base_files, targets=existing_targets)
+            if not rep:
+                print("✅ 未发现冗余 key（Base 没有但目标有）")
+                return EXIT_OK
+
+            files_n = len(rep)
+            keys_n = sum(len(ks) for per_base in rep.values() for ks in per_base.values())
+            print(f"⚠️ 发现冗余 key：涉及 {files_n} 个文件，共 {keys_n} 个冗余 key")
+            for fp, per_base in sorted(rep.items(), key=lambda kv: (-sum(len(ks) for ks in kv[1].values()), kv[0].lower())):
+                total_keys = sum(len(ks) for ks in per_base.values())
+                print(f"\n- {fp}（{total_keys} 个冗余 key）")
+                for base_name, ks in per_base.items():
+                    show = ks[:20]
+                    for k in show:
+                        print(f"  • {k}")
+                    if len(ks) > len(show):
+                        print(f"  ... 另外还有 {len(ks) - len(show)} 个未显示")
+
+            if args.no_exitcode_3:
+                return EXIT_OK
+            return EXIT_FOUND
+        except Exception as e:
+            print(f"❌ check 失败：{e}")
+            return EXIT_FAIL
+
+    if action == "clean":
+        try:
+            rep = redundant_report(base_dir=base_dir, base_files=base_files, targets=existing_targets)
+            if not rep:
+                print("✅ 未发现冗余 key")
+                return EXIT_OK
+
+            # 一次性确认
+            keys_n = sum(len(ks) for per_base in rep.values() for ks in per_base.values())
+            if not args.yes:
+                ans = _read_choice(f"确认批量删除以上 {len(rep)} 个文件中的 {keys_n} 个冗余 key？请输入 1 删除 / 0 取消: ", valid=["0", "1"])
+                if ans != "1":
+                    print("🧊 已取消")
+                    return EXIT_OK
+
+            r = clean_redundant_batch(rep, dry=dry)
+            print(f"✅ clean 完成：改动文件 {r['changed_files']:,}；删除 key {r['removed_keys']:,}")
+            if dry:
+                print("（dry-run：未写入）")
+            return EXIT_OK
+        except Exception as e:
+            print(f"❌ clean 失败：{e}")
+            return EXIT_FAIL
+
+    if action == "translate-core":
+        try:
+            base_locale = _cfg_one(cfg, "base_locale")
+            core_locales = _cfg_list(cfg, "core_locales")
+            if not core_locales:
+                print("❌ core_locales 为空（配置错误）")
+                return EXIT_BAD
+
+            api_key = _get_api_key(args.api_key)
+            if not api_key:
+                print("❌ 未提供 API Key（翻译需要）")
+                return EXIT_BAD
+
+            full = bool(args.full) or not bool(cfg["options"]["incremental_translate"])
+            translate_batch(
+                project_root=project_root,
+                cfg=cfg,
+                base_dir=base_dir,
+                base_files=base_files,
+                lang_root_dir=lang_root_dir,
+                src_dir=base_dir,
+                src_name_en=base_locale["name_en"],
+                targets=core_locales,
+                api_key=api_key,
+                model=model,
+                full=full,
+                dry=dry,
+            )
+            return EXIT_OK
+        except TranslationError as e:
+            print(f"❌ TranslationError: {e}")
+            return EXIT_FAIL
+        except Exception as e:
+            print(f"❌ translate-core 失败：{e}")
+            return EXIT_FAIL
+
+    if action == "translate-target":
+        try:
+            source_locale = _cfg_one(cfg, "source_locale")
+            target_locales = _cfg_list(cfg, "target_locales")
+            if not target_locales:
+                print("❌ target_locales 为空（配置错误）")
+                return EXIT_BAD
+
+            api_key = _get_api_key(args.api_key)
+            if not api_key:
+                print("❌ 未提供 API Key（翻译需要）")
+                return EXIT_BAD
+
+            src_code = source_locale["code"]
+            src_dir = lang_root_dir / code_to_lproj(src_code)
+            if not src_dir.exists() or not src_dir.is_dir():
+                print(f"❌ 源语言目录不存在：{src_dir}")
+                return EXIT_BAD
+
+            full = bool(args.full) or not bool(cfg["options"]["incremental_translate"])
+            translate_batch(
+                project_root=project_root,
+                cfg=cfg,
+                base_dir=base_dir,
+                base_files=base_files,
+                lang_root_dir=lang_root_dir,
+                src_dir=src_dir,
+                src_name_en=source_locale["name_en"],
+                targets=target_locales,
+                api_key=api_key,
+                model=model,
+                full=full,
+                dry=dry,
+            )
+            return EXIT_OK
+        except TranslationError as e:
+            print(f"❌ TranslationError: {e}")
+            return EXIT_FAIL
+        except Exception as e:
+            print(f"❌ translate-target 失败：{e}")
+            return EXIT_FAIL
+
+    print(f"❌ 未知 action：{action}")
+    return EXIT_BAD
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\n已取消。")
+        raise SystemExit(130)

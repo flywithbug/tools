@@ -50,7 +50,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 - **[`translate`](#box_tools-translate-ai_translate)**：OpenAI 翻译/JSON 工具底座：平铺 JSON 翻译（key 不变、只翻 value、占位符守护）+ 环境自检（文档缺失：`src/box_tools/translate/ai_translate.md`）
 - **[`slang_i18n`](#box_tools-translate-slang_i18n)**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）（[文档](src/box_tools/translate/slang_i18n.md)）
-- **[`strings_i18n`](#box_tools-translate-strings_i18n)**：iOS 项目多语言翻译工具，支持增量翻译、冗余检查、排序等功能（[文档](src/box_tools/translate/strings_i18n.md)）
+- **[`strings_i18n`](#box_tools-translate-strings_i18n)**：iOS/Xcode .strings 多语言：扫描/同步/排序/重复与冗余清理/增量翻译（支持交互）（[文档](src/box_tools/translate/strings_i18n.md)）
 
 ---
 
@@ -356,7 +356,7 @@ slang_i18n translate --api-key $OPENAI_API_KEY
 
 ### strings_i18n
 
-**简介**：iOS 项目多语言翻译工具，支持增量翻译、冗余检查、排序等功能
+**简介**：iOS/Xcode .strings 多语言：扫描/同步/排序/重复与冗余清理/增量翻译（支持交互）
 
 **命令**：`strings_i18n`
 
@@ -366,25 +366,28 @@ slang_i18n translate --api-key $OPENAI_API_KEY
 strings_i18n
 strings_i18n init
 strings_i18n doctor
+strings_i18n scan
+strings_i18n sync
 strings_i18n sort
+strings_i18n dupcheck
+strings_i18n dedupe --yes --keep first
 strings_i18n check
 strings_i18n clean --yes
-strings_i18n translate --api-key $OPENAI_API_KEY
+strings_i18n translate-core --api-key $OPENAI_API_KEY
+strings_i18n translate-target --api-key $OPENAI_API_KEY
 ```
 
 **参数说明**
 
-- `--api-key`：OpenAI API key（可通过环境变量传递）
-- `--model`：指定翻译模型（默认为 gpt-4o）
-- `--full`：全量翻译（默认增量翻译）
-- `--yes`：clean 删除冗余时跳过确认
-- `--no-exitcode-3`：check 发现冗余时仍返回 0（默认返回 3）
-
-**示例**
-
-- `strings_i18n init`：生成 strings_i18n.yaml 配置文件
-- `strings_i18n translate --api-key $OPENAI_API_KEY`：增量翻译缺失的 keys
-- `strings_i18n clean --yes`：删除所有冗余 key（不询问）
+- `--config`：配置文件路径（默认 strings_i18n.yaml）
+- `--languages`：languages.json 路径（默认 languages.json）
+- `--api-key`：OpenAI API key（也可用环境变量 OPENAI_API_KEY）
+- `--model`：模型（命令行优先；不传则用配置 openAIModel；默认 gpt-4o）
+- `--full`：全量翻译（默认增量：只补缺失/空值 key）
+- `--yes`：clean/dedupe 删除时跳过确认
+- `--keep`：dedupe 保留策略：first/last（默认 first）
+- `--no-exitcode-3`：check/dupcheck 发现问题时仍返回 0（默认返回 3）
+- `--dry-run`：预览模式（不写入文件）
 
 **文档**
 
