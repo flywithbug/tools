@@ -996,6 +996,7 @@ def translate_batch(
         model: str,
         full: bool,
         dry: bool,
+        src_code: Optional[str] = None,
 ) -> Dict[str, int]:
     cleanup_extra = bool(cfg["options"]["cleanup_extra_keys"])
     effective_tasks = 0
@@ -1031,7 +1032,14 @@ def translate_batch(
         print("✅ 无需翻译：所有目标文件已齐全")
         return {"effective_tasks": 0, "files_changed": 0, "keys_translated": 0}
 
-    print(f"🧮 有效任务数（需翻译）：{effective_tasks:,} 个；模式={'全量' if full else '增量'}；model={model}")
+    # 显示翻译任务概览
+    src_display = src_code if src_code else "Base.lproj"
+    mode_text = "全量" if full else "增量"
+    print(f"\n🌍 翻译任务：{src_display} ({src_name_en}) → "
+          f"{len(targets)} 个目标语言")
+    print(f"🧮 有效任务数（需翻译）：{effective_tasks:,} 个；"
+          f"模式={mode_text}；model={model}")
+
     done = 0
     changed_files = 0
     translated_keys = 0
@@ -1073,12 +1081,21 @@ def translate_batch(
             elapsed = time.time() - start
             eta = _fmt_eta(elapsed, done, effective_tasks)
             pct = _fmt_pct(done, effective_tasks)
-            flag = "+written" if r["changed"] else "nochange"
-            print(f"[{done:>4}/{effective_tasks:<4} | {pct} | ETA {eta}] {tgt_code}/{bf.name} need={r['needed']:<4} | {flag}")
+            flag = "已写入" if r["changed"] else "无变化"
+            print(
+                f"[{done:>4}/{effective_tasks:<4} | {pct} | 预计剩余 {eta}] "
+                f"{src_display} → {tgt_code} ({tgt_name_en}) / {bf.name} | "
+                f"需翻译={r['needed']:<4} | {flag}"
+            )
 
     elapsed = time.time() - start
     mm, ss = divmod(int(elapsed), 60)
-    print(f"✅ 翻译完成：用时 {mm:02d}:{ss:02d}；有效任务 {effective_tasks:,}；改动文件 {changed_files:,}；翻译 keys {translated_keys:,}")
+    print(
+        f"\n✅ 翻译完成：用时 {mm:02d}:{ss:02d}；"
+        f"有效任务 {effective_tasks:,} 个；"
+        f"改动文件 {changed_files:,} 个；"
+        f"翻译 keys {translated_keys:,} 个"
+    )
     return {"effective_tasks": effective_tasks, "files_changed": changed_files, "keys_translated": translated_keys}
 
 
@@ -1501,7 +1518,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print("❌ 未提供 API Key（翻译需要）")
                 return EXIT_BAD
 
-            full = bool(args.full) or not bool(cfg["options"]["incremental_translate"])
+            full = bool(args.full) or not bool(
+                cfg["options"]["incremental_translate"]
+            )
+
+            # 显示翻译任务信息
+            print("\n📋 翻译任务：base_locale → core_locales")
+            print(f"   源语言：Base.lproj ({base_locale['name_en']})")
+            print(f"   目标语言：{len(core_locales)} 个核心语言")
+            for core in core_locales:
+                print(f"     - {core['code']} ({core['name_en']})")
+
             translate_batch(
                 project_root=project_root,
                 cfg=cfg,
@@ -1515,6 +1542,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 model=model,
                 full=full,
                 dry=dry,
+                src_code="Base.lproj",
             )
             return EXIT_OK
         except TranslationError as e:
@@ -1543,7 +1571,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"❌ 源语言目录不存在：{src_dir}")
                 return EXIT_BAD
 
-            full = bool(args.full) or not bool(cfg["options"]["incremental_translate"])
+            full = bool(args.full) or not bool(
+                cfg["options"]["incremental_translate"]
+            )
+
+            # 显示翻译任务信息
+            print("\n📋 翻译任务：source_locale → target_locales")
+            print(f"   源语言：{src_code} ({source_locale['name_en']})")
+            print(f"   目标语言：{len(target_locales)} 个目标语言")
+            for tgt in target_locales:
+                print(f"     - {tgt['code']} ({tgt['name_en']})")
+
             translate_batch(
                 project_root=project_root,
                 cfg=cfg,
@@ -1557,6 +1595,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 model=model,
                 full=full,
                 dry=dry,
+                src_code=src_code,
             )
             return EXIT_OK
         except TranslationError as e:
