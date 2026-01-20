@@ -17,28 +17,28 @@ BOX_TOOL = {
     "id": "flutter.pub_upgrade",
     "name": "pub_upgrade",
     "category": "flutter",
-    "summary": "升级 pubspec.yaml 中的私服 hosted/url 依赖（比对清单 + 确认；release 分支可选跟随 x.y.*）",
+    "summary": "升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）",
     "usage": [
         "pub_upgrade",
         "pub_upgrade --yes",
         "pub_upgrade --no-commit",
-        "pub_upgrade --follow-release",
-        "pub_upgrade --no-follow-release",
         "pub_upgrade --private-host dart.cloudsmith.io",
         "pub_upgrade --private-host dart.cloudsmith.io --private-host my.private.repo",
+        "pub_upgrade --skip ap_recaptcha --skip some_pkg",
     ],
     "options": [
         {"flag": "--yes", "desc": "跳过确认，直接执行升级"},
         {"flag": "--no-commit", "desc": "只更新依赖与 lock，不执行 git commit/push"},
-        {"flag": "--follow-release", "desc": "在 release-x.y 分支：仅升级到 x.y.*（并允许从更低版本升上来）"},
-        {"flag": "--no-follow-release", "desc": "在 release-x.y 分支：不跟随 x.y.*，走“非 release 分支策略”"},
-        {"flag": "--private-host", "desc": "私服 hosted url 关键字（可多次指定）。默认 dart.cloudsmith.io"},
+        {
+            "flag": "--private-host",
+            "desc": "私服 hosted url 关键字（可多次指定）。默认不过滤：任何 hosted/url 都算私有依赖",
+        },
         {"flag": "--skip", "desc": "跳过某些包名（可多次指定）"},
     ],
     "examples": [
         {"cmd": "pub_upgrade", "desc": "默认交互：比对 -> 展示清单 -> 确认升级"},
         {"cmd": "pub_upgrade --yes --no-commit", "desc": "直接升级（不提交）"},
-        {"cmd": "pub_upgrade --follow-release", "desc": "release 分支严格跟随 x.y.*"},
+        {"cmd": "pub_upgrade --private-host my.private.repo", "desc": "仅升级 url 含关键词的 hosted 私有依赖"},
     ],
     "docs": "src/box_tools/flutter/pub_upgrade.md",
 }
@@ -48,7 +48,7 @@ BOX_TOOL = {
 class UpgradeItem:
     name: str
     current: str
-    latest: str
+    latest: str  # 这里表示“选定的目标版本”，不一定是 pub 的 latest
 
 
 # =======================
@@ -122,6 +122,7 @@ def is_valid_version(version) -> bool:
     if not isinstance(version, str):
         return False
     v = version.strip()
+    # 允许：^1.2.3、1.2.3、1.2.3+build、1.2.3-pre、1.2.3-pre+build
     return bool(re.fullmatch(r"^\^?[0-9]+(?:\.[0-9]+)*(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$", v))
 
 
@@ -156,11 +157,54 @@ def major_of(v: str) -> int:
     return parts[0] if parts else 0
 
 
-def minor_prefix_of_branch(branch_name: str) -> str | None:
-    m = re.match(r"release-(\d+)\.(\d+)", branch_name)
-    if not m:
+def read_pubspec_app_version(pubspec_path: str = "pubspec.yaml") -> str | None:
+    """
+    读取 pubspec.yaml 顶层 version: 字段
+    支持：
+      version: 3.45.0+2026011900
+      version: 3.45.3
+    """
+    p = Path(pubspec_path)
+    if not p.exists():
         return None
-    return f"{m.group(1)}.{m.group(2)}"
+
+    for raw in p.read_text(encoding="utf-8").splitlines():
+        # 顶层 version 一般无缩进；这里容忍前导空格
+        m = re.match(
+            r"^\s*version:\s*([0-9]+(?:\.[0-9]+){1,3}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\s*$",
+            raw,
+        )
+        if m:
+            v = m.group(1).strip()
+            return v if is_valid_version(v) else None
+    return None
+
+
+def upper_bound_of_minor(app_version: str) -> str | None:
+    """
+    给定 app_version（例如 3.45.1 或 3.45.0+xxxx）
+    返回严格上界：下一 minor 的 0（例如 3.46.0）
+    规则：依赖允许升级到 < upper_bound（不能等于或超过）
+    """
+    if not is_valid_version(app_version):
+        return None
+    parts = _version_parts(app_version)
+    if len(parts) < 2:
+        return None
+    major, minor = parts[0], parts[1]
+    return f"{major}.{minor + 1}.0"
+
+
+def version_lt(v: str, upper: str) -> bool:
+    return compare_versions(_strip_meta(v), _strip_meta(upper)) < 0
+
+
+def pick_best_below_upper(candidates: list[str], upper: str) -> str | None:
+    ok = [c for c in candidates if c and is_valid_version(c) and version_lt(c, upper)]
+    if not ok:
+        return None
+    ok.sort(key=lambda x: _version_parts(x))
+    return ok[-1]
 
 
 # =======================
@@ -178,6 +222,7 @@ def _run_outdated_json() -> tuple[str, str, int]:
         proc = subprocess.run(cmd, capture_output=True, text=True)
         out = proc.stdout or ""
         err = proc.stderr or ""
+        # 有些环境把 json 打 stderr；所以只要有内容就尝试解析
         if proc.returncode == 0 and (out.strip() or err.strip()):
             return out, err, proc.returncode
         last_out, last_err, last_code = out, err, proc.returncode
@@ -223,7 +268,22 @@ def _parse_outdated_json(stdout: str, stderr: str) -> dict:
     raise SystemExit(1)
 
 
-def get_outdated_map() -> dict[str, tuple[str, str]]:
+def get_outdated_map() -> dict[str, dict[str, str]]:
+    """
+    返回：
+      {
+        "pkg": {
+           "current": "...",
+           "upgradable": "...",
+           "resolvable": "...",
+           "latest": "..."
+        }
+      }
+
+    说明：
+    - 为了满足“< next minor (exclusive)”的需求，不能只看 latest；
+      需要在 upgradable/resolvable/latest 里选一个最优且满足上限的目标。
+    """
     raw_out, raw_err, code = _run_outdated_json()
     if code != 0:
         print("❌ `pub outdated --json` 执行失败。")
@@ -235,16 +295,25 @@ def get_outdated_map() -> dict[str, tuple[str, str]]:
 
     data = _parse_outdated_json(raw_out, raw_err)
 
-    m: dict[str, tuple[str, str]] = {}
+    def norm(x) -> str:
+        return str(x).strip() if is_valid_version(x) else ""
+
+    m: dict[str, dict[str, str]] = {}
     for pkg_info in data.get("packages", []):
         name = (pkg_info.get("package") or "").strip()
         if not name:
             continue
-        current = (pkg_info.get("current") or {}).get("version")
-        latest = (pkg_info.get("latest") or {}).get("version")
-        if not (is_valid_version(current) and is_valid_version(latest)):
+
+        cur = norm((pkg_info.get("current") or {}).get("version"))
+        if not cur:
             continue
-        m[name] = (str(current), str(latest))
+
+        upg = norm((pkg_info.get("upgradable") or {}).get("version"))
+        res = norm((pkg_info.get("resolvable") or {}).get("version"))
+        lat = norm((pkg_info.get("latest") or {}).get("version"))
+
+        m[name] = {"current": cur, "upgradable": upg, "resolvable": res, "latest": lat}
+
     return m
 
 
@@ -252,6 +321,9 @@ def get_outdated_map() -> dict[str, tuple[str, str]]:
 # pubspec helpers (private hosted/url detection + block update)
 # =======================
 def _extract_dependency_blocks(lines: list[str]) -> list[tuple[str, list[str], str]]:
+    """
+    提取 dependencies / dev_dependencies / dependency_overrides 三个 section 下的“每个依赖块”
+    """
     blocks: list[tuple[str, list[str], str]] = []
     in_section = False
     section = ""
@@ -267,7 +339,7 @@ def _extract_dependency_blocks(lines: list[str]) -> list[tuple[str, list[str], s
         block = []
 
     for line in lines:
-        msec = re.match(r"^(dependencies|dependency_overrides):\s*$", line)
+        msec = re.match(r"^(dependencies|dev_dependencies|dependency_overrides):\s*$", line)
         if msec:
             flush()
             in_section = True
@@ -277,12 +349,14 @@ def _extract_dependency_blocks(lines: list[str]) -> list[tuple[str, list[str], s
         if not in_section:
             continue
 
+        # section 结束：遇到非空且不以两个空格缩进的行
         if line.strip() != "" and not re.match(r"^ {2}", line):
             flush()
             in_section = False
             section = ""
             continue
 
+        # 新依赖块开始
         if re.match(r"^ {2}\S+:", line):
             flush()
             block.append(line)
@@ -307,10 +381,14 @@ def _private_hosted_url(block: list[str]) -> str | None:
 
 
 def _is_private_hosted_dep(block: list[str], private_host_keywords: tuple[str, ...]) -> bool:
+    """
+    私有组件定义：
+    - 只要是 hosted + url，就认为是“私有 hosted/url 依赖”
+    - 若用户传了 --private-host 关键词，则需 url 命中任一关键词
+    """
     url = _private_hosted_url(block)
     if not url:
         return False
-    # 如果没有关键词过滤，则只要 hosted/url 就算私服
     if not private_host_keywords:
         return True
     return any(kw in url for kw in private_host_keywords if kw)
@@ -370,11 +448,12 @@ def apply_upgrades_to_pubspec(pubspec_file: str, upgrades: list[UpgradeItem]) ->
         dep = current_dep
         if dep and dep in upgrade_map:
             u = upgrade_map[dep]
+            # u.latest 是选定目标；写入时去掉 + / - 元信息
             target = _strip_meta(u.latest)
             b2, oldv, written = _apply_version_in_block(current_block, target)
             new_lines.extend(b2)
 
-            if oldv and written and compare_versions(oldv, written) < 0:
+            if oldv and written and compare_versions(_strip_meta(oldv), _strip_meta(written)) < 0:
                 changed = True
                 summary_lines.append(f"🔄 {dep}: {oldv} → {written}")
         else:
@@ -384,7 +463,7 @@ def apply_upgrades_to_pubspec(pubspec_file: str, upgrades: list[UpgradeItem]) ->
         current_dep = None
 
     for line in lines:
-        msec = re.match(r"^(dependencies|dependency_overrides):\s*$", line)
+        msec = re.match(r"^(dependencies|dev_dependencies|dependency_overrides):\s*$", line)
         if msec:
             flush_block()
             in_section = True
@@ -454,25 +533,19 @@ def flutter_pub_get():
 
 
 # =======================
-# Planning logic (your rules)
+# Planning logic (new rules)
 # =======================
-def choose_follow_release_interactive(prefix: str) -> bool:
-    print(f"检测到当前为 release 分支，目标次版本为：{prefix}.*")
-    ans = input(f"是否跟随 {prefix}.* 升级？(y/N): ").strip().lower()
-    return ans in ("y", "yes")
-
-
 def build_private_upgrade_plan(
         *,
-        follow_release: bool,
-        release_prefix: str | None,
         private_host_keywords: tuple[str, ...],
         skip_packages: set[str],
+        upper_bound: str | None,
 ) -> list[UpgradeItem]:
     """
-    只升级“私服 hosted/url 依赖”，规则：
-    - release 且 follow_release=True：只允许升级到 release_prefix.*（允许从更低版本升上来）
-    - 非 release：只升级小版本，不升级大版本（latest.major > current.major 则跳过）
+    只升级“私有 hosted/url 依赖”，规则：
+    - upper_bound 存在：只允许升级到 < upper_bound（例如 app 3.45.* 则 < 3.46.0）
+      允许依赖版本高于 app version（例如 app 3.45.1，依赖可升到 3.45.10）
+    - upper_bound 不存在：退化为“不升级依赖大版本”
     """
     pubspec = Path("pubspec.yaml")
     lines = pubspec.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -489,25 +562,45 @@ def build_private_upgrade_plan(
     outdated = get_outdated_map()
 
     plan: list[UpgradeItem] = []
-    for name, (cur, lat) in outdated.items():
+    for name, info in outdated.items():
         if name in skip_packages:
             continue
         if name not in pubspec_deps:
             continue
         if name not in private_deps:
             continue
-        if compare_versions(cur, lat) >= 0:
+
+        cur = info.get("current", "")
+        if not cur:
             continue
 
-        if follow_release and release_prefix:
-            if not _strip_meta(lat).startswith(release_prefix + "."):
+        # 候选：优先可达版本（upgradable/resolvable），latest 做兜底
+        candidates = [
+            info.get("upgradable", ""),
+            info.get("resolvable", ""),
+            info.get("latest", ""),
+        ]
+
+        if upper_bound:
+            target = pick_best_below_upper(candidates, upper_bound)
+            if not target:
+                continue
+        else:
+            target = ""
+            for c in candidates:
+                if not c:
+                    continue
+                if major_of(c) > major_of(cur):
+                    continue
+                if (not target) or compare_versions(target, c) < 0:
+                    target = c
+            if not target:
                 continue
 
-        if not (follow_release and release_prefix):
-            if major_of(lat) > major_of(cur):
-                continue
+        if compare_versions(cur, target) >= 0:
+            continue
 
-        plan.append(UpgradeItem(name=name, current=cur, latest=lat))
+        plan.append(UpgradeItem(name=name, current=cur, latest=target))
 
     plan.sort(key=lambda x: x.name)
     return plan
@@ -517,7 +610,7 @@ def print_plan(plan: list[UpgradeItem]):
     if not plan:
         print("ℹ️ 未发现可升级依赖。")
         return
-    print("发现以下可升级依赖：")
+    print("发现以下可升级依赖（latest 表示选定目标版本）：")
     for u in plan:
         print(f"  - {u.name}: {u.current} -> {u.latest}")
 
@@ -533,20 +626,17 @@ def confirm_apply() -> bool:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pub_upgrade",
-        description="升级 Flutter 私服 hosted/url 依赖版本（比对清单 + 确认；release 分支可选跟随 x.y.*）",
+        description="升级 Flutter 私有 hosted/url 依赖版本（比对清单 + 确认；依赖升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）",
     )
     p.add_argument("--yes", action="store_true", help="跳过确认，直接执行升级")
     p.add_argument("commit_message", nargs="?", default="up deps", help="Git 提交信息（默认 up deps）")
     p.add_argument("--no-commit", action="store_true", help="只更新依赖但不提交到 Git")
-    grp = p.add_mutually_exclusive_group()
-    grp.add_argument("--follow-release", action="store_true", help="release 分支：跟随 release 次版本号（x.y.*）")
-    grp.add_argument("--no-follow-release", action="store_true", help="release 分支：不跟随（走非 release 策略）")
 
     p.add_argument(
         "--private-host",
         action="append",
         default=[],
-        help="私服 hosted url 关键字（可多次指定）。默认 dart.cloudsmith.io",
+        help="私服 hosted url 关键字（可多次指定）。默认不过滤：任何 hosted/url 都算私有依赖",
     )
     p.add_argument(
         "--skip",
@@ -565,7 +655,8 @@ def main(argv: list[str] | None = None) -> int:
         print("❌ 当前目录未找到 pubspec.yaml，请在项目根目录运行。")
         return 1
 
-    private_host_keywords = tuple(args.private_host) if args.private_host else ("dart.cloudsmith.io",)
+    # 默认不过滤域名：只要 hosted + url 就算私有组件
+    private_host_keywords = tuple(args.private_host) if args.private_host else tuple()
     skip_packages = set(args.skip) if args.skip else {"ap_recaptcha"}
 
     branch = get_current_branch()
@@ -573,27 +664,18 @@ def main(argv: list[str] | None = None) -> int:
 
     flutter_pub_get()
 
-    release_prefix = minor_prefix_of_branch(branch)
-    follow_release = False
+    app_version = read_pubspec_app_version("pubspec.yaml")
+    upper = upper_bound_of_minor(app_version) if app_version else None
 
-    if release_prefix:
-        if args.follow_release:
-            follow_release = True
-        elif args.no_follow_release:
-            follow_release = False
-        else:
-            follow_release = choose_follow_release_interactive(release_prefix)
-
-        if follow_release:
-            print(f"📦 follow-release: 仅升级到 {release_prefix}.*（允许从更低版本升上来）")
-        else:
-            print("📦 release 分支但不跟随：按非 release 策略（不升级大版本）")
+    if app_version and upper:
+        print(f"📌 项目版本：{app_version}，依赖升级上限：<{upper}（允许升到同 minor 的最新 patch）")
+    else:
+        print("⚠️ 未能解析 pubspec.yaml 的 version，将退化为：不升级依赖大版本。")
 
     plan = build_private_upgrade_plan(
-        follow_release=follow_release,
-        release_prefix=release_prefix,
         private_host_keywords=private_host_keywords,
         skip_packages=skip_packages,
+        upper_bound=upper,
     )
 
     print()
@@ -630,4 +712,3 @@ if __name__ == "__main__":
         # Ctrl+C：优雅退出，不打印 traceback
         print("\n已取消。")
         raise SystemExit(130)  # 130 = SIGINT 的惯例退出码
-
