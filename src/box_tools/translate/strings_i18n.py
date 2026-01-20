@@ -992,6 +992,39 @@ def _parsed_to_first_dict(parsed: ParsedStrings) -> Dict[str, str]:
     return out
 
 
+def _needed_keys_count(
+        *,
+        src_file: Path,
+        tgt_file: Path,
+        full: bool,
+        cleanup_extra: bool,
+) -> int:
+    """仅计算需要翻译的 key 数量（不调用翻译、用于预扫描排队）。
+
+    - tgt_file 不存在时按空文件处理
+    - cleanup_extra=true 时会先忽略目标文件中 Base 没有的 key
+    """
+    src_parsed = parse_strings_file(src_file)
+    src_map = _parsed_to_first_dict(src_parsed)
+    if not src_map:
+        return 0
+
+    if tgt_file.exists():
+        tgt_parsed = parse_strings_file(tgt_file)
+        tgt_map = _parsed_to_first_dict(tgt_parsed)
+    else:
+        tgt_map = {}
+
+    if cleanup_extra:
+        tgt_map = {k: v for k, v in tgt_map.items() if k in src_map}
+
+    if full:
+        return len(src_map)
+
+    need = [k for k, v in src_map.items() if (k not in tgt_map) or (str(tgt_map.get(k, "")).strip() == "")]
+    return len(need)
+
+
 def _update_or_append_entries(parsed: ParsedStrings, updates: Dict[str, str]) -> ParsedStrings:
     if not updates:
         return parsed
@@ -1032,7 +1065,15 @@ def incremental_translate_one_file(
     if not src_map:
         return {"needed": 0, "changed": 0}
 
-    tgt_parsed = parse_strings_file(tgt_file)
+    # 目标文件不存在时：自动创建（或在 dry-run 下按空文件处理），无需用户先 sync。
+    if not tgt_file.exists():
+        if not dry:
+            tgt_file.parent.mkdir(parents=True, exist_ok=True)
+            tgt_file.write_text("", encoding="utf-8")
+        tgt_parsed = ParsedStrings(header=[], entries=[], tail=[])
+    else:
+        tgt_parsed = parse_strings_file(tgt_file)
+
     tgt_map = _parsed_to_first_dict(tgt_parsed)
 
     if cleanup_extra:
@@ -1092,22 +1133,9 @@ def translate_batch(
             if not src_file.exists():
                 continue
             tgt_file = tgt_lproj / bf.name
-            ensure_file(tgt_file, dry=True)
-            r = incremental_translate_one_file(
-                cfg=cfg,
-                api_key=api_key,
-                model=model,
-                src_file=src_file,
-                src_name_en=src_name_en,
-                tgt_file=tgt_file,
-                tgt_code=tgt_code,
-                tgt_name_en=t["name_en"],
-                full=full,
-                cleanup_extra=cleanup_extra,
-                dry=True,
-            )
-            if r["needed"] > 0:
-                task_queue.append((t, bf, r["needed"]))
+            needed = _needed_keys_count(src_file=src_file, tgt_file=tgt_file, full=full, cleanup_extra=cleanup_extra)
+            if needed > 0:
+                task_queue.append((t, bf, needed))
 
     effective_tasks = len(task_queue)
     if effective_tasks == 0:
