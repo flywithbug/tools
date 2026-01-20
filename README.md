@@ -42,7 +42,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### flutter
 
 - **[`pub_publish`](#box_tools-flutter-pub_publish)**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）（[文档](src/box_tools/flutter/pub_publish.md)）
-- **[`pub_upgrade`](#box_tools-flutter-pub_upgrade)**：升级 pubspec.yaml 中的私服 hosted/url 依赖（比对清单 + 确认；release 分支可选跟随 x.y.*）（[文档](src/box_tools/flutter/pub_upgrade.md)）
+- **[`pub_upgrade`](#box_tools-flutter-pub_upgrade)**：升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）（[文档](src/box_tools/flutter/pub_upgrade.md)）
 - **[`pub_version`](#box_tools-flutter-pub_version)**：升级 pubspec.yaml 的 version（支持交互选择 minor/patch）（[文档](src/box_tools/flutter/pub_version.md)）
 - **[`riverpod_gen`](#box_tools-flutter-riverpod_gen)**：生成 Riverpod StateNotifier + State 模板文件（notifier/state）（[文档](src/box_tools/flutter/riverpod_gen.md)）
 
@@ -163,7 +163,7 @@ pub_publish --msg hotfix --dry-run
 
 ### pub_upgrade
 
-**简介**：升级 pubspec.yaml 中的私服 hosted/url 依赖（比对清单 + 确认；release 分支可选跟随 x.y.*）
+**简介**：升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）
 
 **命令**：`pub_upgrade`
 
@@ -173,26 +173,23 @@ pub_publish --msg hotfix --dry-run
 pub_upgrade
 pub_upgrade --yes
 pub_upgrade --no-commit
-pub_upgrade --follow-release
-pub_upgrade --no-follow-release
 pub_upgrade --private-host dart.cloudsmith.io
 pub_upgrade --private-host dart.cloudsmith.io --private-host my.private.repo
+pub_upgrade --skip ap_recaptcha --skip some_pkg
 ```
 
 **参数说明**
 
 - `--yes`：跳过确认，直接执行升级
 - `--no-commit`：只更新依赖与 lock，不执行 git commit/push
-- `--follow-release`：在 release-x.y 分支：仅升级到 x.y.*（并允许从更低版本升上来）
-- `--no-follow-release`：在 release-x.y 分支：不跟随 x.y.*，走“非 release 分支策略”
-- `--private-host`：私服 hosted url 关键字（可多次指定）。默认 dart.cloudsmith.io
+- `--private-host`：私服 hosted url 关键字（可多次指定）。默认不过滤：任何 hosted/url 都算私有依赖
 - `--skip`：跳过某些包名（可多次指定）
 
 **示例**
 
 - `pub_upgrade`：默认交互：比对 -> 展示清单 -> 确认升级
 - `pub_upgrade --yes --no-commit`：直接升级（不提交）
-- `pub_upgrade --follow-release`：release 分支严格跟随 x.y.*
+- `pub_upgrade --private-host my.private.repo`：仅升级 url 含关键词的 hosted 私有依赖
 
 **文档**
 
