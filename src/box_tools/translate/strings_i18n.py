@@ -64,6 +64,7 @@ BOX_TOOL = {
     "summary": "iOS/Xcode .strings 多语言：扫描/同步/排序/重复与冗余清理/增量翻译（支持交互）",
     "usage": [
         "strings_i18n",
+        "strings_i18n options",
         "strings_i18n init",
         "strings_i18n doctor",
         "strings_i18n scan",
@@ -600,6 +601,30 @@ def prefix_of_key(key: str) -> str:
     return key.split(".", 1)[0] if "." in key else key
 
 
+def _group_entries_by_prefix(entries: List[StringsEntry]) -> Dict[str, List[StringsEntry]]:
+    grouped: Dict[str, List[StringsEntry]] = {}
+    for e in entries:
+        pref = prefix_of_key(e.key)
+        grouped.setdefault(pref, []).append(e)
+    return grouped
+
+
+def sort_base_file_inplace(base_file: Path, dry: bool) -> bool:
+    """对 Base.lproj 下的单个 *.strings 做：按前缀分组、组名排序、组内按 key 排序；保留注释/空行。"""
+    parsed = parse_strings_file(base_file)
+    if not parsed.entries:
+        return False
+
+    grouped = _group_entries_by_prefix(parsed.entries)
+    prefix_order = sorted(grouped.keys(), key=str.lower)
+    out_entries: List[StringsEntry] = []
+    for pref in prefix_order:
+        out_entries.extend(sorted(grouped[pref], key=lambda e: e.key.lower()))
+
+    new_parsed = ParsedStrings(parsed.header[:], out_entries, parsed.tail[:])
+    return write_parsed_strings(base_file, new_parsed, dry)
+
+
 def format_entry(e: StringsEntry) -> List[str]:
     return e.comments + e.raw_before + [f'"{e.key}" = "{e.value}";\n']
 
@@ -670,6 +695,12 @@ def sort_all(
         locale_codes: List[str],
         dry: bool,
 ) -> Dict[str, int]:
+    # 0) 先把 Base.lproj 自己的文件排序好（按前缀分组 + 组名/组内排序），为后续语言提供稳定顺序。
+    base_changed = 0
+    for bf in base_files:
+        if sort_base_file_inplace(base_dir / bf.name, dry):
+            base_changed += 1
+
     total = 0
     changed = 0
     missing = 0
@@ -685,7 +716,7 @@ def sort_all(
             if sort_one_file(base_dir / bf.name, target, dry):
                 changed += 1
 
-    return {"total": total, "changed": changed, "missing": missing}
+    return {"total": total, "changed": changed, "missing": missing, "base_changed": base_changed}
 
 
 # =========================================================
@@ -874,6 +905,14 @@ def _fmt_eta(elapsed_s: float, done: int, total: int) -> str:
     mm = eta // 60
     ss = eta % 60
     return f"{mm:02d}:{ss:02d}"
+
+
+def _fmt_locale_names(locales: List[Dict[str, str]], *, max_show: int = 10) -> str:
+    names = [str(x.get("name_en", "")).strip() for x in locales if str(x.get("name_en", "")).strip()]
+    if len(names) <= max_show:
+        return ", ".join(names)
+    head = ", ".join(names[:max_show])
+    return f"{head} ...（共 {len(names)} 个）"
 
 
 def _prompt_for_target(cfg: Dict[str, Any], src_code: str, src_name_en: str, tgt_code: str, tgt_name_en: str) -> Optional[str]:
@@ -1403,35 +1442,23 @@ def choose_action_interactive(project_root: Path, cfg_path: Path) -> str:
     exists_flag = "✅ 已存在" if l10n_path.exists() else "➕ 将生成"
 
     print("=== strings_i18n 操作台 ===")
-    print("1 - doctor")
-    print("2 - scan（扫描 Base.lproj/*.strings）")
-    print("3 - sync（按 languages.json 补齐 *.lproj 与文件）")
-    print("4 - sort（按 Base 顺序排序所有语言文件）")
-    print("5 - dupcheck（重复 key 检查）")
-    print("6 - dedupe（删除重复 key）")
-    print("7 - check（冗余 key 检查：Base 没有但目标有）")
-    print("8 - clean（删除冗余 key）")
-    print("9 - translate-core（base_locale → core_locales）")
-    print("10 - translate-target（source_locale → target_locales）")
-    print(f"11 - gen-l10n（从 Base.lproj/Localizable.strings 生成 L10n.swift：{exists_flag}）")
-    print("12 - init（生成 strings_i18n.yaml）")
-    print("0 - 退出")
-    choice = _read_choice("请输入 0 / 1 / ... / 12（或 q 退出）: ", valid=[str(i) for i in range(0, 13)])
+    print(f"1 - gen-l10n（生成 L10n.swift：{exists_flag}）")
+    print("2 - sort（先排序 Base：保留注释、按前缀分组；再按 Base 顺序排序其它语言）")
+    print("3 - translate-core（增量翻译：base_locale → core_locales；打印 {{base_locale.name_en}} → {{core_locales.name_en 列表}}）")
+    print("4 - translate-target（增量翻译：source_locale → target_locales；目标超过 10 个截断并显示总数）")
+    print("5 - cleanup（清理重复/冗余字段：Base 重复 key 列出；其它语言冗余 key 全列并提示是否删除）")
+    print("6 - doctor（检查环境/配置/目录结构）")
+    print("0 / q - 退出")
+    choice = _read_choice("请输入 0 / 1 / ... / 6（或 q 退出）: ", valid=[str(i) for i in range(0, 7)])
     if choice == "0":
         return "exit"
     return {
-        "1": "doctor",
-        "2": "scan",
-        "3": "sync",
-        "4": "sort",
-        "5": "dupcheck",
-        "6": "dedupe",
-        "7": "check",
-        "8": "clean",
-        "9": "translate-core",
-        "10": "translate-target",
-        "11": "gen-l10n",
-        "12": "init",
+        "1": "gen-l10n",
+        "2": "sort",
+        "3": "translate-core",
+        "4": "translate-target",
+        "5": "cleanup",
+        "6": "doctor",
     }[choice]
 
 
@@ -1447,6 +1474,7 @@ def build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         choices=[
+            "options",
             "init",
             "doctor",
             "scan",
@@ -1456,6 +1484,7 @@ def build_parser() -> argparse.ArgumentParser:
             "dedupe",
             "check",
             "clean",
+            "cleanup",
             "translate-core",
             "translate-target",
             "gen-l10n",
@@ -1474,6 +1503,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="预览模式（不写入文件）")
     p.add_argument("--l10n-out", default=None, help="L10n.swift 输出路径（默认写入 {lang_root}/L10n.swift；可传相对 project-root 的路径）")
     return p
+
+
+def print_cli_options() -> None:
+    """打印命令行用法与主要选项（用于 CI / README 复制粘贴）。"""
+    print("=== strings_i18n CLI 用法 ===")
+    for u in BOX_TOOL.get("usage", []):
+        print(f"  $ {u}")
+
+    print("\n=== 通用选项 ===")
+    for opt in BOX_TOOL.get("options", []):
+        flag = opt.get("flag", "")
+        desc = opt.get("desc", "")
+        if flag:
+            print(f"  {flag:<16} {desc}")
+
+    print("\n（提示）每个 action 都支持 --dry-run 预览；check/dupcheck 默认在发现问题时返回 exit code 3。")
 
 
 def _cfg_one(cfg: Dict[str, Any], key: str) -> Dict[str, str]:
@@ -1532,6 +1577,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(str(e))
             return EXIT_BAD
 
+    if action == "options":
+        print_cli_options()
+        return EXIT_OK
+
     if action == "doctor":
         try:
             doctor(cfg_path, api_key=args.api_key, languages_path=languages_path, project_root=project_root)
@@ -1573,6 +1622,79 @@ def main(argv: Optional[List[str]] = None) -> int:
         return EXIT_BAD
 
     dry = bool(args.dry_run)
+
+    if action == "cleanup":
+        # 目标文件：所有语言（除 Base 目录外），存在的 *.strings
+        try:
+            target_files = collect_existing_target_files(
+                lang_root_dir=lang_root_dir,
+                base_files=base_files,
+                locale_codes=all_codes,
+            )
+        except Exception as e:
+            print(f"❌ cleanup 失败：{e}")
+            return EXIT_FAIL
+
+        # 1) 重复 key：至少包含 Base；也把目标语言一起检查，避免“只修 Base 结果别处还炸”
+        base_paths = [base_dir / bf.name for bf in base_files]
+        dup_files = base_paths + target_files
+        dup_rep = dupcheck_report(dup_files)
+        if dup_rep:
+            print("=== 重复 key（含 Base）===")
+            for fp, items in dup_rep.items():
+                print(f"\n• {fp}")
+                for k, cnt in sorted(items.items(), key=lambda x: x[0].lower()):
+                    print(f"  - {k}  (重复 {cnt} 次)")
+
+            do_dedupe = bool(args.yes)
+            if not args.yes:
+                ans = input(f"\n发现重复 key。是否要立即删除重复项（保留 {args.keep}）？输入 y 删除，其他键仅检查：").strip().lower()
+                do_dedupe = ans in ("y", "yes", "1")
+
+            if do_dedupe:
+                stats = dedupe_batch(dup_files, keep=str(args.keep), dry=dry)
+                if dry:
+                    print("（dry-run：未写入）")
+                print(f"✅ dedupe 完成：改动文件 {stats['changed_files']} 个（保留 {args.keep}）")
+        else:
+            print("✅ 未发现重复 key（含 Base）")
+
+        # 2) 冗余 key：Base 没有但目标有（全部列出）
+        red_rep = redundant_report(base_dir=base_dir, base_files=base_files, targets=target_files)
+        if red_rep:
+            print("\n=== 冗余 key（Base 没有但目标有）===")
+            total_files = 0
+            total_keys = 0
+            for fp, per_base in red_rep.items():
+                total_files += 1
+                for _, ks in per_base.items():
+                    total_keys += len(ks)
+                print(f"\n• {fp}")
+                # per_base 的 key 是 base 文件名（通常只有一个）
+                for _, ks in per_base.items():
+                    for k in ks:
+                        print(f"  - {k}")
+
+            do_delete = bool(args.yes)
+            if not args.yes:
+                ans = input("\n发现冗余 key。是否要立即删除？输入 y 删除，其他键仅检查：").strip().lower()
+                do_delete = ans in ("y", "yes", "1")
+
+            if do_delete:
+                stats = clean_redundant_batch(red_rep, dry=dry)
+                if dry:
+                    print("（dry-run：未写入）")
+                print(
+                    f"✅ clean 完成：改动文件 {stats['changed_files']} / {stats['files']}，删除冗余 key {stats['removed_keys']} 个"
+                )
+        else:
+            print("\n✅ 未发现冗余 key（Base 没有但目标有）")
+
+        # 重复/冗余默认都属于“发现问题”
+        found = bool(dup_rep) or bool(red_rep)
+        if found and not bool(args.no_exitcode_3):
+            return EXIT_FOUND
+        return EXIT_OK
 
     if action == "gen-l10n":
         try:
@@ -1629,7 +1751,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 locale_codes=all_codes,
                 dry=dry,
             )
-            print(f"✅ sort 完成：处理 {res['total']:,}；改动 {res['changed']:,}；缺失 {res['missing']:,}")
+            print(
+                f"✅ sort 完成：Base 改动 {res.get('base_changed', 0):,} 个文件；"
+                f"其它语言处理 {res['total']:,}；改动 {res['changed']:,}；缺失 {res['missing']:,}"
+            )
             if dry:
                 print("（dry-run：未写入）")
             return EXIT_OK
@@ -1643,17 +1768,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         base_files=base_files,
         locale_codes=all_codes,
     )
+    base_paths_for_check = [base_dir / bf.name for bf in base_files if (base_dir / bf.name).exists()]
 
     if action == "dupcheck":
         try:
-            rep = dupcheck_report(existing_targets)
+            rep = dupcheck_report(base_paths_for_check + existing_targets)
             if not rep:
                 print("✅ 未发现重复 key")
                 return EXIT_OK
 
             files_n = len(rep)
             groups_n = sum(len(v) for v in rep.values())
-            print(f"⚠️ 发现重复：涉及 {files_n} 个文件，共 {groups_n} 组重复 key")
+            print(f"⚠️ 发现重复：涉及 {files_n} 个文件（包含 Base），共 {groups_n} 组重复 key")
             for fp, m in sorted(rep.items(), key=lambda kv: (-len(kv[1]), kv[0].lower())):
                 items = sorted(m.items(), key=lambda kv: (-kv[1], kv[0].lower()))
                 show = items[:20]
@@ -1708,11 +1834,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                 total_keys = sum(len(ks) for ks in per_base.values())
                 print(f"\n- {fp}（{total_keys} 个冗余 key）")
                 for base_name, ks in per_base.items():
-                    show = ks[:20]
-                    for k in show:
+                    # 需求：全部列出（避免误删）
+                    for k in ks:
                         print(f"  • {k}")
-                    if len(ks) > len(show):
-                        print(f"  ... 另外还有 {len(ks) - len(show)} 个未显示")
+
+            # 需求：在 check 中直接提示是否要删除
+            ans = _read_choice("\n是否立即删除以上冗余 key？请输入 1 删除 / 0 仅检查: ", valid=["0", "1"])
+            if ans == "1":
+                r = clean_redundant_batch(rep, dry=dry)
+                print(f"✅ 已删除冗余 key：改动文件 {r['changed_files']:,}；删除 key {r['removed_keys']:,}")
+                if dry:
+                    print("（dry-run：未写入）")
+                return EXIT_OK
 
             if args.no_exitcode_3:
                 return EXIT_OK
@@ -1764,10 +1897,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             # 显示翻译任务信息
             print("\n📋 翻译任务：base_locale → core_locales")
-            print(f"   源语言：Base.lproj ({base_locale['name_en']})")
-            print(f"   目标语言：{len(core_locales)} 个核心语言")
-            for core in core_locales:
-                print(f"     - {core['code']} ({core['name_en']})")
+            print(f"   源语言：Base.lproj | {base_locale['name_en']}")
+            print(f"   目标语言（核心）：{_fmt_locale_names(core_locales, max_show=999)}")
 
             translate_batch(
                 project_root=project_root,
@@ -1817,10 +1948,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             # 显示翻译任务信息
             print("\n📋 翻译任务：source_locale → target_locales")
-            print(f"   源语言：{src_code} ({source_locale['name_en']})")
-            print(f"   目标语言：{len(target_locales)} 个目标语言")
-            for tgt in target_locales:
-                print(f"     - {tgt['code']} ({tgt['name_en']})")
+            print(f"   源语言：{src_code} | {source_locale['name_en']}")
+            print(f"   目标语言（其它）：{_fmt_locale_names(target_locales, max_show=10)}")
 
             translate_batch(
                 project_root=project_root,
