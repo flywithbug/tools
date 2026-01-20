@@ -597,6 +597,22 @@ def parse_strings_file(path: Path) -> ParsedStrings:
     return ParsedStrings(header, entries, tail)
 
 
+def _is_blank_line(line: str) -> bool:
+    """Return True if the line is empty/whitespace-only (including a lone newline)."""
+    return line.strip() == ""
+
+
+def _strip_blank_lines(lines: List[str]) -> List[str]:
+    """Remove ALL blank lines.
+
+    Sorting is expected to be idempotent. To avoid accumulating more and more
+    empty lines on repeated sorts, we first strip all blank lines and then
+    re-insert *controlled* spacing (e.g., one blank line between Base prefix
+    groups).
+    """
+    return [ln for ln in lines if not _is_blank_line(ln)]
+
+
 def prefix_of_key(key: str) -> str:
     return key.split(".", 1)[0] if "." in key else key
 
@@ -610,7 +626,15 @@ def _group_entries_by_prefix(entries: List[StringsEntry]) -> Dict[str, List[Stri
 
 
 def sort_base_file_inplace(base_file: Path, dry: bool) -> bool:
-    """对 Base.lproj 下的单个 *.strings 做：按前缀分组、组名排序、组内按 key 排序；保留注释/空行。"""
+    """对 Base.lproj 下的单个 *.strings 做排序（幂等：重复执行不会累积空行）。
+
+    规则：
+    - 读取时先移除所有空行（避免每次 sort 都多出一行）
+    - 按 key 前缀分组（prefix = key.split('.',1)[0]）
+    - 组名排序、组内按 key 排序
+    - 不同组之间仅插入 1 行空行
+    - 注释必须紧贴在对应 key 的上方
+    """
     parsed = parse_strings_file(base_file)
     if not parsed.entries:
         return False
@@ -619,7 +643,8 @@ def sort_base_file_inplace(base_file: Path, dry: bool) -> bool:
     grouped = _group_entries_by_prefix(parsed.entries)
     prefix_order = sorted(grouped.keys(), key=str.lower)
 
-    out: List[str] = parsed.header[:]
+    # 先去掉所有空行，再按规则插入“受控空行”
+    out: List[str] = _strip_blank_lines(parsed.header[:])
     first_group = True
     for pref in prefix_order:
         if not first_group:
@@ -631,10 +656,11 @@ def sort_base_file_inplace(base_file: Path, dry: bool) -> bool:
         for e in group_entries:
             out.extend(format_entry(e))
 
-    if parsed.tail:
+    tail = _strip_blank_lines(parsed.tail[:])
+    if tail:
         if out and not out[-1].endswith("\n"):
             out.append("\n")
-        out.extend(parsed.tail)
+        out.extend(tail)
 
     new_content = "".join(out)
     old_content = base_file.read_text(encoding="utf-8", errors="replace")
@@ -646,8 +672,10 @@ def sort_base_file_inplace(base_file: Path, dry: bool) -> bool:
 
 def format_entry(e: StringsEntry) -> List[str]:
     # 约定：注释必须贴在 key 上方。
-    # raw_before 通常是空行/杂项，应该放在“注释块之前”，避免出现“注释在上，但 key 在更下面”的视觉断裂。
-    return e.raw_before + e.comments + [f'"{e.key}" = "{e.value}";\n']
+    # 为了让 sort 结果幂等（重复执行不会越排越多空行），这里不输出 raw_before。
+    # raw_before 往往包含空行/杂项，保留下来会与我们插入的分组空行叠加。
+    comments = _strip_blank_lines(e.comments[:])
+    return comments + [f'"{e.key}" = "{e.value}";\n']
 
 
 def sort_one_file(base_file: Path, target_file: Path, dry: bool) -> bool:
@@ -675,17 +703,19 @@ def sort_one_file(base_file: Path, target_file: Path, dry: bool) -> bool:
 
     # 3) 目标语言：不需要前缀分组、不需要组间间隔。
     #    只按 Base key 顺序输出（包含重复 key 的“原样搬运”），最后追加 extras（按 key 排序）。
-    out: List[str] = tgt.header[:]
+    # 先移除所有空行，避免重复 sort 累积空行
+    out: List[str] = _strip_blank_lines(tgt.header[:])
     for e in (in_base + extras):
         # 目标语言：不做分组/不加间隔，也不保留 raw_before 的空行噪声；
         # 但保留“紧贴在 key 上方”的注释。
-        out.extend(e.comments)
+        out.extend(_strip_blank_lines(e.comments[:]))
         out.append(f'"{e.key}" = "{e.value}";\n')
 
-    if tgt.tail:
+    tail = _strip_blank_lines(tgt.tail[:])
+    if tail:
         if out and not out[-1].endswith("\n"):
             out.append("\n")
-        out.extend(tgt.tail)
+        out.extend(tail)
 
     new_content = "".join(out)
     old_content = target_file.read_text(encoding="utf-8", errors="replace")
@@ -1256,11 +1286,11 @@ def _comments_to_doc(lines: List[str]) -> List[str]:
 
 
 def generate_l10n_swift(
-        *,
-        project_root: Path,
-        cfg: Dict[str, Any],
-        out_path_arg: Optional[str],
-        dry: bool,
+    *,
+    project_root: Path,
+    cfg: Dict[str, Any],
+    out_path_arg: Optional[str],
+    dry: bool,
 ) -> Path:
     lang_root_dir, base_dir = project_paths(project_root, cfg)
     src = base_dir / "Localizable.strings"
