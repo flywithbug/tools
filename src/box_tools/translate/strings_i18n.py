@@ -45,6 +45,63 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+import threading
+import itertools
+
+
+class Spinner:
+    """轻量 CLI loading 动画（避免用户误以为卡死）。
+
+    - 仅在 TTY 下显示旋转动画；非 TTY（如 CI）只打印起止信息。
+    - 用法：with Spinner('翻译中'): ...
+    """
+
+    def __init__(self, text: str = '处理中', interval: float = 0.12) -> None:
+        self.text = text
+        self.interval = interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._enabled = bool(getattr(sys.stdout, 'isatty', lambda: False)())
+
+    def start(self) -> None:
+        if not self._enabled:
+            print(f'⏳ {self.text}…')
+            return
+
+        def _run() -> None:
+            for ch in itertools.cycle('⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'):
+                if self._stop.is_set():
+                    break
+                sys.stdout.write(f'\r{ch} {self.text}…')
+                sys.stdout.flush()
+                self._stop.wait(self.interval)
+            # 清理当前行
+            sys.stdout.write('\r' + ' ' * (len(self.text) + 6) + '\r')
+            sys.stdout.flush()
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
+    def stop(self, *, done_text: Optional[str] = None) -> None:
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+        if not self._enabled:
+            if done_text:
+                print(f'✅ {done_text}')
+            return
+        if done_text:
+            print(done_text)
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.stop()
+        return False
+
+
 try:
     from openai import OpenAI  # noqa: F401
 except Exception:
@@ -1088,14 +1145,15 @@ def incremental_translate_one_file(
         return {"needed": 0, "changed": 0}
 
     prompt_en = _prompt_for_target(cfg, src_code="(strings)", src_name_en=src_name_en, tgt_code=tgt_code, tgt_name_en=tgt_name_en)
-    translated = translate_flat_dict(
+    with Spinner(f'翻译中：{src_file.name} → {tgt_code} ({tgt_name_en})'):
+        translated = translate_flat_dict(
         prompt_en=prompt_en,
         src_dict=need,
         src_lang=src_name_en,
         tgt_locale=tgt_name_en,
         model=model,
         api_key=api_key,
-    )
+        )
 
     new_parsed = _update_or_append_entries(tgt_parsed, translated)
     changed = write_parsed_strings(tgt_file, new_parsed, dry)
