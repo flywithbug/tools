@@ -624,7 +624,7 @@ def sort_base_file_inplace(base_file: Path, dry: bool) -> bool:
     for pref in prefix_order:
         if not first_group:
             # 组间间隔：两行空行（与之前目标语言分组的视觉一致，但只用于 Base）
-            out.extend(["\n", "\n"])
+            out.extend(["\n",])
         first_group = False
 
         group_entries = sorted(grouped[pref], key=lambda e: e.key.lower())
