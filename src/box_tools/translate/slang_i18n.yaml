@@ -15,6 +15,8 @@
 # - gpt-4.1-mini
 openAIModel: gpt-4o
 
+i18nDir: i18n
+
 # 源语言（结构化：code + 英文语言名）
 source_locale:
   code: en

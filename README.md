@@ -361,6 +361,7 @@ slang_i18n translate --api-key $OPENAI_API_KEY
 
 ```bash
 strings_i18n
+strings_i18n options
 strings_i18n init
 strings_i18n doctor
 strings_i18n scan
@@ -372,6 +373,7 @@ strings_i18n check
 strings_i18n clean --yes
 strings_i18n translate-core --api-key $OPENAI_API_KEY
 strings_i18n translate-target --api-key $OPENAI_API_KEY
+strings_i18n gen-l10n
 ```
 
 **参数说明**

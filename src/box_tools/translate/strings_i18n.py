@@ -41,11 +41,11 @@ import os
 import re
 import sys
 import time
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-import threading
 import itertools
 
 
@@ -62,21 +62,30 @@ class Spinner:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._enabled = bool(getattr(sys.stdout, 'isatty', lambda: False)())
+        self._start_ts: Optional[float] = None
 
     def start(self) -> None:
         if not self._enabled:
             print(f'⏳ {self.text}…')
             return
 
+        self._start_ts = time.time()
+
         def _run() -> None:
             for ch in itertools.cycle('⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'):
                 if self._stop.is_set():
                     break
-                sys.stdout.write(f'\r{ch} {self.text}…')
+                # live timer
+                elapsed = 0
+                if self._start_ts is not None:
+                    elapsed = max(int(time.time() - self._start_ts), 0)
+                mm = elapsed // 60
+                ss = elapsed % 60
+                sys.stdout.write(f'\r{ch} {self.text}…（已耗时 {mm:02d}:{ss:02d}）')
                 sys.stdout.flush()
                 self._stop.wait(self.interval)
             # 清理当前行
-            sys.stdout.write('\r' + ' ' * (len(self.text) + 6) + '\r')
+            sys.stdout.write('\r' + ' ' * (len(self.text) + 24) + '\r')
             sys.stdout.flush()
 
         self._thread = threading.Thread(target=_run, daemon=True)
@@ -1003,6 +1012,33 @@ def _fmt_eta(elapsed_s: float, done: int, total: int) -> str:
     return f"{mm:02d}:{ss:02d}"
 
 
+def _fmt_mmss(seconds: float) -> str:
+    seconds = max(int(seconds), 0)
+    mm = seconds // 60
+    ss = seconds % 60
+    return f"{mm:02d}:{ss:02d}"
+
+
+def _run_spinner(message: str, stop_event: threading.Event) -> None:
+    """TTY spinner with live timer; no-op when stdout isn't a TTY."""
+    if not sys.stdout.isatty():
+        return
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    start = time.time()
+    i = 0
+    try:
+        while not stop_event.is_set():
+            elapsed = _fmt_mmss(time.time() - start)
+            sys.stdout.write(f"\r{frames[i % len(frames)]} {message}（已耗时 {elapsed}）")
+            sys.stdout.flush()
+            i += 1
+            stop_event.wait(0.12)
+    finally:
+        # clear the spinner line
+        sys.stdout.write("\r" + " " * (len(message) + 40) + "\r")
+        sys.stdout.flush()
+
+
 def _fmt_locale_names(locales: List[Dict[str, str]], *, max_show: int = 10) -> str:
     names = [str(x.get("name_en", "")).strip() for x in locales if str(x.get("name_en", "")).strip()]
     if len(names) <= max_show:
@@ -1144,15 +1180,23 @@ def incremental_translate_one_file(
     if not need:
         return {"needed": 0, "changed": 0}
 
-    prompt_en = _prompt_for_target(cfg, src_code="(strings)", src_name_en=src_name_en, tgt_code=tgt_code, tgt_name_en=tgt_name_en)
-    with Spinner(f'翻译中：{src_file.name} → {tgt_code} ({tgt_name_en})'):
+    prompt_en = _prompt_for_target(
+        cfg,
+        src_code="(strings)",
+        src_name_en=src_name_en,
+        tgt_code=tgt_code,
+        tgt_name_en=tgt_name_en,
+    )
+
+    # 等待 API 返回时显示 loading + 计时，并带上本次文件需翻译 key 数
+    with Spinner(f"翻译中：{src_file.name} → {tgt_code} ({tgt_name_en}) | keys={len(need)}"):
         translated = translate_flat_dict(
-        prompt_en=prompt_en,
-        src_dict=need,
-        src_lang=src_name_en,
-        tgt_locale=tgt_name_en,
-        model=model,
-        api_key=api_key,
+            prompt_en=prompt_en,
+            src_dict=need,
+            src_lang=src_name_en,
+            tgt_locale=tgt_name_en,
+            model=model,
+            api_key=api_key,
         )
 
     new_parsed = _update_or_append_entries(tgt_parsed, translated)
@@ -1232,9 +1276,15 @@ def translate_batch(
         tgt_file = tgt_lproj / bf.name
         ensure_file(tgt_file, dry)
 
-        # 显示翻译中状态
-        print(f"🔄 [{idx}/{effective_tasks}] 翻译中："
-              f"{src_display} → {tgt_code} ({tgt_name_en}) / {bf.name}")
+        # 显示翻译中状态（带预估 key 数 + 全局已耗时）
+        global_elapsed = _fmt_mmss(time.time() - start)
+        print(
+            f"🔄 [{idx}/{effective_tasks}] 翻译中："
+            f"{src_display} → {tgt_code} ({tgt_name_en}) / {bf.name} "
+            f"| keys≈{expected_needed} | 全局已耗时 {global_elapsed}"
+        )
+
+        task_start = time.time()
 
         r = incremental_translate_one_file(
             cfg=cfg,
@@ -1259,12 +1309,13 @@ def translate_batch(
         changed_files += int(r["changed"])
 
         elapsed = time.time() - start
+        task_elapsed = time.time() - task_start
         eta = _fmt_eta(elapsed, done, effective_tasks)
         pct = _fmt_pct(done, effective_tasks)
         flag = "已写入" if r["changed"] else "无变化"
         print(
             f"   ✅ 完成 [{done}/{effective_tasks} | {pct} | "
-            f"预计剩余 {eta}] | 需翻译={r['needed']:<4} | {flag}"
+            f"预计剩余 {eta}] | 需翻译={r['needed']:<4} | {flag} | 耗时 {_fmt_mmss(task_elapsed)}"
         )
 
     elapsed = time.time() - start
