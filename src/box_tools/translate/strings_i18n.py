@@ -623,8 +623,8 @@ def sort_base_file_inplace(base_file: Path, dry: bool) -> bool:
     first_group = True
     for pref in prefix_order:
         if not first_group:
-            # 组间间隔：两行空行（与之前目标语言分组的视觉一致，但只用于 Base）
-            out.extend(["\n",])
+            # 组间间隔：一行空行（与之前目标语言分组的视觉一致，但只用于 Base）
+            out.extend(["\n"])
         first_group = False
 
         group_entries = sorted(grouped[pref], key=lambda e: e.key.lower())
@@ -1256,11 +1256,11 @@ def _comments_to_doc(lines: List[str]) -> List[str]:
 
 
 def generate_l10n_swift(
-    *,
-    project_root: Path,
-    cfg: Dict[str, Any],
-    out_path_arg: Optional[str],
-    dry: bool,
+        *,
+        project_root: Path,
+        cfg: Dict[str, Any],
+        out_path_arg: Optional[str],
+        dry: bool,
 ) -> Path:
     lang_root_dir, base_dir = project_paths(project_root, cfg)
     src = base_dir / "Localizable.strings"
