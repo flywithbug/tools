@@ -1,0 +1,247 @@
+# iOS 多語言配置檔（strings_i18n.yaml）
+# 由 strings_i18n.py --init 自動生成
+# 可手動調整，但建議保持與 languages.json 同步
+
+options:
+  cleanup_extra_keys: true       # 是否自動清理目標語言中 Base 沒有的 key
+  incremental_translate: true    # 是否支援增量翻譯（僅翻譯新增/變更的 key）
+  normalize_filenames: true      # 是否規範化文件名（可選）
+  sort_keys: true                # 是否按 key 排序輸出
+
+languages: ./languages.json      # 語言定義檔路徑（code + name_en）
+
+# 語言檔案存放根目錄與 Base 資料夾名稱
+lang_root: ./TimeTrails/TimeTrails/SupportFiles/
+base_folder: Base.lproj
+
+# 基礎語言（通常是簡體中文）
+base_locale:
+  - code: zh-Hans
+    name_en: Simplified Chinese
+
+# 原始語言（通常是英文，翻譯的起點）
+source_locale:
+  - code: en
+    name_en: English
+
+# 核心語言（常駐、優先翻譯、常在應用內顯示的語言）
+core_locales:
+  - code: zh-Hant
+    name_en: Traditional Chinese
+  - code: yue
+    name_en: Cantonese
+  - code: zh-Hans
+    name_en: Simplified Chinese
+  - code: zh-HK
+    name_en: Chinese (Hong Kong)
+  - code: en
+    name_en: English
+  - code: ko
+    name_en: Korean
+  - code: ja
+    name_en: Japanese
+
+# 目標翻譯語言（自動從 languages.json 產生，已排除 core_locales 重複項）
+# 若需新增/移除語言，請修改 languages.json 後重新 --init
+
+# # 已移除 7 個與 core_locales 重複的語言
+target_locales:
+  - code: af
+    name_en: Afrikaans
+  - code: am
+    name_en: Amharic
+  - code: ar
+    name_en: Arabic
+  - code: be
+    name_en: Belarusian
+  - code: bg
+    name_en: Bulgarian
+  - code: bn
+    name_en: Bengali
+  - code: bo
+    name_en: Tibetan
+  - code: bs
+    name_en: Bosnian
+  - code: ca
+    name_en: Catalan
+  - code: cs
+    name_en: Czech
+  - code: cy
+    name_en: Welsh
+  - code: da
+    name_en: Danish
+  - code: de
+    name_en: German
+  - code: el
+    name_en: Greek
+  - code: en-AU
+    name_en: English (Australia)
+  - code: en-CA
+    name_en: English (Canada)
+  - code: en-GB
+    name_en: English (United Kingdom)
+  - code: en-IN
+    name_en: English (India)
+  - code: eo
+    name_en: Esperanto
+  - code: es
+    name_en: Spanish
+  - code: es-419
+    name_en: Spanish (Latin America)
+  - code: es-MX
+    name_en: Spanish (Mexico)
+  - code: et
+    name_en: Estonian
+  - code: eu
+    name_en: Basque
+  - code: fa
+    name_en: Persian
+  - code: fi
+    name_en: Finnish
+  - code: fil
+    name_en: Filipino
+  - code: fr
+    name_en: French
+  - code: fr-CA
+    name_en: French (Canada)
+  - code: ga
+    name_en: Irish
+  - code: gl
+    name_en: Galician
+  - code: gu
+    name_en: Gujarati
+  - code: he
+    name_en: Hebrew
+  - code: hi
+    name_en: Hindi
+  - code: hr
+    name_en: Croatian
+  - code: hu
+    name_en: Hungarian
+  - code: hy
+    name_en: Armenian
+  - code: id
+    name_en: Indonesian
+  - code: is
+    name_en: Icelandic
+  - code: it
+    name_en: Italian
+  - code: ka
+    name_en: Georgian
+  - code: kk
+    name_en: Kazakh
+  - code: km
+    name_en: Khmer
+  - code: kn
+    name_en: Kannada
+  - code: lo
+    name_en: Lao
+  - code: lt
+    name_en: Lithuanian
+  - code: lv
+    name_en: Latvian
+  - code: mk
+    name_en: Macedonian
+  - code: ml
+    name_en: Malayalam
+  - code: mr
+    name_en: Marathi
+  - code: ms
+    name_en: Malay
+  - code: mt
+    name_en: Maltese
+  - code: my
+    name_en: Burmese
+  - code: nb
+    name_en: Norwegian Bokmål
+  - code: ne
+    name_en: Nepali
+  - code: nl
+    name_en: Dutch
+  - code: nl-BE
+    name_en: Dutch (Belgium)
+  - code: nn
+    name_en: Norwegian Nynorsk
+  - code: pa
+    name_en: Punjabi
+  - code: pl
+    name_en: Polish
+  - code: ps
+    name_en: Pashto
+  - code: pt-BR
+    name_en: Portuguese (Brazil)
+  - code: pt-PT
+    name_en: Portuguese (Portugal)
+  - code: ro
+    name_en: Romanian
+  - code: ru
+    name_en: Russian
+  - code: si
+    name_en: Sinhala
+  - code: sk
+    name_en: Slovak
+  - code: sl
+    name_en: Slovenian
+  - code: sq
+    name_en: Albanian
+  - code: sr
+    name_en: Serbian
+  - code: sr-Latn
+    name_en: Serbian (Latin)
+  - code: sv
+    name_en: Swedish
+  - code: sw
+    name_en: Swahili
+  - code: ta
+    name_en: Tamil
+  - code: te
+    name_en: Telugu
+  - code: tg
+    name_en: Tajik
+  - code: th
+    name_en: Thai
+  - code: tr
+    name_en: Turkish
+  - code: uk
+    name_en: Ukrainian
+  - code: ur
+    name_en: Urdu
+  - code: ur-IN
+    name_en: Urdu (India)
+  - code: uz
+    name_en: Uzbek
+  - code: vi
+    name_en: Vietnamese
+
+
+
+prompts:
+  # 所有語言共用的基礎提示詞
+  default_en: |
+    Translate UI strings naturally for a mobile app.
+    Be concise, clear, and consistent.
+    Use natural phrasing suitable for mobile interfaces.
+
+  # 針對特定語言的額外風格/術語約束（會與 default_en 合併使用）
+  by_locale_en:
+    en: |
+      Translate from Chinese into natural, idiomatic English for a mobile app UI.
+      Keep the tone concise, friendly, and professional.
+      Prefer short, clear phrases suitable for buttons, labels, and system messages.
+      Ensure terminology (especially finance / crypto terms) is consistent across the app.
+      Avoid literal translations when a more natural English expression is appropriate.
+    
+    zh_Hant: |
+      Use Taiwan-style Traditional Chinese for UI.
+      Add spaces between Chinese and English characters when mixed in the same sentence for better readability.
+      Keep financial/crypto terms consistent.
+
+    ja: |
+      Use polite and concise Japanese UI tone.
+      Prefer natural expressions suitable for mobile apps.
+      Avoid overly long sentences.
+
+    ko: |
+      Use natural Korean UI style.
+      Prefer concise wording suitable for mobile interfaces.
+
