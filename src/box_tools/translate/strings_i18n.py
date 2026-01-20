@@ -999,9 +999,11 @@ def translate_batch(
         src_code: Optional[str] = None,
 ) -> Dict[str, int]:
     cleanup_extra = bool(cfg["options"]["cleanup_extra_keys"])
-    effective_tasks = 0
 
-    # 预扫描：只统计 needed>0 的任务
+    # 预扫描：收集所有需要翻译的任务
+    task_queue: List[Tuple[Dict[str, str], Path, int]] = []
+    src_display = src_code if src_code else "Base.lproj"
+
     for t in targets:
         tgt_code = t["code"]
         tgt_lproj = lang_root_dir / code_to_lproj(tgt_code)
@@ -1026,67 +1028,79 @@ def translate_batch(
                 dry=True,
             )
             if r["needed"] > 0:
-                effective_tasks += 1
+                task_queue.append((t, bf, r["needed"]))
 
+    effective_tasks = len(task_queue)
     if effective_tasks == 0:
         print("✅ 无需翻译：所有目标文件已齐全")
         return {"effective_tasks": 0, "files_changed": 0, "keys_translated": 0}
 
     # 显示翻译任务概览
-    src_display = src_code if src_code else "Base.lproj"
     mode_text = "全量" if full else "增量"
     print(f"\n🌍 翻译任务：{src_display} ({src_name_en}) → "
           f"{len(targets)} 个目标语言")
     print(f"🧮 有效任务数（需翻译）：{effective_tasks:,} 个；"
           f"模式={mode_text}；model={model}")
 
+    # 显示排队中的任务列表
+    if effective_tasks > 0:
+        print(f"\n📋 排队中的任务（{effective_tasks:,} 个）：")
+        for idx, (t, bf, needed) in enumerate(task_queue[:10], 1):
+            print(f"   {idx}. {src_display} → {t['code']} ({t['name_en']}) / "
+                  f"{bf.name} | 需翻译 {needed} keys")
+        if effective_tasks > 10:
+            print(f"   ... 还有 {effective_tasks - 10} 个任务")
+        print()
+
     done = 0
     changed_files = 0
     translated_keys = 0
     start = time.time()
 
-    for t in targets:
+    for idx, (t, bf, expected_needed) in enumerate(task_queue, 1):
         tgt_code = t["code"]
         tgt_name_en = t["name_en"]
         tgt_lproj = lang_root_dir / code_to_lproj(tgt_code)
         ensure_dir(tgt_lproj, dry)
 
-        for bf in base_files:
-            src_file = src_dir / bf.name
-            if not src_file.exists():
-                continue
-            tgt_file = tgt_lproj / bf.name
-            ensure_file(tgt_file, dry)
+        src_file = src_dir / bf.name
+        tgt_file = tgt_lproj / bf.name
+        ensure_file(tgt_file, dry)
 
-            r = incremental_translate_one_file(
-                cfg=cfg,
-                api_key=api_key,
-                model=model,
-                src_file=src_file,
-                src_name_en=src_name_en,
-                tgt_file=tgt_file,
-                tgt_code=tgt_code,
-                tgt_name_en=tgt_name_en,
-                full=full,
-                cleanup_extra=cleanup_extra,
-                dry=dry,
-            )
-            if r["needed"] <= 0:
-                continue
+        # 显示翻译中状态
+        print(f"🔄 [{idx}/{effective_tasks}] 翻译中："
+              f"{src_display} → {tgt_code} ({tgt_name_en}) / {bf.name}")
 
-            done += 1
-            translated_keys += int(r["needed"])
-            changed_files += int(r["changed"])
+        r = incremental_translate_one_file(
+            cfg=cfg,
+            api_key=api_key,
+            model=model,
+            src_file=src_file,
+            src_name_en=src_name_en,
+            tgt_file=tgt_file,
+            tgt_code=tgt_code,
+            tgt_name_en=tgt_name_en,
+            full=full,
+            cleanup_extra=cleanup_extra,
+            dry=dry,
+        )
 
-            elapsed = time.time() - start
-            eta = _fmt_eta(elapsed, done, effective_tasks)
-            pct = _fmt_pct(done, effective_tasks)
-            flag = "已写入" if r["changed"] else "无变化"
-            print(
-                f"[{done:>4}/{effective_tasks:<4} | {pct} | 预计剩余 {eta}] "
-                f"{src_display} → {tgt_code} ({tgt_name_en}) / {bf.name} | "
-                f"需翻译={r['needed']:<4} | {flag}"
-            )
+        if r["needed"] <= 0:
+            print("   ⏭️  跳过（无需翻译）")
+            continue
+
+        done += 1
+        translated_keys += int(r["needed"])
+        changed_files += int(r["changed"])
+
+        elapsed = time.time() - start
+        eta = _fmt_eta(elapsed, done, effective_tasks)
+        pct = _fmt_pct(done, effective_tasks)
+        flag = "已写入" if r["changed"] else "无变化"
+        print(
+            f"   ✅ 完成 [{done}/{effective_tasks} | {pct} | "
+            f"预计剩余 {eta}] | 需翻译={r['needed']:<4} | {flag}"
+        )
 
     elapsed = time.time() - start
     mm, ss = divmod(int(elapsed), 60)
