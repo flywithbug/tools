@@ -75,6 +75,7 @@ BOX_TOOL = {
         "strings_i18n clean --yes",
         "strings_i18n translate-core --api-key $OPENAI_API_KEY",
         "strings_i18n translate-target --api-key $OPENAI_API_KEY",
+        "strings_i18n gen-l10n",
     ],
     "options": [
         {"flag": "--config", "desc": "配置文件路径（默认 strings_i18n.yaml）"},
@@ -1113,6 +1114,198 @@ def translate_batch(
     return {"effective_tasks": effective_tasks, "files_changed": changed_files, "keys_translated": translated_keys}
 
 
+
+
+# =========================================================
+# L10n.swift generator (from Base.lproj/Localizable.strings)
+# =========================================================
+_SWIFT_KEYWORDS = {
+    "associatedtype", "class", "deinit", "enum", "extension", "fileprivate", "func", "import", "init",
+    "inout", "internal", "let", "open", "operator", "private", "protocol", "public", "rethrows",
+    "static", "struct", "subscript", "typealias", "var", "break", "case", "continue", "default",
+    "defer", "do", "else", "fallthrough", "for", "guard", "if", "in", "repeat", "return", "switch",
+    "where", "while", "as", "Any", "catch", "false", "is", "nil", "super", "self", "Self", "throw",
+    "throws", "true", "try", "_", "#available", "#colorLiteral", "#column", "#file", "#function",
+    "#line", "#selector", "#sourceLocation",
+}
+
+
+def _swift_escape_string(s: str) -> str:
+    # Swift string literal escaping for " and \\ plus newlines.
+    s = s.replace('\\', r'\\')
+    s = s.replace('"', r'\"')
+    s = s.replace('\r\n', '\n').replace('\r', '\n')
+    s = s.replace('\n', r'\n')
+    return s
+
+
+def _upper_camel(parts: List[str]) -> str:
+    out: List[str] = []
+    for p in parts:
+        p2 = re.sub(r"[^0-9A-Za-z]+", " ", p).strip()
+        if not p2:
+            continue
+        ws = [w for w in p2.split() if w]
+        for w in ws:
+            out.append(w[:1].upper() + w[1:])
+    return "".join(out) or "X"
+
+
+def _lower_camel(parts: List[str]) -> str:
+    uc = _upper_camel(parts)
+    if not uc:
+        return "x"
+    return uc[:1].lower() + uc[1:]
+
+
+def _swift_identifier(name: str, *, upper: bool) -> str:
+    # name: raw segment(s)
+    parts = [name]
+    ident = _upper_camel(parts) if upper else _lower_camel(parts)
+    if not ident:
+        ident = "x"
+    # identifiers cannot start with digit
+    if ident[:1].isdigit():
+        ident = "_" + ident
+    if ident in _SWIFT_KEYWORDS:
+        ident = ident + "_"
+    return ident
+
+
+def _swift_identifier_from_parts(parts: List[str], *, upper: bool) -> str:
+    ident = _upper_camel(parts) if upper else _lower_camel(parts)
+    if not ident:
+        ident = "x"
+    if ident[:1].isdigit():
+        ident = "_" + ident
+    if ident in _SWIFT_KEYWORDS:
+        ident = ident + "_"
+    return ident
+
+
+def _comments_to_doc(lines: List[str]) -> List[str]:
+    # Convert .strings comments into Swift doc comments.
+    out: List[str] = []
+    buf: List[str] = []
+    for raw in lines:
+        s = raw.strip("\n")
+        s2 = s.strip()
+        if not s2:
+            continue
+        # strip common comment markers
+        if s2.startswith("/*"):
+            s2 = s2[2:]
+        if s2.endswith("*/"):
+            s2 = s2[:-2]
+        if s2.startswith("//"):
+            s2 = s2[2:]
+        s2 = s2.strip(" *\t")
+        if s2:
+            buf.append(s2)
+    for line in buf:
+        out.append(f"        /// {line}\n")
+    return out
+
+
+def generate_l10n_swift(
+    *,
+    project_root: Path,
+    cfg: Dict[str, Any],
+    out_path_arg: Optional[str],
+    dry: bool,
+) -> Path:
+    lang_root_dir, base_dir = project_paths(project_root, cfg)
+    src = base_dir / "Localizable.strings"
+    if not src.exists():
+        raise FileNotFoundError(f"❌ 未找到 Base 的 Localizable.strings：{src}")
+
+    # output path
+    if out_path_arg and str(out_path_arg).strip():
+        op = Path(str(out_path_arg).strip()).expanduser()
+        if not op.is_absolute():
+            op = (project_root / op).resolve()
+        out_path = op
+    else:
+        out_path = (lang_root_dir / "L10n.swift").resolve()
+
+    parsed = parse_strings_file(src)
+
+    # Preserve base file order.
+    groups: Dict[str, List[StringsEntry]] = {}
+    group_order: List[str] = []
+    for e in parsed.entries:
+        parts = e.key.split(".")
+        grp_raw = parts[0] if len(parts) > 1 else "Ungrouped"
+        if grp_raw not in groups:
+            groups[grp_raw] = []
+            group_order.append(grp_raw)
+        groups[grp_raw].append(e)
+
+    # Build Swift
+    out: List[str] = []
+    out.append("// Auto-generated from Base.lproj/Localizable.strings\n")
+    out.append("import Foundation\n\n")
+    out.append("extension String {\n")
+    out.append("    func callAsFunction(_ arguments: CVarArg...) -> String {\n")
+    out.append("        String(format: self, locale: Locale.current, arguments: arguments)\n")
+    out.append("    }\n")
+    out.append("}\n\n")
+    out.append("enum L10n {\n")
+
+    for grp_raw in group_order:
+        entries = groups[grp_raw]
+        grp_name = _swift_identifier(grp_raw, upper=True)
+        out.append(f"    enum {grp_name} {{\n")
+
+        used: Dict[str, int] = {}
+        for e in entries:
+            # doc comments from Base entry
+            doc = _comments_to_doc(e.comments)
+            out.extend(doc)
+
+            parts = e.key.split(".")
+            if len(parts) > 1:
+                rest = parts[1:]
+            else:
+                rest = parts
+            prop = _swift_identifier_from_parts(rest, upper=False)
+            if prop in used:
+                used[prop] += 1
+                prop2 = f"{prop}_{used[prop]}"
+            else:
+                used[prop] = 0
+                prop2 = prop
+
+            key_lit = _swift_escape_string(e.key)
+            val_lit = _swift_escape_string(e.value)
+            out.append(
+                f"        static var {prop2}: String {{ return NSLocalizedString(\"{key_lit}\", value: \"{val_lit}\", comment: \"{val_lit}\") }}\n\n"
+            )
+
+        # trim last blank line inside group
+        if out and out[-1] == "\n":
+            out.pop()
+        if out and out[-1].endswith("\n\n"):
+            out[-1] = out[-1][:-1]
+
+        out.append("    }\n\n")
+
+    if out and out[-1] == "\n\n":
+        out.pop()
+
+    out.append("}\n")
+
+    content = "".join(out)
+
+    if dry:
+        print(f"（dry-run）将生成：{out_path}")
+        return out_path
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(content, encoding="utf-8")
+    print(f"✅ 已生成：{out_path}")
+    return out_path
+
 # =========================================================
 # Doctor
 # =========================================================
@@ -1194,7 +1387,21 @@ def _read_choice(prompt: str, valid: Iterable[str]) -> str:
         print(f"请输入 {' / '.join(sorted(valid_set))}（或 q 退出）")
 
 
-def choose_action_interactive() -> str:
+def choose_action_interactive(project_root: Path, cfg_path: Path) -> str:
+    # 尽力检测 L10n.swift 是否已存在：
+    # - 若 strings_i18n.yaml 可读，则以 lang_root/L10n.swift 为准
+    # - 否则回退到项目根目录的 ./L10n.swift
+    l10n_path = project_root / "L10n.swift"
+    if cfg_path.exists():
+        try:
+            cfg = read_config(cfg_path)
+            lang_root_dir, _ = project_paths(project_root, cfg)
+            l10n_path = lang_root_dir / "L10n.swift"
+        except Exception:
+            pass
+
+    exists_flag = "✅ 已存在" if l10n_path.exists() else "➕ 将生成"
+
     print("=== strings_i18n 操作台 ===")
     print("1 - doctor")
     print("2 - scan（扫描 Base.lproj/*.strings）")
@@ -1206,9 +1413,10 @@ def choose_action_interactive() -> str:
     print("8 - clean（删除冗余 key）")
     print("9 - translate-core（base_locale → core_locales）")
     print("10 - translate-target（source_locale → target_locales）")
-    print("11 - init（生成 strings_i18n.yaml）")
+    print(f"11 - gen-l10n（从 Base.lproj/Localizable.strings 生成 L10n.swift：{exists_flag}）")
+    print("12 - init（生成 strings_i18n.yaml）")
     print("0 - 退出")
-    choice = _read_choice("请输入 0 / 1 / ... / 11（或 q 退出）: ", valid=[str(i) for i in range(0, 12)])
+    choice = _read_choice("请输入 0 / 1 / ... / 12（或 q 退出）: ", valid=[str(i) for i in range(0, 13)])
     if choice == "0":
         return "exit"
     return {
@@ -1222,7 +1430,8 @@ def choose_action_interactive() -> str:
         "8": "clean",
         "9": "translate-core",
         "10": "translate-target",
-        "11": "init",
+        "11": "gen-l10n",
+        "12": "init",
     }[choice]
 
 
@@ -1249,6 +1458,7 @@ def build_parser() -> argparse.ArgumentParser:
             "clean",
             "translate-core",
             "translate-target",
+            "gen-l10n",
         ],
         help="动作（不填则进入交互菜单）",
     )
@@ -1262,6 +1472,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keep", default="first", choices=["first", "last"], help="dedupe 保留策略（默认 first）")
     p.add_argument("--no-exitcode-3", action="store_true", help="check/dupcheck 发现问题时仍返回 0（默认返回 3）")
     p.add_argument("--dry-run", action="store_true", help="预览模式（不写入文件）")
+    p.add_argument("--l10n-out", default=None, help="L10n.swift 输出路径（默认写入 {lang_root}/L10n.swift；可传相对 project-root 的路径）")
     return p
 
 
@@ -1309,7 +1520,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     interactive = False
     if not action:
         interactive = True
-        action = choose_action_interactive()
+        action = choose_action_interactive(project_root=project_root, cfg_path=cfg_path)
         if action == "exit":
             return EXIT_OK
 
@@ -1362,6 +1573,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         return EXIT_BAD
 
     dry = bool(args.dry_run)
+
+    if action == "gen-l10n":
+        try:
+            p = generate_l10n_swift(
+                project_root=project_root,
+                cfg=cfg,
+                out_path_arg=args.l10n_out,
+                dry=dry,
+            )
+            if dry:
+                print("（dry-run：未写入）")
+            return EXIT_OK
+        except Exception as e:
+            print(f"❌ gen-l10n 失败：{e}")
+            return EXIT_FAIL
 
     if action == "scan":
         print(f"✅ Base 目录：{base_dir}")
