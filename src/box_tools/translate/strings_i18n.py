@@ -615,18 +615,39 @@ def sort_base_file_inplace(base_file: Path, dry: bool) -> bool:
     if not parsed.entries:
         return False
 
+    # Base：需要“按前缀分组 + 组间留空行”。
     grouped = _group_entries_by_prefix(parsed.entries)
     prefix_order = sorted(grouped.keys(), key=str.lower)
-    out_entries: List[StringsEntry] = []
-    for pref in prefix_order:
-        out_entries.extend(sorted(grouped[pref], key=lambda e: e.key.lower()))
 
-    new_parsed = ParsedStrings(parsed.header[:], out_entries, parsed.tail[:])
-    return write_parsed_strings(base_file, new_parsed, dry)
+    out: List[str] = parsed.header[:]
+    first_group = True
+    for pref in prefix_order:
+        if not first_group:
+            # 组间间隔：两行空行（与之前目标语言分组的视觉一致，但只用于 Base）
+            out.extend(["\n", "\n"])
+        first_group = False
+
+        group_entries = sorted(grouped[pref], key=lambda e: e.key.lower())
+        for e in group_entries:
+            out.extend(format_entry(e))
+
+    if parsed.tail:
+        if out and not out[-1].endswith("\n"):
+            out.append("\n")
+        out.extend(parsed.tail)
+
+    new_content = "".join(out)
+    old_content = base_file.read_text(encoding="utf-8", errors="replace")
+    changed = new_content != old_content
+    if changed and not dry:
+        base_file.write_text(new_content, encoding="utf-8")
+    return changed
 
 
 def format_entry(e: StringsEntry) -> List[str]:
-    return e.comments + e.raw_before + [f'"{e.key}" = "{e.value}";\n']
+    # 约定：注释必须贴在 key 上方。
+    # raw_before 通常是空行/杂项，应该放在“注释块之前”，避免出现“注释在上，但 key 在更下面”的视觉断裂。
+    return e.raw_before + e.comments + [f'"{e.key}" = "{e.value}";\n']
 
 
 def sort_one_file(base_file: Path, target_file: Path, dry: bool) -> bool:
@@ -652,26 +673,14 @@ def sort_one_file(base_file: Path, target_file: Path, dry: bool) -> bool:
     for k in extra_keys:
         extras.extend(tgt_multi[k])
 
-    all_entries = in_base + extras
-
-    # 3) prefix grouping (keep first-seen prefix order)
-    grouped: Dict[str, List[StringsEntry]] = {}
-    group_order: List[str] = []
-    for e in all_entries:
-        pref = prefix_of_key(e.key)
-        if pref not in grouped:
-            grouped[pref] = []
-            group_order.append(pref)
-        grouped[pref].append(e)
-
+    # 3) 目标语言：不需要前缀分组、不需要组间间隔。
+    #    只按 Base key 顺序输出（包含重复 key 的“原样搬运”），最后追加 extras（按 key 排序）。
     out: List[str] = tgt.header[:]
-    first = True
-    for pref in group_order:
-        if not first:
-            out.extend(["\n", "\n"])
-        first = False
-        for e in grouped[pref]:
-            out.extend(format_entry(e))
+    for e in (in_base + extras):
+        # 目标语言：不做分组/不加间隔，也不保留 raw_before 的空行噪声；
+        # 但保留“紧贴在 key 上方”的注释。
+        out.extend(e.comments)
+        out.append(f'"{e.key}" = "{e.value}";\n')
 
     if tgt.tail:
         if out and not out[-1].endswith("\n"):
