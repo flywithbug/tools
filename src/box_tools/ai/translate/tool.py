@@ -28,6 +28,10 @@ BOX_TOOL = {
         {"cmd": "export OPENAI_API_KEY='sk-***' && box_ai_translate", "desc": "进入翻译模式并交互选择语言"},
         {"cmd": "box_ai_translate --source en --target zh-Hans", "desc": "跳过选项表，直接英->简中"},
     ],
+    "dependencies": [
+        "PyYAML>=6.0",
+        "openai>=1.0.0",
+    ],
     "docs": "README.md",
 }
 
