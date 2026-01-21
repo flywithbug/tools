@@ -29,7 +29,8 @@ class ChatSession:
 
 @dataclass(frozen=True)
 class ChatOptions:
-    model: Union[OpenAIModel, str] = OpenAIModel.GPT_4O_MINI
+    # 改成更“新”的聊天模型默认值
+    model: Union[OpenAIModel, str] = OpenAIModel.GPT_5_2_CHAT
     temperature: float = 0.2
     top_p: float = 1.0
     timeout: float = 30.0
@@ -54,7 +55,7 @@ class OpenAIChat:
 def run_chat_cli(
         *,
         api_key: Optional[str] = None,
-        model: Union[OpenAIModel, str] = OpenAIModel.GPT_5_CHAT,
+        model: Union[OpenAIModel, str] = OpenAIModel.GPT_5_2_CHAT,
         system_prompt: str = "You are a helpful assistant.",
 ) -> int:
     chat = OpenAIChat(api_key=api_key, opt=ChatOptions(model=model))
