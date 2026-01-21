@@ -13,12 +13,13 @@ BOX_TOOL = {
     "id": "flutter.box_pub_publish",
     "name": "box_pub_publish",
     "category": "flutter",
-    "summary": "自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）",
+    "summary": "自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，发布前检查（可交互处理 warning），提交并发布（支持 release 分支规则）",
     "usage": [
         "box_pub_publish --msg fix crash on iOS",
         "box_pub_publish --msg feat add new api --no-publish",
         "box_pub_publish --pubspec path/to/pubspec.yaml --changelog path/to/CHANGELOG.md --msg release notes",
         "box_pub_publish --msg hotfix --dry-run",
+        "box_pub_publish --msg release notes --yes-warnings",
     ],
     "options": [
         {"flag": "--pubspec", "desc": "pubspec.yaml 路径（默认 ./pubspec.yaml）"},
@@ -29,11 +30,13 @@ BOX_TOOL = {
         {"flag": "--no-publish", "desc": "跳过 flutter pub publish"},
         {"flag": "--skip-pub-get", "desc": "跳过 flutter pub get"},
         {"flag": "--skip-checks", "desc": "跳过发布前检查（flutter analyze + git clean）"},
+        {"flag": "--yes-warnings", "desc": "发布检查出现 warning 时仍继续提交并发布（非交互/CI 推荐）"},
         {"flag": "--dry-run", "desc": "仅打印将执行的操作，不改文件、不跑命令"},
     ],
     "examples": [
-        {"cmd": "box_pub_publish --msg fix null error", "desc": "拉代码→升级版本→更新 changelog→pub get→检查→提交→发布"},
+        {"cmd": "box_pub_publish --msg fix null error", "desc": "拉代码→升级版本→更新 changelog→pub get→检查(可交互)→提交→发布"},
         {"cmd": "box_pub_publish --msg release notes --no-publish", "desc": "只提交不发布"},
+        {"cmd": "box_pub_publish --msg release notes --yes-warnings", "desc": "检查有 warning 也自动继续提交并发布（适合 CI）"},
         {"cmd": "box_pub_publish --msg try --dry-run", "desc": "预演一次，不做任何修改"},
     ],
     # ✅ 新项目规范：工具目录内 README.md（相对当前目录）
@@ -130,15 +133,6 @@ def git_pull(*, dry_run: bool = False) -> None:
     print("🔄 git pull ...")
     run_command(["git", "pull"], dry_run=dry_run)
     print("✅ 代码已更新")
-
-
-def git_status_is_clean(*, dry_run: bool = False) -> bool:
-    """检查 git 工作区是否干净（无未提交变更）。"""
-    if dry_run:
-        print("🧪 DRY-RUN: git status --porcelain")
-        return True
-    p = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
-    return (p.stdout or "").strip() == ""
 
 
 def parse_semver(version: str):
@@ -252,6 +246,93 @@ def update_changelog(changelog_path: Path, new_version: str, msg: str, *, dry_ru
     print(f"✅ CHANGELOG.md 已更新: {changelog_path}（版本 {new_version}）")
 
 
+def git_status_is_clean(*, dry_run: bool = False) -> bool:
+    """检查 git 工作区是否干净（无未提交变更）。"""
+    if dry_run:
+        print("🧪 DRY-RUN: git status --porcelain")
+        return True
+    p = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+    return (p.stdout or "").strip() == ""
+
+
+def extract_warning_lines(text: str) -> list[str]:
+    """尽量从输出中提取 warning 行（可按需调正则）。"""
+    lines: list[str] = []
+    for line in (text or "").splitlines():
+        if re.search(r"(?i)\bwarning\b", line):
+            lines.append(line.rstrip())
+    return lines
+
+
+def confirm_continue_on_warnings(warnings: list[str], *, yes_warnings: bool) -> bool:
+    """有 warning 时，提示并询问是否继续提交+发布。"""
+    if not warnings:
+        return True
+
+    print("\n⚠️ 发布检查发现 warning：")
+    max_show = 50
+    for i, w in enumerate(warnings[:max_show], 1):
+        print(f"  {i}. {w}")
+    if len(warnings) > max_show:
+        print(f"  ...（共 {len(warnings)} 条 warning，仅展示前 {max_show} 条）")
+
+    if yes_warnings:
+        print("ℹ️ 已指定 --yes-warnings：遇到 warning 仍继续提交并发布")
+        return True
+
+    if not sys.stdin.isatty():
+        print("❌ 当前为非交互环境，且未指定 --yes-warnings，已中止提交与发布。")
+        print("   如需继续，请加 --yes-warnings")
+        return False
+
+    ans = input("\n是否继续【提交 + 发布】？[y/N] ").strip().lower()
+    return ans in ("y", "yes")
+
+
+def flutter_pub_get(*, dry_run: bool = False) -> None:
+    print("🧩 flutter pub get ...")
+    run_command(["flutter", "pub", "get"], dry_run=dry_run)
+    print("✅ flutter pub get 完成")
+
+
+def flutter_analyze(*, dry_run: bool = False) -> list[str]:
+    print("🔎 flutter analyze ...")
+    p = run_command(["flutter", "analyze"], dry_run=dry_run)
+    if dry_run or p is None:
+        print("✅ flutter analyze（dry-run）")
+        return []
+    combined = (p.stdout or "") + "\n" + (p.stderr or "")
+    warnings = extract_warning_lines(combined)
+    if warnings:
+        print("⚠️ flutter analyze 有 warning")
+    else:
+        print("✅ flutter analyze 通过（无 warning）")
+    return warnings
+
+
+def pre_publish_checks(*, dry_run: bool = False, yes_warnings: bool = False) -> bool:
+    """发布前检查：不跑 flutter test；检查 analyze + git 工作区干净。
+    返回 True 表示继续提交+发布；False 表示中止。
+    """
+    print("🧰 发布前检查 ...")
+
+    if is_git_repo(Path.cwd()):
+        if not git_status_is_clean(dry_run=dry_run):
+            raise CmdError("发布前检查失败：git 工作区有未提交变更，请先提交/暂存/清理后再发布。")
+        print("✅ git 工作区干净")
+    else:
+        print("ℹ️ 当前目录不是 git 仓库，跳过 git clean 检查")
+
+    warnings = flutter_analyze(dry_run=dry_run)
+
+    ok = confirm_continue_on_warnings(warnings, yes_warnings=yes_warnings)
+    if ok:
+        print("✅ 发布前检查通过（选择继续）")
+    else:
+        print("⛔ 已选择中止：不会执行 git commit/push，也不会 publish")
+    return ok
+
+
 def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_version: str, *, dry_run: bool = False) -> None:
     msg = f"build: {project_name} + {new_version}"
 
@@ -272,48 +353,14 @@ def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_
     print(f"✅ 已提交并推送: {msg}")
 
 
-def flutter_pub_get(*, dry_run: bool = False) -> None:
-    print("🧩 flutter pub get ...")
-    run_command(["flutter", "pub", "get"], dry_run=dry_run)
-    print("✅ flutter pub get 完成")
-
-
-def flutter_analyze(*, dry_run: bool = False) -> None:
-    print("🔎 flutter analyze ...")
-    # 这里比默认更严格：只要出现 warning 字样就失败（你要的“发布前先检查”）
-    run_command(
-        ["flutter", "analyze"],
-        dry_run=dry_run,
-        fail_on_warning=True,
-        warning_regex=r"(?im)\bwarning\b",
-    )
-    print("✅ flutter analyze 通过")
-
-
-def pre_publish_checks(*, dry_run: bool = False) -> None:
-    """发布前检查：不跑 flutter test；检查 analyze + git 工作区干净。"""
-    print("🧰 发布前检查 ...")
-
-    if is_git_repo(Path.cwd()):
-        if not git_status_is_clean(dry_run=dry_run):
-            raise CmdError("发布前检查失败：git 工作区有未提交变更，请先提交/暂存/清理后再发布。")
-        print("✅ git 工作区干净")
-    else:
-        print("ℹ️ 当前目录不是 git 仓库，跳过 git clean 检查")
-
-    flutter_analyze(dry_run=dry_run)
-    print("✅ 发布前检查完成")
-
-
 def flutter_pub_publish(*, dry_run: bool = False) -> None:
     print("📦 flutter pub publish --force ...")
-    # publish：出现 warning 或错误都抛出
+    # publish：出现 warning 或错误都抛出（你之前的需求保留）
     run_command(
         ["flutter", "pub", "publish", "--force"],
         dry_run=dry_run,
         fail_on_warning=True,
-        # 默认 warning 匹配：行首 warning: / warning-
-        # 如果你想更激进（任何位置出现 warning 都算），改成：
+        # 默认匹配行首 warning: / warning-；如果你想更激进可改：
         # warning_regex=r"(?im)\bwarning\b"
     )
     print("✅ 发布完成")
@@ -333,6 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-publish", action="store_true", help="跳过 flutter pub publish")
     p.add_argument("--skip-pub-get", action="store_true", help="跳过 flutter pub get")
     p.add_argument("--skip-checks", action="store_true", help="跳过发布前检查（flutter analyze + git clean）")
+    p.add_argument("--yes-warnings", action="store_true", help="发布检查出现 warning 时仍继续提交并发布（非交互/CI 推荐）")
     p.add_argument("--dry-run", action="store_true", help="预演：不改文件、不执行外部命令")
     return p
 
@@ -370,17 +418,25 @@ def main(argv: list[str] | None = None) -> int:
         if not args.skip_pub_get:
             flutter_pub_get(dry_run=args.dry_run)
 
+        # ✅ 关键：发布前检查放在提交/发布之前
+        should_continue = True
+        if (not args.no_publish) and (not args.skip_checks):
+            should_continue = pre_publish_checks(dry_run=args.dry_run, yes_warnings=args.yes_warnings)
+        elif not args.no_publish:
+            print("ℹ️ 已跳过发布前检查（--skip-checks）")
+
+        if not should_continue:
+            print(f"✅ 已结束：{project_name} {old_version} → {new_version}（已更新文件，但未提交/未发布）")
+            return 0
+
+        # 提交（如果允许）
         if git_ok:
             git_commit(pubspec_path, changelog_path, project_name, new_version, dry_run=args.dry_run)
         else:
             print("ℹ️ 已跳过 git 操作（--no-git 或自动降级）")
 
+        # 发布
         if not args.no_publish:
-            if not args.skip_checks:
-                pre_publish_checks(dry_run=args.dry_run)
-            else:
-                print("ℹ️ 已跳过发布前检查（--skip-checks）")
-
             flutter_pub_publish(dry_run=args.dry_run)
         else:
             print("ℹ️ 已跳过发布（--no-publish）")
