@@ -11,10 +11,10 @@ import textwrap
 from pathlib import Path
 
 try:
-    from box import __version__
+    # 从包内 __init__ 取版本（避免循环 import 风险）
+    from . import __version__
 except Exception:
     __version__ = "0.0.0"
-
 
 # 这里是 distribution 名称（与你 pyproject.toml [project].name 对齐）
 PKG_NAME = "box"
@@ -44,9 +44,10 @@ BOX_TOOL = {
         {"cmd": "box update", "desc": "更新工具集"},
         {"cmd": "box tools", "desc": "列出当前工具与简介"},
     ],
-    "docs": "src/box/box.md",
+    # ✅ 重构后 docs 放到 src/box/README.md，更合理的是让 docs 走“包内相对路径”
+    # 这样未来你移动仓库根目录/安装到 site-packages 都不会失效。
+    "docs": "README.md",
 }
-
 
 
 def which(cmd: str) -> str | None:
@@ -163,7 +164,6 @@ def _format_tool_card(tool: dict, full: bool) -> str:
 
     usage = _safe_get(tool, "usage", [])
     if usage:
-        # 简洁模式只显示前三条，full 显示全部
         show = usage if full else usage[:3]
         lines.append("  usage:")
         for u in show:
@@ -229,11 +229,8 @@ def cmd_tools(_parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
     scripts.sort(key=lambda ep: (0 if ep.name == "box" else 1, ep.name))
 
     for ep in scripts:
-        # ep.name = 命令名，ep.value = 模块:函数
         name = ep.name
         value = ep.value
-
-        # 只展示你定义的工具命令；box 本身也展示，但不会强依赖 BOX_TOOL
         module_name = _ep_module_from_value(value)
 
         tool_info = None
@@ -244,11 +241,8 @@ def cmd_tools(_parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
             tool_info = None
 
         if isinstance(tool_info, dict):
-            # 标准卡片输出
-            # 确保 name 一致（不一致也不阻塞，但会提示）
             declared_name = str(tool_info.get("name", "")).strip()
             if declared_name and declared_name != name:
-                # 轻提示：避免你未来维护时踩坑
                 print(f"- {name}")
                 print(f"  ⚠️ BOX_TOOL.name='{declared_name}' 与入口命令名不一致")
                 print(f"  entry: {value}")
@@ -256,7 +250,6 @@ def cmd_tools(_parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
 
             print(_format_tool_card(tool_info, full))
         else:
-            # fallback：没有 BOX_TOOL 的命令（例如 box 本体）
             print(f"- {name}")
             print(f"  entry: {value}")
             if name == "box":
@@ -309,7 +302,6 @@ def main(argv: list[str] | None = None) -> int:
 
     handler = getattr(args, "handler", None)
     if handler is None:
-        # ✅ 没有子命令时，也打印帮助（比如某些异常解析场景）
         parser.print_help()
         return 0
 
