@@ -17,6 +17,7 @@
 - 工具入口文件必须命名为 tool.py
 - tool.py 必须包含 BOX_TOOL（可 ast.literal_eval 的 dict）
 - 除 tool.py 之外，任何 .py 文件不得包含 BOX_TOOL（否则判定为结构违规）
+- README 汇总的文档链接统一显示为 [README.md](path)（不显示冗长路径作为文本）
 """
 
 from __future__ import annotations
@@ -137,7 +138,6 @@ def validate_structure_or_exit() -> None:
                 print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
         raise SystemExit(2)
 
-    # 额外：至少应该存在一个工具（通常是 box）
     if not entry_files:
         print("❌ 未找到任何 tool.py（至少应该有 src/box/tool.py）。")
         raise SystemExit(2)
@@ -209,7 +209,6 @@ def _resolve_docs_md(py_file: Path, meta: Dict[str, Any]) -> Path:
         if p.is_absolute():
             return p
         return py_file.parent / raw
-
     return py_file.parent / "README.md"
 
 
@@ -271,7 +270,6 @@ def collect_tools() -> List[Tool]:
     for py in iter_tool_entry_files():
         meta = extract_box_tool_literal(py)
         if not meta:
-            # 结构校验已经保证 tool.py 必有 BOX_TOOL，这里仅防御
             continue
         t = build_tool(py, meta)
         if t:
@@ -346,7 +344,10 @@ def render_overview(tools: List[Tool]) -> str:
         for t in group_tools_sorted:
             a = tool_anchor_id(t)
             s = t.summary or ""
-            doc_part = f"（[文档]({t.rel_md})）" if t.md_path.exists() else f"（文档缺失：`{t.rel_md}`）"
+            if t.md_path.exists():
+                doc_part = f"（[README.md]({t.rel_md})）"
+            else:
+                doc_part = f"（文档缺失：`{t.rel_md}`）"
 
             if s:
                 out.append(f"- **[`{t.name}`](#{a})**：{s}{doc_part}\n")
@@ -375,7 +376,7 @@ def render_docs_index(tools: List[Tool]) -> str:
 
         for t in sorted(groups[gk], key=lambda x: (0, "") if _is_box_tool(x) else (1, x.py_path.stem.lower())):
             if t.md_path.exists():
-                out.append(f"- **{t.name}**：[{t.rel_md}]({t.rel_md})\n")
+                out.append(f"- **{t.name}**：[README.md]({t.rel_md})\n")
             else:
                 out.append(f"- **{t.name}**：未找到文档 `{t.rel_md}`（请创建该文件或在 BOX_TOOL['docs'] 指定）\n")
 
@@ -433,7 +434,7 @@ def render_tool_detail(t: Tool) -> str:
 
     out.append("**文档**\n\n")
     if t.md_path.exists():
-        out.append(f"[{t.rel_md}]({t.rel_md})\n\n")
+        out.append(f"[README.md]({t.rel_md})\n\n")
     else:
         out.append(f"- 未找到文档：`{t.rel_md}`（请创建该文件）\n\n")
 
@@ -782,17 +783,22 @@ def ensure_tests_skeleton(tools: List[Tool]) -> List[Path]:
     conftest = TESTS_DIR / "conftest.py"
     if not conftest.exists():
         conftest.write_text(
-            'import pytest\n\n\n'
-            '@pytest.fixture\n'
-            'def chdir_tmp(tmp_path, monkeypatch):\n'
-            '    """切到临时目录执行（避免污染仓库）。"""\n'
-            '    monkeypatch.chdir(tmp_path)\n'
-            '    return tmp_path\n',
+            "import sys\n"
+            "from pathlib import Path\n\n"
+            "import pytest\n\n\n"
+            "REPO_ROOT = Path(__file__).resolve().parents[1]\n"
+            "SRC_DIR = REPO_ROOT / 'src'\n"
+            "if SRC_DIR.exists():\n"
+            "    sys.path.insert(0, str(SRC_DIR))\n\n\n"
+            "@pytest.fixture\n"
+            "def chdir_tmp(tmp_path, monkeypatch):\n"
+            "    \"\"\"切到临时目录执行（避免污染仓库）。\"\"\"\n"
+            "    monkeypatch.chdir(tmp_path)\n"
+            "    return tmp_path\n",
             encoding="utf-8",
         )
         written.append(conftest)
 
-    # 已知工具：更完整模板；未知工具：smoke test（能 import + main 存在）
     known_templates: Dict[str, str] = {
         "box_pub_version": (
             "from pathlib import Path\n\n"
@@ -804,7 +810,6 @@ def ensure_tests_skeleton(tools: List[Tool]) -> List[Path]:
             "    assert rc == 0\n"
             "    assert 'version: 1.2.4+abc' in pubspec.read_text(encoding='utf-8')\n"
         ),
-        # pub_upgrade 的强依赖比较多，默认用 smoke test；你可后续再手写更深入的 mock 测试
         "box_pub_upgrade": (
             "from box_tools.flutter.pub_upgrade import tool as tool\n\n\n"
             "def test_smoke_import_only():\n"
@@ -815,7 +820,6 @@ def ensure_tests_skeleton(tools: List[Tool]) -> List[Path]:
     for t in tools:
         cmd = _command_with_prefix(t.name)
         if cmd == "box":
-            # box 核心工具暂不生成专门测试（后续可加 doctor/version 的 smoke test）
             continue
 
         fname = f"test_{_snake(cmd)}.py"
@@ -826,12 +830,11 @@ def ensure_tests_skeleton(tools: List[Tool]) -> List[Path]:
         if cmd in known_templates:
             content = known_templates[cmd]
         else:
-            # 通用 smoke test：能 import + main 可调用（不执行外部命令）
             content = (
-                f"import importlib\n\n\n"
-                f"def test_smoke_import():\n"
+                "import importlib\n\n\n"
+                "def test_smoke_import():\n"
                 f"    mod = importlib.import_module('{t.module}')\n"
-                f"    assert hasattr(mod, 'main')\n"
+                "    assert hasattr(mod, 'main')\n"
             )
 
         test_file.write_text(content, encoding="utf-8")
@@ -841,7 +844,6 @@ def ensure_tests_skeleton(tools: List[Tool]) -> List[Path]:
 
 
 def ensure_pytest_config(text: str) -> str:
-    # [tool.pytest.ini_options]
     pytest_lines = [
         'testpaths = ["tests"]',
         'addopts = "-q"',
@@ -854,7 +856,7 @@ def ensure_dev_pytest_dependency(text: str) -> str:
     维护：
     [project.optional-dependencies]
     dev = ["pytest>=8.0.0", ...]
-    仅做字符串级增补（避免引入 TOML parser 依赖），不做复杂格式化。
+    仅做字符串级增补（避免引入 TOML parser 依赖）。
     """
     block_pat = re.compile(r"(?ms)^\[project\.optional-dependencies\]\s*\n.*?(?=^\[|\Z)")
     m = block_pat.search(text)
@@ -874,7 +876,6 @@ def ensure_dev_pytest_dependency(text: str) -> str:
     dm = dev_line_pat.search(block)
 
     if not dm:
-        # 没有 dev：追加一行
         block2 = block.rstrip() + f'\ndev = ["{pytest_spec}"]\n\n'
         return text[:m.start()] + block2 + text[m.end():]
 
@@ -882,7 +883,7 @@ def ensure_dev_pytest_dependency(text: str) -> str:
     items = [s.strip() for s in re.findall(r"""["']([^"']+)["']""", body)]
     bases = {_dep_base(x) for x in items}
     if _dep_base(pytest_spec) in bases:
-        return text  # already present
+        return text
 
     items.append(pytest_spec)
     new_body = ", ".join([f'"{x}"' for x in items])
@@ -947,21 +948,18 @@ def main() -> None:
     if not SRC_DIR.exists():
         raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
 
-    # ✅ 先做结构强校验
     validate_structure_or_exit()
 
     tools = collect_tools()
     if not tools:
         raise SystemExit("未找到任何包含 BOX_TOOL 的工具入口（tool.py）。")
 
-    # README 汇总
     if not args.no_readme:
         header = TEMP_MD.read_text(encoding="utf-8", errors="ignore")
         readme = render_readme(header, tools)
         README_MD.write_text(readme, encoding="utf-8")
         print(f"[ok] README.md 已生成：{README_MD}")
 
-    # pyproject.toml 更新
     if not args.no_toml:
         new_version, n_scripts, wheel_pkgs, final_deps, written_tests = update_pyproject(
             tools,
