@@ -12,6 +12,10 @@
 4) [tool.hatch.build.targets.wheel].packages 自动增减（按 src 下实际包）
 5) README.md 汇总自动增减（基于 BOX_TOOL 元数据）
 6) tests/ 单元测试骨架自动生成 + pyproject pytest 配置自动维护（可选）
+7) git 校验 + 自动提交（可选）：
+   - 校验变更是否仅落在 README/pyproject/tests（按参数推导）
+   - 若发现问题，列出问题并提示是否继续提交
+   - 支持 --yes（不询问直接继续）与 --git-allow-extra（允许额外文件变更）
 
 硬性约定（强校验）：
 - 工具入口文件必须命名为 tool.py
@@ -26,6 +30,7 @@ import argparse
 import ast
 import re
 import sys
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
@@ -932,6 +937,189 @@ def update_pyproject(tools: List[Tool], do_bump: bool, ensure_tests: bool) -> Tu
 
 
 # -------------------------
+# git helpers (stage/validate/commit)
+# -------------------------
+
+def _run_git(args: List[str], check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=check,
+    )
+
+
+def _git_ok_or_exit() -> None:
+    p = _run_git(["rev-parse", "--is-inside-work-tree"])
+    if p.returncode != 0 or "true" not in (p.stdout or "").strip().lower():
+        raise SystemExit("未检测到 git 仓库（git rev-parse 失败），无法执行 --git 提交。")
+
+
+def _git_status_porcelain() -> List[str]:
+    p = _run_git(["status", "--porcelain"])
+    if p.returncode != 0:
+        raise SystemExit(f"git status 失败：{p.stderr.strip()}")
+    lines = [ln.rstrip("\n") for ln in (p.stdout or "").splitlines() if ln.strip()]
+    return lines
+
+
+def _git_changed_files() -> Tuple[Set[str], Set[str]]:
+    """
+    返回 (tracked_changed, untracked)
+    tracked_changed: 包含 A/M/D/R 等变更的文件路径（相对仓库根目录）
+    untracked: 未跟踪文件
+    """
+    tracked: Set[str] = set()
+    untracked: Set[str] = set()
+
+    for ln in _git_status_porcelain():
+        # porcelain 格式：
+        # '?? path'
+        # ' M path'
+        # 'M  path'
+        # 'R  old -> new'
+        if ln.startswith("?? "):
+            untracked.add(ln[3:].strip())
+            continue
+
+        path_part = ln[3:].strip()
+        # 处理 rename: "old -> new"
+        if " -> " in path_part:
+            path_part = path_part.split(" -> ", 1)[1].strip()
+        if path_part:
+            tracked.add(path_part)
+
+    return tracked, untracked
+
+
+def _git_diff_stat(staged: bool = False) -> str:
+    args = ["diff", "--stat"]
+    if staged:
+        args.insert(1, "--cached")
+    p = _run_git(args)
+    if p.returncode != 0:
+        return ""
+    return (p.stdout or "").strip()
+
+
+def _ask_yes_no(prompt: str, default_no: bool = True) -> bool:
+    hint = " [y/N] " if default_no else " [Y/n] "
+    try:
+        s = input(prompt + hint).strip().lower()
+    except EOFError:
+        return False if default_no else True
+    if not s:
+        return False if default_no else True
+    return s in ("y", "yes")
+
+
+def _expected_git_paths(no_readme: bool, no_toml: bool, no_tests: bool) -> Set[str]:
+    expected: Set[str] = set()
+    if not no_readme:
+        expected.add("README.md")
+    if not no_toml:
+        expected.add("pyproject.toml")
+    if not no_tests:
+        # tests 下任何文件都允许
+        expected.add("tests/")
+    return expected
+
+
+def _is_path_expected(path: str, expected: Set[str]) -> bool:
+    if path in expected:
+        return True
+    # 允许 tests/** 这类前缀匹配
+    for p in expected:
+        if p.endswith("/") and path.startswith(p):
+            return True
+    return False
+
+
+def git_validate_changes_or_prompt(
+        *,
+        no_readme: bool,
+        no_toml: bool,
+        no_tests: bool,
+        allow_extra: bool,
+        assume_yes: bool,
+) -> bool:
+    """
+    校验当前仓库变更是否符合预期。
+    返回 True 表示允许继续提交；False 表示中止。
+    """
+    tracked, untracked = _git_changed_files()
+    expected = _expected_git_paths(no_readme, no_toml, no_tests)
+
+    problems: List[str] = []
+
+    if untracked:
+        problems.append("存在未跟踪文件（untracked）：\n  - " + "\n  - ".join(sorted(untracked)))
+
+    unexpected = sorted([p for p in tracked if not _is_path_expected(p, expected)])
+    if unexpected and not allow_extra:
+        problems.append(
+            "存在“超出预期范围”的变更文件（默认不允许提交这些）：\n  - "
+            + "\n  - ".join(unexpected)
+            + "\n（如确实需要提交这些文件，可加 --git-allow-extra）"
+        )
+
+    expected_touched = sorted([p for p in tracked if _is_path_expected(p, expected)])
+    if not expected_touched:
+        problems.append("未检测到任何“预期文件”的改动（README/pyproject/tests）。这次提交可能是空的或参数组合不符合预期。")
+
+    if problems:
+        print("⚠️ git 提交校验发现问题：")
+        for i, msg in enumerate(problems, 1):
+            print(f"\n[{i}] {msg}")
+
+        stat = _git_diff_stat(staged=False)
+        if stat:
+            print("\n--- git diff --stat ---")
+            print(stat)
+
+        if assume_yes:
+            print("\n--yes 已开启：继续提交（即使存在问题）。")
+            return True
+
+        return _ask_yes_no("\n仍要继续提交吗？", default_no=True)
+
+    return True
+
+
+def git_stage_and_commit(
+        *,
+        no_readme: bool,
+        no_toml: bool,
+        no_tests: bool,
+        message: str,
+) -> None:
+    expected = _expected_git_paths(no_readme, no_toml, no_tests)
+
+    add_targets: List[str] = []
+    for p in sorted(expected):
+        add_targets.append(p)
+
+    p_add = _run_git(["add", *add_targets])
+    if p_add.returncode != 0:
+        raise SystemExit(f"git add 失败：{p_add.stderr.strip()}")
+
+    p_cached = _run_git(["diff", "--cached", "--name-only"])
+    if p_cached.returncode != 0:
+        raise SystemExit(f"git diff --cached 失败：{p_cached.stderr.strip()}")
+    staged_files = [ln.strip() for ln in (p_cached.stdout or "").splitlines() if ln.strip()]
+    if not staged_files:
+        print("ℹ️ 暂存区没有内容（staged empty），跳过 git commit。")
+        return
+
+    p_commit = _run_git(["commit", "-m", message])
+    if p_commit.returncode != 0:
+        raise SystemExit(f"git commit 失败：{p_commit.stderr.strip()}")
+    print("[ok] git commit 已完成。")
+
+
+# -------------------------
 # main
 # -------------------------
 
@@ -941,6 +1129,13 @@ def main() -> None:
     ap.add_argument("--no-toml", action="store_true", help="不更新 pyproject.toml")
     ap.add_argument("--no-bump", action="store_true", help="不升级 version（仍会更新 scripts / wheel packages / dependencies）")
     ap.add_argument("--no-tests", action="store_true", help="不生成 tests/ 与 pytest 配置")
+
+    # git commit options
+    ap.add_argument("--git", action="store_true", help="更新完成后执行 git 校验 + 自动提交")
+    ap.add_argument("--git-message", default="chore: update release artifacts", help="git commit 提交信息")
+    ap.add_argument("--git-allow-extra", action="store_true", help="允许提交超出预期文件范围的变更")
+    ap.add_argument("--yes", action="store_true", help="遇到校验问题不询问，直接继续执行（危险但适合 CI）")
+
     args = ap.parse_args()
 
     if not TEMP_MD.exists():
@@ -978,6 +1173,28 @@ def main() -> None:
                 print(f"[ok] tests 已生成：{rels}")
             else:
                 print("[ok] tests 已存在（未新增）")
+
+    # --- git commit (optional) ---
+    if args.git:
+        _git_ok_or_exit()
+
+        ok_to_commit = git_validate_changes_or_prompt(
+            no_readme=args.no_readme,
+            no_toml=args.no_toml,
+            no_tests=args.no_tests,
+            allow_extra=args.git_allow_extra,
+            assume_yes=args.yes,
+        )
+        if not ok_to_commit:
+            print("已取消 git commit。")
+            return
+
+        git_stage_and_commit(
+            no_readme=args.no_readme,
+            no_toml=args.no_toml,
+            no_tests=args.no_tests,
+            message=args.git_message,
+        )
 
     print("Done.")
 
