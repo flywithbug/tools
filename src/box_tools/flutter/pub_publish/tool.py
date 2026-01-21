@@ -29,7 +29,7 @@ BOX_TOOL = {
         {"flag": "--no-git", "desc": "跳过 git add/commit/push（若不是 git 仓库也会自动跳过）"},
         {"flag": "--no-publish", "desc": "跳过 flutter pub publish"},
         {"flag": "--skip-pub-get", "desc": "跳过 flutter pub get"},
-        {"flag": "--skip-checks", "desc": "跳过发布前检查（flutter analyze + git clean）"},
+        {"flag": "--skip-checks", "desc": "跳过发布前检查（flutter analyze + git 变更白名单）"},
         {"flag": "--yes-warnings", "desc": "发布检查出现 warning 时仍继续提交并发布（非交互/CI 推荐）"},
         {"flag": "--dry-run", "desc": "仅打印将执行的操作，不改文件、不跑命令"},
     ],
@@ -246,13 +246,46 @@ def update_changelog(changelog_path: Path, new_version: str, msg: str, *, dry_ru
     print(f"✅ CHANGELOG.md 已更新: {changelog_path}（版本 {new_version}）")
 
 
-def git_status_is_clean(*, dry_run: bool = False) -> bool:
-    """检查 git 工作区是否干净（无未提交变更）。"""
+def _git_porcelain_changed_paths(*, dry_run: bool = False) -> list[str]:
+    """返回 git 工作区发生变更的路径列表（包含 staged/unstaged/untracked）。"""
     if dry_run:
         print("🧪 DRY-RUN: git status --porcelain")
-        return True
+        return []
+
     p = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
-    return (p.stdout or "").strip() == ""
+    out = (p.stdout or "").splitlines()
+
+    paths: list[str] = []
+    for line in out:
+        if len(line) < 4:
+            continue
+        path_part = line[3:].strip()
+        if " -> " in path_part:  # rename
+            path_part = path_part.split(" -> ", 1)[1].strip()
+        if path_part.startswith('"') and path_part.endswith('"'):
+            path_part = path_part[1:-1]
+        paths.append(path_part)
+    return paths
+
+
+def git_status_only_allowed_changes(
+        *,
+        allowed_exact: set[str],
+        allowed_patterns: list[re.Pattern[str]],
+        dry_run: bool = False,
+) -> tuple[bool, list[str]]:
+    """工作区变更若全部命中 allowed_exact 或 allowed_patterns 则 True，否则 False 并返回不允许的路径。"""
+    changed = _git_porcelain_changed_paths(dry_run=dry_run)
+
+    not_allowed: list[str] = []
+    for p in changed:
+        if p in allowed_exact:
+            continue
+        if any(pat.search(p) for pat in allowed_patterns):
+            continue
+        not_allowed.append(p)
+
+    return (len(not_allowed) == 0), not_allowed
 
 
 def extract_warning_lines(text: str) -> list[str]:
@@ -310,36 +343,87 @@ def flutter_analyze(*, dry_run: bool = False) -> list[str]:
     return warnings
 
 
-def pre_publish_checks(*, dry_run: bool = False, yes_warnings: bool = False) -> bool:
-    """发布前检查：不跑 flutter test；检查 analyze + git 工作区干净。
+def pre_publish_checks(
+        *,
+        dry_run: bool = False,
+        yes_warnings: bool = False,
+        pubspec_path: Path,
+        changelog_path: Path,
+) -> bool:
+    """发布前检查：不跑 flutter test；检查 analyze + git 变更白名单。
     返回 True 表示继续提交+发布；False 表示中止。
     """
     print("🧰 发布前检查 ...")
 
     if is_git_repo(Path.cwd()):
-        if not git_status_is_clean(dry_run=dry_run):
-            raise CmdError("发布前检查失败：git 工作区有未提交变更，请先提交/暂存/清理后再发布。")
-        print("✅ git 工作区干净")
+        allowed_exact = {
+            pubspec_path.as_posix(),
+            changelog_path.as_posix(),
+        }
+        allowed_patterns = [
+            # ✅ 放过任意目录下的 pubspec.lock（包含 example/pubspec.lock 等）
+            re.compile(r"(^|/)\bpubspec\.lock$"),
+        ]
+
+        ok, not_allowed = git_status_only_allowed_changes(
+            allowed_exact=allowed_exact,
+            allowed_patterns=allowed_patterns,
+            dry_run=dry_run,
+        )
+        if not ok:
+            raise CmdError(
+                "发布前检查失败：git 工作区存在非预期变更（不在允许列表内）：\n"
+                + "\n".join(f"- {p}" for p in not_allowed)
+                + "\n\n已允许：\n"
+                + f"- {pubspec_path.as_posix()}\n"
+                + f"- {changelog_path.as_posix()}\n"
+                + "- 任意目录下的 pubspec.lock\n"
+                + "\n请先提交/暂存/清理这些文件后再发布。"
+            )
+        print("✅ git 变更检查通过（允许 pubspec/changelog + 任意 pubspec.lock）")
     else:
-        print("ℹ️ 当前目录不是 git 仓库，跳过 git clean 检查")
+        print("ℹ️ 当前目录不是 git 仓库，跳过 git 变更检查")
 
     warnings = flutter_analyze(dry_run=dry_run)
 
-    ok = confirm_continue_on_warnings(warnings, yes_warnings=yes_warnings)
-    if ok:
+    ok2 = confirm_continue_on_warnings(warnings, yes_warnings=yes_warnings)
+    if ok2:
         print("✅ 发布前检查通过（选择继续）")
     else:
         print("⛔ 已选择中止：不会执行 git commit/push，也不会 publish")
-    return ok
+    return ok2
+
+
+def _discover_pubspec_lock_files(repo_root: Path, *, pubspec_path: Path) -> list[Path]:
+    """发现仓库内所有 pubspec.lock（含 example 等），用于一次性 git add。
+    - 只添加已存在的 lock 文件（避免无意义的路径）
+    """
+    root = repo_root
+    # 优先包含主包 lock
+    candidates: list[Path] = []
+    main_lock = pubspec_path.with_name("pubspec.lock")
+    if main_lock.exists():
+        candidates.append(main_lock)
+
+    # 再包含仓库里其他 lock（例如 example/pubspec.lock）
+    for p in root.rglob("pubspec.lock"):
+        if p.is_file() and p not in candidates:
+            candidates.append(p)
+
+    # 去重并按路径排序（保证稳定）
+    candidates = sorted(candidates, key=lambda x: x.as_posix())
+    return candidates
 
 
 def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_version: str, *, dry_run: bool = False) -> None:
     msg = f"build: {project_name} + {new_version}"
 
-    paths = [str(pubspec_path), str(changelog_path)]
-    lock_path = pubspec_path.with_name("pubspec.lock")
-    if lock_path.exists():
-        paths.append(str(lock_path))
+    repo_root = Path.cwd()
+    paths: list[str] = [pubspec_path.as_posix(), changelog_path.as_posix()]
+
+    # ✅ 提交所有目录里的 pubspec.lock（包括 example/pubspec.lock）
+    for lock_file in _discover_pubspec_lock_files(repo_root, pubspec_path=pubspec_path):
+        paths.append(lock_file.as_posix())
 
     print("📝 git add ...")
     run_command(["git", "add", *paths], dry_run=dry_run)
@@ -355,13 +439,13 @@ def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_
 
 def flutter_pub_publish(*, dry_run: bool = False) -> None:
     print("📦 flutter pub publish --force ...")
-    # publish：出现 warning 或错误都抛出（你之前的需求保留）
+    # publish：出现 warning 或错误都抛出
     run_command(
         ["flutter", "pub", "publish", "--force"],
         dry_run=dry_run,
         fail_on_warning=True,
         # 默认匹配行首 warning: / warning-；如果你想更激进可改：
-        # warning_regex=r"(?im)\bwarning\b"
+        # warning_regex=re.compile(r"(?im)\bwarning\b")
     )
     print("✅ 发布完成")
 
@@ -379,7 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-git", action="store_true", help="跳过 git add/commit/push")
     p.add_argument("--no-publish", action="store_true", help="跳过 flutter pub publish")
     p.add_argument("--skip-pub-get", action="store_true", help="跳过 flutter pub get")
-    p.add_argument("--skip-checks", action="store_true", help="跳过发布前检查（flutter analyze + git clean）")
+    p.add_argument("--skip-checks", action="store_true", help="跳过发布前检查（flutter analyze + git 变更白名单）")
     p.add_argument("--yes-warnings", action="store_true", help="发布检查出现 warning 时仍继续提交并发布（非交互/CI 推荐）")
     p.add_argument("--dry-run", action="store_true", help="预演：不改文件、不执行外部命令")
     return p
@@ -418,10 +502,15 @@ def main(argv: list[str] | None = None) -> int:
         if not args.skip_pub_get:
             flutter_pub_get(dry_run=args.dry_run)
 
-        # ✅ 关键：发布前检查放在提交/发布之前
+        # ✅ 发布前检查放在提交/发布之前
         should_continue = True
         if (not args.no_publish) and (not args.skip_checks):
-            should_continue = pre_publish_checks(dry_run=args.dry_run, yes_warnings=args.yes_warnings)
+            should_continue = pre_publish_checks(
+                dry_run=args.dry_run,
+                yes_warnings=args.yes_warnings,
+                pubspec_path=pubspec_path,
+                changelog_path=changelog_path,
+            )
         elif not args.no_publish:
             print("ℹ️ 已跳过发布前检查（--skip-checks）")
 
