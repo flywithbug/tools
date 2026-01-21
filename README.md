@@ -31,6 +31,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
   - [`box_pub_version`](#box_tools-flutter-pub_version-tool)
 - [flutter/riverpod_gen](#flutter-riverpod_gen)
   - [`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)
+- [flutter/slang_i18n](#flutter-slang_i18n)
+  - [`slang_i18n`](#box_tools-flutter-slang_i18n-tool)
 
 ---
 
@@ -66,6 +68,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 - **[`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)**：生成 Riverpod StateNotifier + State 模板文件（notifier/state）（[README.md](src/box_tools/flutter/riverpod_gen/README.md)）
 
+### flutter/slang_i18n
+
+- **[`slang_i18n`](#box_tools-flutter-slang_i18n-tool)**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）（[README.md](src/box_tools/flutter/slang_i18n/README.md)）
+
 ---
 
 <a id="section"></a>
@@ -99,6 +105,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### flutter/riverpod_gen
 
 - **box_riverpod_gen**：[README.md](src/box_tools/flutter/riverpod_gen/README.md)
+
+### flutter/slang_i18n
+
+- **slang_i18n**：[README.md](src/box_tools/flutter/slang_i18n/README.md)
 
 ---
 
@@ -392,6 +402,44 @@ box_riverpod_gen Product --legacy
 **文档**
 
 [README.md](src/box_tools/flutter/riverpod_gen/README.md)
+
+---
+
+<a id="flutter-slang_i18n"></a>
+
+## flutter/slang_i18n
+
+<a id="box_tools-flutter-slang_i18n-tool"></a>
+
+### slang_i18n
+
+**简介**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）
+
+**命令**：`slang_i18n`
+
+**用法**
+
+```bash
+slang_i18n
+slang_i18n init
+slang_i18n doctor
+slang_i18n sort
+slang_i18n check
+slang_i18n clean --yes
+slang_i18n translate --api-key $OPENAI_API_KEY
+```
+
+**参数说明**
+
+- `--api-key`：OpenAI API key（也可用环境变量 OPENAI_API_KEY）
+- `--model`：模型（默认 gpt-4o，且可覆盖配置 openAIModel）
+- `--full`：全量翻译（默认增量翻译）
+- `--yes`：clean 删除冗余时跳过确认
+- `--no-exitcode-3`：check 发现冗余时仍返回 0（默认返回 3）
+
+**文档**
+
+[README.md](src/box_tools/flutter/slang_i18n/README.md)
 
 ---
 

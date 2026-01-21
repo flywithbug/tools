@@ -1,6 +1,6 @@
 [project]
 name = "box"
-version = "0.1.64"
+version = "0.1.65"
 requires-python = ">=3.9"
 dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "rich", "pyperclip"]
 
@@ -12,6 +12,7 @@ box_pub_publish = "box_tools.flutter.pub_publish.tool:main"
 box_pub_upgrade = "box_tools.flutter.pub_upgrade.tool:main"
 box_pub_version = "box_tools.flutter.pub_version.tool:main"
 box_riverpod_gen = "box_tools.flutter.riverpod_gen.tool:main"
+box_slang_i18n = "box_tools.flutter.slang_i18n.tool:main"
 
 [build-system]
 requires = ["hatchling"]
