@@ -68,6 +68,39 @@ def is_git_repo(cwd: Path) -> bool:
         return False
 
 
+def get_git_root(cwd: Path, *, dry_run: bool = False) -> Path | None:
+    """获取 git 仓库根目录；非 git 仓库返回 None。"""
+    if dry_run:
+        # dry-run 时避免调用外部命令；给一个合理占位
+        return cwd.resolve()
+
+    if not which("git"):
+        return None
+
+    try:
+        p = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        root = p.stdout.strip()
+        return Path(root).resolve() if root else None
+    except Exception:
+        return None
+
+
+def to_repo_relative_posix(path: Path, repo_root: Path) -> str:
+    """
+    将任意路径归一化为相对 repo_root 的 posix 路径字符串，
+    用于与 `git status --porcelain` 的输出对齐（它永远相对仓库根目录）。
+    """
+    abs_path = path.resolve()
+    rel = abs_path.relative_to(repo_root.resolve())
+    return rel.as_posix()
+
+
 def run_command(
         cmd: list[str],
         *,
@@ -247,7 +280,9 @@ def update_changelog(changelog_path: Path, new_version: str, msg: str, *, dry_ru
 
 
 def _git_porcelain_changed_paths(*, dry_run: bool = False) -> list[str]:
-    """返回 git 工作区发生变更的路径列表（包含 staged/unstaged/untracked）。"""
+    """返回 git 工作区发生变更的路径列表（包含 staged/unstaged/untracked）。
+    注意：路径均相对 git 仓库根目录。
+    """
     if dry_run:
         print("🧪 DRY-RUN: git status --porcelain")
         return []
@@ -356,9 +391,13 @@ def pre_publish_checks(
     print("🧰 发布前检查 ...")
 
     if is_git_repo(Path.cwd()):
+        repo_root = get_git_root(Path.cwd(), dry_run=dry_run)
+        if repo_root is None:
+            raise CmdError("无法获取 git 仓库根目录（git rev-parse --show-toplevel 失败）")
+
         allowed_exact = {
-            pubspec_path.as_posix(),
-            changelog_path.as_posix(),
+            to_repo_relative_posix(pubspec_path, repo_root),
+            to_repo_relative_posix(changelog_path, repo_root),
         }
         allowed_patterns = [
             # ✅ 放过任意目录下的 pubspec.lock（包含 example/pubspec.lock 等）
@@ -375,8 +414,8 @@ def pre_publish_checks(
                 "发布前检查失败：git 工作区存在非预期变更（不在允许列表内）：\n"
                 + "\n".join(f"- {p}" for p in not_allowed)
                 + "\n\n已允许：\n"
-                + f"- {pubspec_path.as_posix()}\n"
-                + f"- {changelog_path.as_posix()}\n"
+                + f"- {to_repo_relative_posix(pubspec_path, repo_root)}\n"
+                + f"- {to_repo_relative_posix(changelog_path, repo_root)}\n"
                 + "- 任意目录下的 pubspec.lock\n"
                 + "\n请先提交/暂存/清理这些文件后再发布。"
             )
@@ -398,15 +437,15 @@ def _discover_pubspec_lock_files(repo_root: Path, *, pubspec_path: Path) -> list
     """发现仓库内所有 pubspec.lock（含 example 等），用于一次性 git add。
     - 只添加已存在的 lock 文件（避免无意义的路径）
     """
-    root = repo_root
-    # 优先包含主包 lock
     candidates: list[Path] = []
+
+    # 优先包含主包 lock（与 pubspec 同目录）
     main_lock = pubspec_path.with_name("pubspec.lock")
     if main_lock.exists():
         candidates.append(main_lock)
 
     # 再包含仓库里其他 lock（例如 example/pubspec.lock）
-    for p in root.rglob("pubspec.lock"):
+    for p in repo_root.rglob("pubspec.lock"):
         if p.is_file() and p not in candidates:
             candidates.append(p)
 
@@ -418,12 +457,21 @@ def _discover_pubspec_lock_files(repo_root: Path, *, pubspec_path: Path) -> list
 def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_version: str, *, dry_run: bool = False) -> None:
     msg = f"build: {project_name} + {new_version}"
 
-    repo_root = Path.cwd()
-    paths: list[str] = [pubspec_path.as_posix(), changelog_path.as_posix()]
+    repo_root = get_git_root(Path.cwd(), dry_run=dry_run)
+    if repo_root is None:
+        raise CmdError("无法获取 git 仓库根目录（无法执行提交）")
+
+    paths: list[str] = [
+        to_repo_relative_posix(pubspec_path, repo_root),
+        to_repo_relative_posix(changelog_path, repo_root),
+    ]
 
     # ✅ 提交所有目录里的 pubspec.lock（包括 example/pubspec.lock）
     for lock_file in _discover_pubspec_lock_files(repo_root, pubspec_path=pubspec_path):
-        paths.append(lock_file.as_posix())
+        paths.append(to_repo_relative_posix(lock_file, repo_root))
+
+    # 去重并保持稳定排序
+    paths = sorted(set(paths))
 
     print("📝 git add ...")
     run_command(["git", "add", *paths], dry_run=dry_run)
