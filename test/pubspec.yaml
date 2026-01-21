@@ -1,0 +1,281 @@
+name: app
+description: ApeX App.
+repository: https://github.com/l2dex/apex_app
+publish_to: none
+version: 3.45.0+2026012103
+
+environment:
+  sdk: '>=3.8.1 <4.0.0'
+  flutter: '>=3.38.4'
+
+dependency_overrides:
+  flutter_secure_storage: 10.0.0-beta.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  tonconnect:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: tonconnect
+    version: 0.0.16
+
+  # common_logic
+  ap_sak_flutter:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_sak_flutter
+    version: 3.0.9
+
+  ap_foundation:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_foundation
+    version: 2.0.8
+
+  ap_decimal:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_decimal
+    version: 3.1.9
+
+  ap_inspector:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_inspector
+    version: 2.0.20
+
+  ap_network:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_network
+    version: 2.1.19
+
+  ap_device:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_device
+    version: 2.1.11
+
+  ap_web3:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_web3
+    version: 4.2.29
+
+  ap_recaptcha:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_recaptcha
+    version: 2.0.2
+
+  # common_ui
+  ap_color:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_color
+    version: 2.1.3
+
+  ap_ui:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_ui
+    version: 3.3.47
+
+  ap_image:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_image
+    version: 0.0.77
+
+  ap_elements:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_elements
+    version: 0.0.60
+
+  ap_theme:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_theme
+    version: 0.1.4
+
+  ap_scan:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_scan
+    version: 3.43.2
+
+
+  ap_kline:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_kline
+    version: 4.1.4
+
+  ap_webview:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_webview
+    version: 2.1.6
+
+  # biz_logic
+  ap_i18n:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_i18n
+    version: 3.3.236
+
+  ap_data:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_data
+    version: 3.44.2
+
+  ap_service:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_service
+    version: 3.39.4
+
+  ap_main_board:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_main_board
+    version: ^3.45.0
+
+  ap_domain:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_domain
+    version: 3.44.2
+
+  # biz_ui
+  ap_route:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_route
+    version: 3.43.7
+
+  ap_sbt_game:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_sbt_game
+    version: 0.1.13
+
+  ap_presentation:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_presentation
+    version: 3.45.5
+
+  ap_chart:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_chart
+    version: 3.39.3
+
+  ap_cache:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_cache
+    version: 0.0.11
+
+  flutter_rust_bridge:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: flutter_rust_bridge
+    version: 2.0.0+1
+
+  ap_skeleton_loader:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_skeleton_loader
+    version: 0.0.8
+
+  adaptive_theme: 3.6.0
+
+  # Sentry
+  sentry_flutter: 9.6.0
+
+  # Firebase
+  firebase_core: 3.11.0
+  firebase_crashlytics: 4.3.2
+  firebase_messaging: 15.2.2
+  firebase_analytics: 11.4.2
+  firebase_app_check: 0.3.2+2
+
+  audioplayers: 6.1.0
+  path_provider: 2.1.5
+
+  # Biometric
+  local_auth: 2.3.0
+
+  permission_handler: 12.0.1
+  mobile_scanner: 7.1.2
+  shared_preferences: 2.5.3
+  flutter_inappwebview: 6.2.0-beta.2
+
+  http: 1.6.0
+  http2: 2.3.1
+  rxdart: 0.28.0
+
+  qr_flutter: 4.1.0
+  go_router: 17.0.1
+  fl_chart: 1.0.0
+  flutter_svg: 2.2.3
+  easy_refresh: 3.4.0
+  flutter_udid: 4.1.1
+  flutter_riverpod: 2.6.1
+  rive: 0.13.20
+  screenshot: 3.0.0
+  flutter_secure_storage: 10.0.0-beta.5
+  recaptcha_enterprise_flutter: 18.6.0
+  restart: 1.0.0+1
+
+  reown_appkit: ^1.5.0
+  coinbase_wallet_sdk: 1.0.10
+  web_socket_channel: 3.0.3
+
+  connectivity_plus: 6.1.3
+
+  zklink_sdk_dart:
+    path: rust_builder
+
+  freerasp: 6.6.0
+  privy_flutter: 0.6.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  ap_lint:
+    hosted:
+      url: https://dart.cloudsmith.io/apex-dao-llc/app/
+      name: ap_lint
+    version: 2.0.6
+
+  build_runner: 2.4.12
+  pigeon: 22.3.0
+
+flutter_gen:
+  output: lib/gen/
+  line_length: 100
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/sounds/
+  fonts:
+    - family: HarmonyOS_Sans
+      fonts:
+        - asset: packages/ap_ui/fonts/HarmonyOS_Sans_Regular.ttf
+          weight: 400
+        - asset: packages/ap_ui/fonts/HarmonyOS_Sans_Medium.ttf
+          weight: 500
+        - asset: packages/ap_ui/fonts/HarmonyOS_Sans_Bold.ttf
+          weight: 700

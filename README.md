@@ -18,9 +18,11 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - [工具总览](#section)
 - [工具集文档索引](#section)
 - [box（工具集管理）](#box)
-  - [`box`](#box-cli)
+  - [`box`](#box-tool)
+- [flutter/pub_upgrade](#flutter-pub_upgrade)
+  - [`box_pub_upgrade`](#box_tools-flutter-pub_upgrade-tool)
 - [flutter/pub_version](#flutter-pub_version)
-  - [`box_pub_version`](#box_tools-flutter-pub_version-cli)
+  - [`box_pub_version`](#box_tools-flutter-pub_version-tool)
 
 ---
 
@@ -30,11 +32,15 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### box（工具集管理）
 
-- **[`box`](#box-cli)**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表（[文档](README.md)）
+- **[`box`](#box-tool)**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表（[文档](README.md)）
+
+### flutter/pub_upgrade
+
+- **[`box_pub_upgrade`](#box_tools-flutter-pub_upgrade-tool)**：升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）（[文档](README.md)）
 
 ### flutter/pub_version
 
-- **[`box_pub_version`](#box_tools-flutter-pub_version-cli)**：升级 Flutter pubspec.yaml 的 version（支持交互选择 minor/patch，可选 git 提交）（[文档](README.md)）
+- **[`box_pub_version`](#box_tools-flutter-pub_version-tool)**：升级 Flutter pubspec.yaml 的 version（支持交互选择 minor/patch，可选 git 提交）（[文档](README.md)）
 
 ---
 
@@ -46,13 +52,17 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 - **box**：[README.md](README.md)
 
+### flutter/pub_upgrade
+
+- **box_pub_upgrade**：[README.md](README.md)
+
 ### flutter/pub_version
 
 - **box_pub_version**：[README.md](README.md)
 
 ---
 
-<a id="box-cli"></a>
+<a id="box-tool"></a>
 
 ## box（工具集管理）
 
@@ -90,11 +100,53 @@ box tools --full
 
 ---
 
+<a id="flutter-pub_upgrade"></a>
+
+## flutter/pub_upgrade
+
+<a id="box_tools-flutter-pub_upgrade-tool"></a>
+
+### box_pub_upgrade
+
+**简介**：升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）
+
+**命令**：`box_pub_upgrade`
+
+**用法**
+
+```bash
+box_pub_upgrade
+box_pub_upgrade --yes
+box_pub_upgrade --no-git
+box_pub_upgrade --private-host dart.cloudsmith.io
+box_pub_upgrade --private-host dart.cloudsmith.io --private-host my.private.repo
+box_pub_upgrade --skip ap_recaptcha --skip some_pkg
+```
+
+**参数说明**
+
+- `--yes`：跳过确认，直接执行升级
+- `--no-git`：只更新依赖与 lock，不执行 git pull/commit/push（兼容 --no-commit）
+- `--private-host`：私服 hosted url 关键字（可多次指定）。默认不过滤：任何 hosted/url 都算私有依赖
+- `--skip`：跳过某些包名（可多次指定）
+
+**示例**
+
+- `box_pub_upgrade`：默认交互：比对 -> 展示清单 -> 确认升级
+- `box_pub_upgrade --yes --no-git`：直接升级（不提交/不拉取）
+- `box_pub_upgrade --private-host my.private.repo`：仅升级 url 含关键词的 hosted 私有依赖
+
+**文档**
+
+[README.md](README.md)
+
+---
+
 <a id="flutter-pub_version"></a>
 
 ## flutter/pub_version
 
-<a id="box_tools-flutter-pub_version-cli"></a>
+<a id="box_tools-flutter-pub_version-tool"></a>
 
 ### box_pub_version
 
