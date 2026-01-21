@@ -429,7 +429,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--pubspec", default="pubspec.yaml", help="pubspec.yaml 路径（默认 ./pubspec.yaml）")
     p.add_argument("--changelog", default="CHANGELOG.md", help="CHANGELOG.md 路径（默认 ./CHANGELOG.md）")
-    p.add_argument("--msg", nargs="+", required=True, help="更新说明内容（不需要引号，可多段）")
+    p.add_argument("--msg", nargs="+",default="version", required=False,
+                   help="更新说明内容（不需要引号，可多段）")
 
     p.add_argument("--no-pull", action="store_true", help="跳过 git pull")
     p.add_argument("--no-git", action="store_true", help="跳过 git add/commit/push")
