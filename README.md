@@ -19,6 +19,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - [工具集文档索引](#section)
 - [box（工具集管理）](#box)
   - [`box`](#box-tool)
+- [ai/chat](#ai-chat)
+  - [`box_ai_chat`](#box_tools-ai-chat-tool)
 - [flutter/pub_publish](#flutter-pub_publish)
   - [`box_pub_publish`](#box_tools-flutter-pub_publish-tool)
 - [flutter/pub_upgrade](#flutter-pub_upgrade)
@@ -37,6 +39,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### box（工具集管理）
 
 - **[`box`](#box-tool)**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表（[README.md](src/box/README.md)）
+
+### ai/chat
+
+- **[`box_ai_chat`](#box_tools-ai-chat-tool)**：命令行连续对话：输入问题→等待 AI 回复→继续追问（支持 /new /reset /save /load /model 等）（[README.md](src/box_tools/ai/chat/README.md)）
 
 ### flutter/pub_publish
 
@@ -63,6 +69,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### box（工具集管理）
 
 - **box**：[README.md](src/box/README.md)
+
+### ai/chat
+
+- **box_ai_chat**：[README.md](src/box_tools/ai/chat/README.md)
 
 ### flutter/pub_publish
 
@@ -117,6 +127,52 @@ box tools --full
 **文档**
 
 [README.md](src/box/README.md)
+
+---
+
+<a id="ai-chat"></a>
+
+## ai/chat
+
+<a id="box_tools-ai-chat-tool"></a>
+
+### box_ai_chat
+
+**简介**：命令行连续对话：输入问题→等待 AI 回复→继续追问（支持 /new /reset /save /load /model 等）
+
+**命令**：`box_ai_chat`
+
+**用法**
+
+```bash
+box_ai_chat
+box_ai_chat --model gpt-4o-mini
+box_ai_chat --system "You are a helpful assistant."
+box_ai_chat --load ~/.box_tools/ai_chat/20260121_120000.json
+```
+
+**参数说明**
+
+- `--model`：指定模型（默认 gpt-4o-mini，如 gpt-4o / gpt-4.1 / gpt-4.1-mini）
+- `--system`：设置 system prompt（对话角色/风格）
+- `--temperature`：采样温度（默认 0.2；越低越稳定）
+- `--top-p`：top_p（默认 1.0）
+- `--timeout`：请求超时（秒，默认 30）
+- `--api-key`：显式传入 OpenAI API Key（不传则读取 OPENAI_API_KEY）
+- `--load`：启动时加载会话文件（JSON）
+- `--session`：指定 session id（用于固定默认保存文件名）
+- `--store-dir`：会话保存目录（默认 ~/.box_tools/ai_chat）
+
+**示例**
+
+- `export OPENAI_API_KEY='sk-***' && box_ai_chat`：进入连续对话模式
+- `box_ai_chat --model gpt-4o-mini`：用指定模型聊天
+- `box_ai_chat --system "You are a senior iOS engineer."`：用自定义 system prompt 进入对话
+- `box_ai_chat --load ~/.box_tools/ai_chat/20260121_120000.json`：加载历史会话继续聊
+
+**文档**
+
+[README.md](src/box_tools/ai/chat/README.md)
 
 ---
 

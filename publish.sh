@@ -1,3 +1,3 @@
 #!/usr/bin/env sh
 
-python scripts/publish_tools.py
+python scripts/publish_tool.py
