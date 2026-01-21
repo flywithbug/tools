@@ -25,8 +25,8 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 @dataclass(frozen=True)
 class Tool:
-    py_path: Path               # src/.../tool.py (absolute)
-    md_path: Path               # docs md (absolute) - prefer BOX_TOOL["docs"] else same-name.md
+    py_path: Path               # src/.../*.py (absolute)
+    md_path: Path               # docs md (absolute) - prefer BOX_TOOL["docs"] else README.md in same folder
     rel_py: str                 # relative path for display/link
     rel_md: str                 # relative path for link
 
@@ -41,8 +41,8 @@ class Tool:
     options: List[Dict[str, str]]
     examples: List[Dict[str, str]]
 
-    module: str                 # e.g. box_tools.flutter.pub_version
-    entrypoint: str             # e.g. box_tools.flutter.pub_version:main
+    module: str                 # e.g. box_tools.flutter.pub_publish.tool OR box.cli
+    entrypoint: str             # e.g. box_tools.flutter.pub_publish.tool:main
 
     extra_meta: Dict[str, Any]  # 原始 BOX_TOOL meta（用于 deps/docs 等扩展）
 
@@ -81,14 +81,10 @@ def extract_box_tool_literal(py_file: Path) -> Optional[Dict[str, Any]]:
 
 
 def module_from_py_path(py_file: Path) -> str:
-    # src/box_tools/flutter/pub_version.py -> box_tools.flutter.pub_version
+    # src/box/cli.py -> box.cli
+    # src/box_tools/flutter/pub_publish/tool.py -> box_tools.flutter.pub_publish.tool
     rel = py_file.relative_to(SRC_DIR).with_suffix("")
     return ".".join(rel.parts)
-
-
-def same_name_md(py_file: Path) -> Path:
-    # same folder, same stem, .md
-    return py_file.with_suffix(".md")
 
 
 def norm_str(v: Any) -> str:
@@ -123,27 +119,22 @@ def norm_list_dict(v: Any) -> List[Dict[str, str]]:
 
 def dir_key_from_py(py_file: Path) -> str:
     """
-    “根据文件夹和名字排序分类工具集”
     分类按目录层级（相对 src）：
-      - box/box.py -> "box"
-      - box_tools/flutter/pub_version.py -> "box_tools/flutter"
+      - src/box/cli.py -> "box"
+      - src/box_tools/flutter/pub_publish/tool.py -> "box_tools/flutter/pub_publish"
     """
     rel = py_file.relative_to(SRC_DIR)
     parent = rel.parent.as_posix()
     return parent if parent else "."
 
 
-def make_group_title(dir_key: str, category: str) -> str:
-    """
-    README 的分组标题：优先用 folder 结构（满足“按文件夹分类”）。
-    category 仅作为补充，不作为分组依据（避免目录与 category 不一致导致混乱）。
-    """
+def make_group_title(dir_key: str) -> str:
     if dir_key == "box":
         return "box（工具集管理）"
 
     parts = dir_key.split("/")
     if parts and parts[0] == "box_tools":
-        rest = parts[1:]  # 去掉 box_tools 前缀
+        rest = parts[1:]
         if rest:
             return "/".join(rest)
         return "box_tools"
@@ -154,7 +145,7 @@ def _resolve_docs_md(py_file: Path, meta: Dict[str, Any]) -> Path:
     """
     文档路径规则：
     - 优先 BOX_TOOL["docs"]（相对仓库根目录或绝对路径）
-    - 否则同名 md（同目录同 stem）
+    - 否则同目录 README.md
     """
     docs = meta.get("docs")
     if isinstance(docs, str) and docs.strip():
@@ -162,11 +153,12 @@ def _resolve_docs_md(py_file: Path, meta: Dict[str, Any]) -> Path:
         if not p.is_absolute():
             p = REPO_ROOT / p
         return p
-    return same_name_md(py_file)
+
+    # 默认：同目录 README.md
+    return py_file.parent / "README.md"
 
 
 def _rel_to_repo(p: Path) -> str:
-    """把绝对/相对 Path 都稳定转成相对 REPO_ROOT 的 posix 路径。"""
     if p.is_absolute():
         return p.relative_to(REPO_ROOT).as_posix()
     return (REPO_ROOT / p).relative_to(REPO_ROOT).as_posix()
@@ -215,6 +207,13 @@ def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
     )
 
 
+def _is_box_tool(t: Tool) -> bool:
+    # 以 name=box 或 module=box.cli / box.* 作为 box 识别规则（兼容你新结构）
+    if t.name.strip().lower() == "box":
+        return True
+    return t.module == "box.cli" or t.module.startswith("box.")
+
+
 def collect_tools() -> List[Tool]:
     tools: List[Tool] = []
     for py in iter_py_files():
@@ -225,14 +224,8 @@ def collect_tools() -> List[Tool]:
         if t:
             tools.append(t)
 
-    # 排序：box 最上，其余按 (folder, filename)
-    def is_box(t: Tool) -> bool:
-        if t.name.lower() == "box":
-            return True
-        rel = t.py_path.relative_to(SRC_DIR).as_posix().lower()
-        return rel == "box/box.py"
-
-    tools.sort(key=lambda t: (0, "") if is_box(t) else (1, t.sort_key[0].lower(), t.sort_key[1].lower()))
+    # box 最上，其余按 (folder, filename)
+    tools.sort(key=lambda t: (0, "") if _is_box_tool(t) else (1, t.sort_key[0].lower(), t.sort_key[1].lower()))
     return tools
 
 
@@ -241,12 +234,6 @@ def collect_tools() -> List[Tool]:
 # -------------------------
 
 def _slugify_anchor(s: str) -> str:
-    """
-    生成稳定、Markdown 友好的锚点 id
-    - 小写
-    - 非 [a-z0-9_-] 都替换成 -
-    - 合并连续 -
-    """
     s = (s or "").strip().lower()
     s = re.sub(r"[^a-z0-9_\-\/]+", "-", s)
     s = s.replace("/", "-")
@@ -255,21 +242,14 @@ def _slugify_anchor(s: str) -> str:
 
 
 def tool_anchor_id(t: Tool) -> str:
-    # 用 dir_key + stem 保证唯一性（避免同名工具冲突）
     return _slugify_anchor(f"{t.dir_key}-{t.py_path.stem}")
 
 
 def section_anchor_id(title: str) -> str:
-    # README 章节标题锚点（显式，避免依赖渲染器规则）
     return _slugify_anchor(title)
 
 
 def render_readme_toc(tools: List[Tool]) -> str:
-    """
-    README 顶部目录（TOC）
-    - 列出固定章节：工具总览、工具集文档索引
-    - 再按目录分组列出：分组标题 -> 工具
-    """
     groups: Dict[str, List[Tool]] = {}
     for t in tools:
         groups.setdefault(t.dir_key, []).append(t)
@@ -282,9 +262,9 @@ def render_readme_toc(tools: List[Tool]) -> str:
     out.append(f"- [工具集文档索引](#{section_anchor_id('工具集文档索引')})\n")
 
     for gk in group_keys:
-        title = make_group_title(gk, "")
+        title = make_group_title(gk)
         out.append(f"- [{title}](#{section_anchor_id(title)})\n")
-        for t in sorted(groups[gk], key=lambda x: (0, "") if x.name.lower() == "box" else (1, x.py_path.stem.lower())):
+        for t in sorted(groups[gk], key=lambda x: (0, "") if _is_box_tool(x) else (1, x.py_path.stem.lower())):
             a = tool_anchor_id(t)
             out.append(f"  - [`{t.name}`](#{a})\n")
 
@@ -293,12 +273,6 @@ def render_readme_toc(tools: List[Tool]) -> str:
 
 
 def render_overview(tools: List[Tool]) -> str:
-    """
-    “工具总览”：按目录分组列出 tool name + summary，
-    并为每个工具提供：
-    - 跳转到 README 内工具详情的索引链接
-    - 直达文档链接（若存在）
-    """
     groups: Dict[str, List[Tool]] = {}
     for t in tools:
         groups.setdefault(t.dir_key, []).append(t)
@@ -310,12 +284,12 @@ def render_overview(tools: List[Tool]) -> str:
     out.append("## 工具总览\n\n")
 
     for gk in group_keys:
-        title = make_group_title(gk, "")
+        title = make_group_title(gk)
         out.append(f"### {title}\n\n")
-        group_tools = groups[gk]
+
         group_tools_sorted = sorted(
-            group_tools,
-            key=lambda t: (0, "") if t.name.lower() == "box" else (1, t.py_path.stem.lower())
+            groups[gk],
+            key=lambda t: (0, "") if _is_box_tool(t) else (1, t.py_path.stem.lower())
         )
         for t in group_tools_sorted:
             a = tool_anchor_id(t)
@@ -330,15 +304,12 @@ def render_overview(tools: List[Tool]) -> str:
             else:
                 out.append(f"- **[`{t.name}`](#{a})**{doc_part}\n")
         out.append("\n")
+
     out.append("---\n\n")
     return "".join(out)
 
 
 def render_docs_index(tools: List[Tool]) -> str:
-    """
-    “工具集文档索引”：按目录分组列出 tool -> docs.md
-    方便把 README 当作统一入口页使用。
-    """
     groups: Dict[str, List[Tool]] = {}
     for t in tools:
         groups.setdefault(t.dir_key, []).append(t)
@@ -350,10 +321,10 @@ def render_docs_index(tools: List[Tool]) -> str:
     out.append("## 工具集文档索引\n\n")
 
     for gk in group_keys:
-        title = make_group_title(gk, "")
+        title = make_group_title(gk)
         out.append(f"### {title}\n\n")
 
-        for t in sorted(groups[gk], key=lambda x: (0, "") if x.name.lower() == "box" else (1, x.py_path.stem.lower())):
+        for t in sorted(groups[gk], key=lambda x: (0, "") if _is_box_tool(x) else (1, x.py_path.stem.lower())):
             if t.md_path.exists():
                 out.append(f"- **{t.name}**：[{t.rel_md}]({t.rel_md})\n")
             else:
@@ -366,17 +337,11 @@ def render_docs_index(tools: List[Tool]) -> str:
 
 
 def render_tool_detail(t: Tool) -> str:
-    """
-    生成单个工具详情块（信息密度高但规整）。
-    文档链接优先 BOX_TOOL["docs"]，否则同名 md。
-    """
     out: List[str] = []
-
-    # ✅ 显式锚点：让“目录/索引”稳定跳转
     anchor = tool_anchor_id(t)
     out.append(f'<a id="{anchor}"></a>\n\n')
 
-    if t.name.lower() == "box":
+    if _is_box_tool(t):
         out.append("## box（工具集管理）\n\n")
     else:
         out.append(f"### {t.name}\n\n")
@@ -387,8 +352,7 @@ def render_tool_detail(t: Tool) -> str:
     out.append(f"**命令**：`{t.name}`\n\n")
 
     if t.usage:
-        out.append("**用法**\n\n")
-        out.append("```bash\n")
+        out.append("**用法**\n\n```bash\n")
         out.extend([u + "\n" for u in t.usage])
         out.append("```\n\n")
 
@@ -431,35 +395,23 @@ def render_tool_detail(t: Tool) -> str:
 def render_readme(temp_header: str, tools: List[Tool]) -> str:
     out: List[str] = []
     out.append(temp_header.rstrip() + "\n\n")
-
-    # ✅ 顶部目录（TOC）
     out.append(render_readme_toc(tools))
-
-    # ✅ 总览（带索引链接 + 文档链接）
     out.append(render_overview(tools))
-
-    # ✅ 工具集文档索引（集中入口）
     out.append(render_docs_index(tools))
 
-    box_tools = [
-        t for t in tools
-        if t.name.lower() == "box" or t.py_path.relative_to(SRC_DIR).as_posix().lower() == "box/box.py"
-    ]
+    box_tools = [t for t in tools if _is_box_tool(t)]
     other_tools = [t for t in tools if t not in box_tools]
 
-    # box 详情
     for t in box_tools:
         out.append(render_tool_detail(t))
 
-    # 其他工具：按目录分组输出（并给分组加显式锚点）
     groups: Dict[str, List[Tool]] = {}
     for t in other_tools:
         groups.setdefault(t.dir_key, []).append(t)
 
     group_keys = sorted(groups.keys(), key=lambda k: (1, k.lower()))
-
     for gk in group_keys:
-        title = make_group_title(gk, "")
+        title = make_group_title(gk)
         out.append(f'<a id="{section_anchor_id(title)}"></a>\n\n')
         out.append(f"## {title}\n\n")
         for t in sorted(groups[gk], key=lambda x: x.py_path.stem.lower()):
@@ -519,7 +471,6 @@ def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
     else:
         block2 = block.rstrip() + "\n" + new_line + "\n"
 
-    # ✅ 确保 wheel table 末尾有空行
     if not block2.endswith("\n\n"):
         block2 = block2.rstrip() + "\n\n"
 
@@ -527,7 +478,7 @@ def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
 
 
 # -------------------------
-# dependencies: collect + patch
+# dependencies: collect + exact patch (增减)
 # -------------------------
 
 _STDLIB_NAMES: Set[str] = set(getattr(sys, "stdlib_module_names", set()))
@@ -548,6 +499,25 @@ _IMPORT_TO_PIP = {
     "tomli": "tomli",
     "rich": "rich",
 }
+
+# 对“常用依赖”提供默认版本约束（可按你需要扩展）
+_DEFAULT_DEP_SPECS = {
+    "openai": "openai>=1.0.0",
+    "PyYAML": "PyYAML>=6.0",
+}
+
+_DEP_BASE_RE = re.compile(r"^\s*([A-Za-z0-9_.\-]+)")
+
+def _dep_base(dep: str) -> str:
+    """
+    从依赖字符串里抽 base name：
+      - "PyYAML>=6.0" -> "PyYAML"
+      - "openai" -> "openai"
+      - "tiktoken==0.7.0" -> "tiktoken"
+    """
+    m = _DEP_BASE_RE.match(dep.strip())
+    return m.group(1) if m else dep.strip()
+
 
 def _top_import_name(mod: str) -> str:
     return (mod or "").split(".", 1)[0].strip()
@@ -590,7 +560,7 @@ def infer_deps_from_imports(py_file: Path) -> List[str]:
                     imports.add(name)
         elif isinstance(node, ast.ImportFrom):
             if node.level and node.level > 0:
-                continue  # 相对导入视为项目内部
+                continue
             name = _top_import_name(node.module or "")
             if name:
                 imports.add(name)
@@ -639,67 +609,164 @@ def collect_tool_dependencies(tools: List[Tool]) -> List[str]:
     return merged
 
 
-def _ensure_block_ends_with_blank_line(block: str) -> str:
-    """
-    ✅ 强制 table block 以 \n\n 结尾，避免下一个 [table] 粘上来导致 TOML 解析失败。
-    """
-    if block.endswith("\n\n"):
-        return block
-    return block.rstrip() + "\n\n"
-
-
-def ensure_project_dependencies(text: str, add_deps: List[str]) -> str:
-    """
-    把 add_deps 合并进 [project].dependencies
-    - 若 [project] 不存在：追加 [project] + dependencies，并以空行收尾
-    - 若 dependencies 不存在：在 [project] block 末尾追加 dependencies，并以空行收尾
-    - 若存在：合并后回写，并以空行收尾
-    """
-    if not add_deps:
-        return text
-
+def _read_project_block(text: str) -> Optional[str]:
     project_pat = re.compile(r"(?ms)^\[project\]\s*\n.*?(?=^\[|\Z)")
     m = project_pat.search(text)
     if not m:
-        deps_lines = ", ".join([f'"{d}"' for d in add_deps])
-        block = "[project]\n" + f"dependencies = [{deps_lines}]\n\n"
-        return text.rstrip() + "\n\n" + block
+        return None
+    return text[m.start():m.end()]
 
-    block = text[m.start():m.end()]
 
-    # 只处理“单行 dependencies = [ ... ]”
+def _replace_project_block(text: str, new_block: str) -> str:
+    project_pat = re.compile(r"(?ms)^\[project\]\s*\n.*?(?=^\[|\Z)")
+    m = project_pat.search(text)
+    if not m:
+        return text.rstrip() + "\n\n" + new_block.rstrip() + "\n\n"
+    return text[:m.start()] + new_block.rstrip() + "\n\n" + text[m.end():]
+
+
+def _parse_single_line_dependencies(project_block: str) -> List[str]:
     dep_pat = re.compile(r'(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$')
-    md = dep_pat.search(block)
+    m = dep_pat.search(project_block)
+    if not m:
+        return []
+    body = m.group("body")
+    return [s.strip() for s in re.findall(r"""["']([^"']+)["']""", body) if s.strip()]
 
-    if md:
-        body = md.group("body")
-        existing = [s.strip() for s in re.findall(r"""["']([^"']+)["']""", body) if s.strip()]
 
-        merged: List[str] = []
-        seen: Set[str] = set()
+def _write_single_line_dependencies(project_block: str, deps: List[str]) -> str:
+    dep_pat = re.compile(r'(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$')
+    deps_line = "dependencies = [" + ", ".join([f'"{d}"' for d in deps]) + "]"
+    if dep_pat.search(project_block):
+        block2 = dep_pat.sub(deps_line, project_block, count=1)
+    else:
+        block2 = project_block.rstrip() + "\n" + deps_line + "\n"
+    if not block2.endswith("\n\n"):
+        block2 = block2.rstrip() + "\n\n"
+    return block2
 
-        for d in existing:
-            if d not in seen:
-                merged.append(d)
-                seen.add(d)
-        for d in add_deps:
-            if d not in seen:
-                merged.append(d)
-                seen.add(d)
 
-        deps_lines = ", ".join([f'"{d}"' for d in merged])
-        new_line = f"dependencies = [{deps_lines}]"
-        block2 = dep_pat.sub(new_line, block, count=1)
-        block2 = _ensure_block_ends_with_blank_line(block2)
-        return text[:m.start()] + block2 + text[m.end():]
+def ensure_project_dependencies_exact(text: str, desired_raw: List[str]) -> Tuple[str, List[str]]:
+    """
+    ✅ 依赖“自动增减”：
+    - desired_raw 是从工具收集到的依赖名（可能无版本约束）
+    - 从现有 dependencies 中保留已存在的版本约束（若 base name 匹配）
+    - 对于新增依赖，若在 _DEFAULT_DEP_SPECS 里则用默认约束，否则用裸包名
+    - 移除不在 desired 里的依赖
+    - 去重（按 base name）
+    返回：(新文本, 最终依赖列表)
+    """
+    project_block = _read_project_block(text)
+    if project_block is None:
+        # 没有 [project]：创建最小 project，并写入 dependencies
+        # 注意：name/version/requires-python 由你项目自己维护，此处不乱补
+        deps_bases = []
+        seen = set()
+        final_deps: List[str] = []
+        for raw in desired_raw:
+            base = _dep_base(raw)
+            if base in seen:
+                continue
+            seen.add(base)
+            deps_bases.append(base)
+        for base in deps_bases:
+            final_deps.append(_DEFAULT_DEP_SPECS.get(base, base))
+        new_block = "[project]\n" + _write_single_line_dependencies("", final_deps).lstrip()
+        return _replace_project_block(text, new_block), final_deps
 
-    # 没有 dependencies 行：追加到 [project] block 尾部
-    deps_lines = ", ".join([f'"{d}"' for d in add_deps])
-    new_line = f"dependencies = [{deps_lines}]"
-    block2 = block.rstrip() + "\n" + new_line + "\n\n"
-    block2 = _ensure_block_ends_with_blank_line(block2)
-    return text[:m.start()] + block2 + text[m.end():]
+    existing = _parse_single_line_dependencies(project_block)
+    existing_by_base: Dict[str, str] = {}
+    for d in existing:
+        base = _dep_base(d)
+        # 如果重复，保留第一个（更稳定）
+        if base not in existing_by_base:
+            existing_by_base[base] = d
 
+    desired_bases: List[str] = []
+    seen: Set[str] = set()
+    for raw in desired_raw:
+        base = _dep_base(raw)
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        desired_bases.append(base)
+
+    final_deps: List[str] = []
+    for base in desired_bases:
+        # 先保留现有 spec（如果有）
+        if base in existing_by_base:
+            final_deps.append(existing_by_base[base])
+        else:
+            # 否则用默认 spec 或裸包名
+            final_deps.append(_DEFAULT_DEP_SPECS.get(base, base))
+
+    # 写回
+    # 只改 dependencies 行，其余 [project] 字段不动
+    block2 = _write_single_line_dependencies(project_block, final_deps)
+    return _replace_project_block(text, block2), final_deps
+
+
+# -------------------------
+# scripts: 自动增减 + box 置顶 + box_ 前缀
+# -------------------------
+
+def _command_with_prefix(name: str) -> str:
+    n = (name or "").strip()
+    if not n:
+        return n
+    if n.lower() == "box":
+        return "box"
+    if n.startswith("box_"):
+        return n
+    return f"box_{n}"
+
+
+def build_scripts(tools: List[Tool]) -> List[Tuple[str, str]]:
+    """
+    - box 命令保持为 "box"
+    - 其他命令全部加 box_ 前缀
+    - 自动增减：以 tools 列表为准
+    - box 永远排第一
+    """
+    items: List[Tuple[str, str]] = []
+    for t in tools:
+        cmd = _command_with_prefix(t.name)
+        items.append((cmd, t.entrypoint))
+
+    # 排序：box 最上，然后按 cmd 排
+    items.sort(key=lambda kv: (0, "") if kv[0] == "box" else (1, kv[0].lower()))
+    return items
+
+
+def update_project_scripts(text: str, scripts: List[Tuple[str, str]]) -> str:
+    lines = [f'{cmd} = "{ep}"' for cmd, ep in scripts]
+    # 强制 box 第一：build_scripts 已保证
+    return replace_table_block(text, "project.scripts", lines)
+
+
+# -------------------------
+# wheel packages: 自动增减（按 src 下实际包）
+# -------------------------
+
+def collect_src_packages() -> List[str]:
+    """
+    自动扫描 src/ 下的顶层包（含 __init__.py），生成 wheel packages 列表：["src/box", "src/box_tools", ...]
+    并保证 src/box 永远在最前。
+    """
+    if not SRC_DIR.exists():
+        return []
+    pkgs: List[str] = []
+    for p in SRC_DIR.iterdir():
+        if p.is_dir() and (p / "__init__.py").exists():
+            pkgs.append(f"src/{p.name}")
+
+    pkgs = sorted(pkgs, key=lambda s: (0, "") if s.lower() == "src/box" else (1, s.lower()))
+    return pkgs
+
+
+# -------------------------
+# main update
+# -------------------------
 
 def update_pyproject(tools: List[Tool], do_bump: bool) -> Tuple[str, int, List[str], List[str]]:
     if not PYPROJECT.exists():
@@ -712,33 +779,23 @@ def update_pyproject(tools: List[Tool], do_bump: bool) -> Tuple[str, int, List[s
     if do_bump:
         text, new_version = bump_patch_version(text)
 
-    # scripts：命令来自 BOX_TOOL.name，入口来自模块路径 :main
-    scripts = [(t.name, t.entrypoint) for t in tools]
-    scripts.sort(key=lambda kv: (0, "") if kv[0].lower() == "box" else (1, kv[0].lower()))
-    script_lines = [f'{cmd} = "{ep}"' for cmd, ep in scripts]
-    text = replace_table_block(text, "project.scripts", script_lines)
+    # 3) scripts：自动增减 + box 置顶 + 其余加 box_ 前缀
+    scripts = build_scripts(tools)
+    text = update_project_scripts(text, scripts)
 
-    # wheel packages：从工具模块顶层包名生成 src/<pkg>
-    top_pkgs: Set[str] = set()
-    for t in tools:
-        top_pkgs.add(t.module.split(".", 1)[0])
-    packages = [f"src/{p}" for p in sorted(top_pkgs, key=lambda x: x.lower())]
-    packages.sort(key=lambda s: (0, "") if s.lower() == "src/box" else (1, s.lower()))
-    text = replace_wheel_packages_line(text, packages)
+    # 4) wheel packages：按 src 下实际包自动增减
+    wheel_pkgs = collect_src_packages()
+    text = replace_wheel_packages_line(text, wheel_pkgs)
 
-    # project dependencies：合并工具依赖
-    deps_added = collect_tool_dependencies(tools)
-    text = ensure_project_dependencies(text, deps_added)
+    # 2) dependencies：自动增减（exact）
+    deps_desired = collect_tool_dependencies(tools)
+    text, final_deps = ensure_project_dependencies_exact(text, deps_desired)
 
     if text != original:
         PYPROJECT.write_text(text, encoding="utf-8")
 
-    return new_version, len(scripts), packages, deps_added
+    return new_version, len(scripts), wheel_pkgs, final_deps
 
-
-# -------------------------
-# main
-# -------------------------
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -756,6 +813,7 @@ def main() -> None:
     if not tools:
         raise SystemExit("未找到任何包含 BOX_TOOL 的工具脚本。")
 
+    # 5) README 汇总自动增减
     if not args.no_readme:
         header = TEMP_MD.read_text(encoding="utf-8", errors="ignore")
         readme = render_readme(header, tools)
@@ -763,13 +821,12 @@ def main() -> None:
         print(f"[ok] README.md 已生成：{README_MD}")
 
     if not args.no_toml:
-        new_version, n_scripts, wheel_pkgs, deps_added = update_pyproject(tools, do_bump=not args.no_bump)
+        new_version, n_scripts, wheel_pkgs, final_deps = update_pyproject(tools, do_bump=not args.no_bump)
         if new_version:
             print(f"[ok] pyproject.toml version -> {new_version}")
-        print(f"[ok] [project.scripts] -> {n_scripts} 项")
+        print(f"[ok] [project.scripts] -> {n_scripts} 项（box 置顶，其余自动加 box_ 前缀）")
         print(f"[ok] wheel packages -> {wheel_pkgs}")
-        if deps_added:
-            print(f"[ok] project.dependencies merged -> {deps_added}")
+        print(f"[ok] project.dependencies -> {final_deps}")
 
     print("Done.")
 
