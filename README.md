@@ -25,6 +25,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
   - [`box_pub_upgrade`](#box_tools-flutter-pub_upgrade-tool)
 - [flutter/pub_version](#flutter-pub_version)
   - [`box_pub_version`](#box_tools-flutter-pub_version-tool)
+- [flutter/riverpod_gen](#flutter-riverpod_gen)
+  - [`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)
 
 ---
 
@@ -38,7 +40,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter/pub_publish
 
-- **[`box_pub_publish`](#box_tools-flutter-pub_publish-tool)**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，发布前检查（可交互处理 warning），提交并发布（支持 release 分支规则）（文档缺失：`src/box_tools/flutter/pub_publish/README.md`）
+- **[`box_pub_publish`](#box_tools-flutter-pub_publish-tool)**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，发布前检查（可交互处理 warning/info），提交并发布（支持 release 分支规则）（文档缺失：`src/box_tools/flutter/pub_publish/README.md`）
 
 ### flutter/pub_upgrade
 
@@ -47,6 +49,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### flutter/pub_version
 
 - **[`box_pub_version`](#box_tools-flutter-pub_version-tool)**：升级 Flutter pubspec.yaml 的 version（支持交互选择 minor/patch，可选 git 提交）（[README.md](src/box_tools/flutter/pub_version/README.md)）
+
+### flutter/riverpod_gen
+
+- **[`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)**：生成 Riverpod StateNotifier + State 模板文件（notifier/state）（[README.md](src/box_tools/flutter/riverpod_gen/README.md)）
 
 ---
 
@@ -69,6 +75,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### flutter/pub_version
 
 - **box_pub_version**：[README.md](src/box_tools/flutter/pub_version/README.md)
+
+### flutter/riverpod_gen
+
+- **box_riverpod_gen**：[README.md](src/box_tools/flutter/riverpod_gen/README.md)
 
 ---
 
@@ -118,7 +128,7 @@ box tools --full
 
 ### box_pub_publish
 
-**简介**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，发布前检查（可交互处理 warning），提交并发布（支持 release 分支规则）
+**简介**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，发布前检查（可交互处理 warning/info），提交并发布（支持 release 分支规则）
 
 **命令**：`box_pub_publish`
 
@@ -142,14 +152,14 @@ box_pub_publish --msg release notes --yes-warnings
 - `--no-publish`：跳过 flutter pub publish
 - `--skip-pub-get`：跳过 flutter pub get
 - `--skip-checks`：跳过发布前检查（flutter analyze + git 变更白名单）
-- `--yes-warnings`：发布检查出现 warning 时仍继续提交并发布（非交互/CI 推荐）
+- `--yes-warnings`：发布检查出现 issue（info/warning）时仍继续提交并发布（非交互/CI 推荐）
 - `--dry-run`：仅打印将执行的操作，不改文件、不跑命令
 
 **示例**
 
 - `box_pub_publish --msg fix null error`：拉代码→升级版本→更新 changelog→pub get→检查(可交互)→提交→发布
 - `box_pub_publish --msg release notes --no-publish`：只提交不发布
-- `box_pub_publish --msg release notes --yes-warnings`：检查有 warning 也自动继续提交并发布（适合 CI）
+- `box_pub_publish --msg release notes --yes-warnings`：检查有 issue 也自动继续提交并发布（适合 CI）
 - `box_pub_publish --msg try --dry-run`：预演一次，不做任何修改
 
 **文档**
@@ -234,6 +244,50 @@ box_pub_version minor --file path/to/pubspec.yaml
 **文档**
 
 [README.md](src/box_tools/flutter/pub_version/README.md)
+
+---
+
+<a id="flutter-riverpod_gen"></a>
+
+## flutter/riverpod_gen
+
+<a id="box_tools-flutter-riverpod_gen-tool"></a>
+
+### box_riverpod_gen
+
+**简介**：生成 Riverpod StateNotifier + State 模板文件（notifier/state）
+
+**命令**：`box_riverpod_gen`
+
+**用法**
+
+```bash
+box_riverpod_gen
+box_riverpod_gen Product
+box_riverpod_gen product_item --out lib/features/product
+box_riverpod_gen Product --force
+box_riverpod_gen Product --no-copywith
+box_riverpod_gen Product --legacy
+```
+
+**参数说明**
+
+- `--out`：输出目录（默认当前目录）
+- `--force`：覆盖已存在文件
+- `--no-copywith`：不生成 copy_with_extension 注解与 part '*.g.dart'
+- `--legacy`：notifier 使用 flutter_riverpod/legacy.dart（默认启用 legacy）
+- `--modern`：notifier 使用 flutter_riverpod/flutter_riverpod.dart
+
+**示例**
+
+- `box_riverpod_gen`：交互输入类名与输出目录
+- `box_riverpod_gen Product`：在当前目录生成 product_notifier.dart 与 product_state.c.dart
+- `box_riverpod_gen product_item --out lib/features/product`：在指定目录生成 product_item_* 文件
+- `box_riverpod_gen Product --force`：覆盖已存在文件
+
+**文档**
+
+[README.md](src/box_tools/flutter/riverpod_gen/README.md)
 
 ---
 
