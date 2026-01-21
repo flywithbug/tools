@@ -32,7 +32,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - [flutter/riverpod_gen](#flutter-riverpod_gen)
   - [`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)
 - [flutter/slang_i18n](#flutter-slang_i18n)
-  - [`slang_i18n`](#box_tools-flutter-slang_i18n-tool)
+  - [`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)
 
 ---
 
@@ -70,7 +70,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter/slang_i18n
 
-- **[`slang_i18n`](#box_tools-flutter-slang_i18n-tool)**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）（[README.md](src/box_tools/flutter/slang_i18n/README.md)）
+- **[`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)**：Flutter slang 多语言管理与 AI 翻译工具（init/doctor/sort/check/clean/translate）（[README.md](src/box_tools/flutter/slang_i18n/README.md)）
 
 ---
 
@@ -108,7 +108,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter/slang_i18n
 
-- **slang_i18n**：[README.md](src/box_tools/flutter/slang_i18n/README.md)
+- **box_slang_i18n**：[README.md](src/box_tools/flutter/slang_i18n/README.md)
 
 ---
 
@@ -411,31 +411,28 @@ box_riverpod_gen Product --legacy
 
 <a id="box_tools-flutter-slang_i18n-tool"></a>
 
-### slang_i18n
+### box_slang_i18n
 
-**简介**：Flutter slang i18n（flat .i18n.json）排序 / 冗余检查清理 / 增量翻译（支持交互）
+**简介**：Flutter slang 多语言管理与 AI 翻译工具（init/doctor/sort/check/clean/translate）
 
-**命令**：`slang_i18n`
+**命令**：`box_slang_i18n`
 
 **用法**
 
 ```bash
-slang_i18n
-slang_i18n init
-slang_i18n doctor
-slang_i18n sort
-slang_i18n check
-slang_i18n clean --yes
-slang_i18n translate --api-key $OPENAI_API_KEY
+box_slang_i18n
+box_slang_i18n --action init
+box_slang_i18n --action doctor
+box_slang_i18n --dry-run --action init
+box_slang_i18n --config ./slang_i18n.yaml --action doctor
 ```
 
 **参数说明**
 
-- `--api-key`：OpenAI API key（也可用环境变量 OPENAI_API_KEY）
-- `--model`：模型（默认 gpt-4o，且可覆盖配置 openAIModel）
-- `--full`：全量翻译（默认增量翻译）
-- `--yes`：clean 删除冗余时跳过确认
-- `--no-exitcode-3`：check 发现冗余时仍返回 0（默认返回 3）
+- `--action`：直接执行某个动作：init/doctor/sort/check/clean/translate
+- `--config`：指定配置文件路径（默认 ./slang_i18n.yaml）
+- `--root`：项目根目录（默认当前目录）
+- `--dry-run`：演练模式：不写文件、不创建目录
 
 **文档**
 
