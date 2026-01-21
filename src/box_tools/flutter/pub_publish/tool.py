@@ -13,7 +13,7 @@ BOX_TOOL = {
     "id": "flutter.box_pub_publish",
     "name": "box_pub_publish",
     "category": "flutter",
-    "summary": "自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，发布前检查（可交互处理 warning），提交并发布（支持 release 分支规则）",
+    "summary": "自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，发布前检查（可交互处理 warning/info），提交并发布（支持 release 分支规则）",
     "usage": [
         "box_pub_publish --msg fix crash on iOS",
         "box_pub_publish --msg feat add new api --no-publish",
@@ -30,16 +30,15 @@ BOX_TOOL = {
         {"flag": "--no-publish", "desc": "跳过 flutter pub publish"},
         {"flag": "--skip-pub-get", "desc": "跳过 flutter pub get"},
         {"flag": "--skip-checks", "desc": "跳过发布前检查（flutter analyze + git 变更白名单）"},
-        {"flag": "--yes-warnings", "desc": "发布检查出现 warning 时仍继续提交并发布（非交互/CI 推荐）"},
+        {"flag": "--yes-warnings", "desc": "发布检查出现 issue（info/warning）时仍继续提交并发布（非交互/CI 推荐）"},
         {"flag": "--dry-run", "desc": "仅打印将执行的操作，不改文件、不跑命令"},
     ],
     "examples": [
         {"cmd": "box_pub_publish --msg fix null error", "desc": "拉代码→升级版本→更新 changelog→pub get→检查(可交互)→提交→发布"},
         {"cmd": "box_pub_publish --msg release notes --no-publish", "desc": "只提交不发布"},
-        {"cmd": "box_pub_publish --msg release notes --yes-warnings", "desc": "检查有 warning 也自动继续提交并发布（适合 CI）"},
+        {"cmd": "box_pub_publish --msg release notes --yes-warnings", "desc": "检查有 issue 也自动继续提交并发布（适合 CI）"},
         {"cmd": "box_pub_publish --msg try --dry-run", "desc": "预演一次，不做任何修改"},
     ],
-    # ✅ 新项目规范：工具目录内 README.md（相对当前目录）
     "docs": "README.md",
 }
 
@@ -105,10 +104,7 @@ def run_command(
         fail_on_warning: bool = False,
         warning_regex: str | re.Pattern[str] | None = None,
 ) -> subprocess.CompletedProcess[str] | None:
-    """运行外部命令；失败则抛异常（携带 stdout/stderr）。
-
-    - fail_on_warning: 若为 True，命令即使退出码为 0，只要输出里匹配到 warning 也视为失败。
-    """
+    """运行外部命令；失败则抛异常（携带 stdout/stderr）。"""
     if dry_run:
         print("🧪 DRY-RUN:", " ".join(cmd))
         return None
@@ -190,14 +186,7 @@ def compare_versions(a: str, b: str) -> int:
 
 
 def update_version(current_version: str, branch_version: str | None) -> str:
-    """版本升级策略：
-
-    - release-<x.y.z> 分支：
-      - 若当前 < 分支版本：直接提升到分支版本（保留 build）
-      - 若当前 >= 分支版本：patch + 1（保留 build）
-
-    - 非 release 分支：patch + 1（保留 build）
-    """
+    """版本升级策略：release 分支对齐分支版本，否则 patch+1（保留 build）。"""
     major, minor, patch, build = parse_semver(current_version)
 
     if branch_version:
@@ -317,7 +306,6 @@ def git_status_only_allowed_changes(
 
 
 def extract_analyze_issue_lines(text: str) -> list[str]:
-    """提取 flutter analyze 的 issue 行（info/warning/error）。"""
     lines: list[str] = []
     for line in (text or "").splitlines():
         if re.match(r"^\s*(info|warning|error)\s*•", line):
@@ -326,7 +314,6 @@ def extract_analyze_issue_lines(text: str) -> list[str]:
 
 
 def extract_analyze_error_lines(text: str) -> list[str]:
-    """只提取 flutter analyze 的 error 行。"""
     lines: list[str] = []
     for line in (text or "").splitlines():
         if re.match(r"^\s*error\s*•", line):
@@ -335,7 +322,7 @@ def extract_analyze_error_lines(text: str) -> list[str]:
 
 
 def confirm_continue_on_warnings(warnings: list[str], *, yes_warnings: bool) -> bool:
-    """有 warning/info 时，提示并询问是否继续提交+发布（有 error 会在更早处直接抛异常）。"""
+    """有 issue（info/warning）时，最后提示是否继续提交+发布（error 会更早退出）。"""
     if not warnings:
         return True
 
@@ -366,17 +353,13 @@ def flutter_pub_get(*, dry_run: bool = False) -> None:
 
 
 def flutter_analyze(*, dry_run: bool = False) -> list[str]:
-    """flutter analyze：
-    - 有 error -> 直接失败退出
-    - 只有 info/warning -> 返回 issues 列表（后续询问是否继续发布）
-    """
+    """flutter analyze：有 error 直接退出；只有 info/warning 则汇总后提示是否继续。"""
     print("🔎 flutter analyze ...")
 
     if dry_run:
         print("✅ flutter analyze（dry-run）")
         return []
 
-    # 不能用 run_command（它会把非 0 直接抛异常），这里自己接管返回码
     p = subprocess.run(["flutter", "analyze"], capture_output=True, text=True)
     combined = (p.stdout or "") + "\n" + (p.stderr or "")
 
@@ -410,9 +393,7 @@ def pre_publish_checks(
         pubspec_path: Path,
         changelog_path: Path,
 ) -> bool:
-    """发布前检查：不跑 flutter test；检查 analyze + git 变更白名单。
-    返回 True 表示继续提交+发布；False 表示中止。
-    """
+    """发布前检查：检查 analyze + git 变更白名单。"""
     print("🧰 发布前检查 ...")
 
     if is_git_repo(Path.cwd()):
@@ -420,13 +401,24 @@ def pre_publish_checks(
         if repo_root is None:
             raise CmdError("无法获取 git 仓库根目录（git rev-parse --show-toplevel 失败）")
 
-        allowed_exact = {
-            to_repo_relative_posix(pubspec_path, repo_root),
-            to_repo_relative_posix(changelog_path, repo_root),
-        }
-        allowed_patterns = [
-            re.compile(r"(^|/)\bpubspec\.lock$"),
-        ]
+        pubspec_rel = to_repo_relative_posix(pubspec_path, repo_root)
+        changelog_rel = to_repo_relative_posix(changelog_path, repo_root)
+
+        # ✅ 允许 pubspec/changelog
+        allowed_exact = {pubspec_rel, changelog_rel}
+
+        # ✅ 允许“当前包目录内”的任意 pubspec.lock（包括 example/pubspec.lock）
+        # pubspec_rel 类似：ap_ui/pubspec.yaml 或 pubspec.yaml
+        pkg_dir = str(Path(pubspec_rel).parent.as_posix())
+        if pkg_dir == ".":
+            pkg_dir = ""  # repo 根目录
+
+        if pkg_dir:
+            lock_pat = re.compile(rf"^(?:{re.escape(pkg_dir)}/).*?/??pubspec\.lock$|^(?:{re.escape(pkg_dir)}/)pubspec\.lock$")
+        else:
+            lock_pat = re.compile(r"(^|/)\bpubspec\.lock$")
+
+        allowed_patterns = [lock_pat]
 
         ok, not_allowed = git_status_only_allowed_changes(
             allowed_exact=allowed_exact,
@@ -438,18 +430,18 @@ def pre_publish_checks(
                 "发布前检查失败：git 工作区存在非预期变更（不在允许列表内）：\n"
                 + "\n".join(f"- {p}" for p in not_allowed)
                 + "\n\n已允许：\n"
-                + f"- {to_repo_relative_posix(pubspec_path, repo_root)}\n"
-                + f"- {to_repo_relative_posix(changelog_path, repo_root)}\n"
-                + "- 任意目录下的 pubspec.lock\n"
+                + f"- {pubspec_rel}\n"
+                + f"- {changelog_rel}\n"
+                + (f"- {pkg_dir + '/' if pkg_dir else ''}**/pubspec.lock（仅当前包目录内）\n")
                 + "\n请先提交/暂存/清理这些文件后再发布。"
             )
-        print("✅ git 变更检查通过（允许 pubspec/changelog + 任意 pubspec.lock）")
+        print("✅ git 变更检查通过（允许 pubspec/changelog + 当前包目录内 pubspec.lock）")
     else:
         print("ℹ️ 当前目录不是 git 仓库，跳过 git 变更检查")
 
     issues = flutter_analyze(dry_run=dry_run)
-
     ok2 = confirm_continue_on_warnings(issues, yes_warnings=yes_warnings)
+
     if ok2:
         print("✅ 发布前检查通过（选择继续）")
     else:
@@ -457,40 +449,76 @@ def pre_publish_checks(
     return ok2
 
 
-def _discover_pubspec_lock_files(repo_root: Path, *, pubspec_path: Path) -> list[Path]:
-    """发现仓库内所有 pubspec.lock（含 example 等），用于一次性 git add。"""
-    candidates: list[Path] = []
+def _compute_git_add_paths_for_this_publish(
+        *,
+        repo_root: Path,
+        pubspec_path: Path,
+        changelog_path: Path,
+        dry_run: bool = False,
+) -> list[str]:
+    """
+    只返回“有变化且允许”的路径，用于 git add。
+    核心：从 git status 取变化文件，而不是全仓库扫 lock。
+    """
+    changed = _git_porcelain_changed_paths(dry_run=dry_run)
 
-    main_lock = pubspec_path.with_name("pubspec.lock")
-    if main_lock.exists():
-        candidates.append(main_lock)
+    pubspec_rel = to_repo_relative_posix(pubspec_path, repo_root)
+    changelog_rel = to_repo_relative_posix(changelog_path, repo_root)
 
-    for p in repo_root.rglob("pubspec.lock"):
-        if p.is_file() and p not in candidates:
-            candidates.append(p)
+    # 当前包目录
+    pkg_dir_path = Path(pubspec_rel).parent
+    pkg_dir = pkg_dir_path.as_posix()
+    if pkg_dir == ".":
+        pkg_dir = ""
 
-    return sorted(candidates, key=lambda x: x.as_posix())
+    def is_lock_under_pkg(p: str) -> bool:
+        if not p.endswith("pubspec.lock"):
+            return False
+        if not pkg_dir:
+            return True  # 根目录包：允许任意层级 lock（与你原设定一致）
+        # 必须在 pkg_dir/ 下
+        return p == f"{pkg_dir}/pubspec.lock" or p.startswith(f"{pkg_dir}/")
+
+    allowed: list[str] = []
+    for p in changed:
+        if p in (pubspec_rel, changelog_rel):
+            allowed.append(p)
+            continue
+        if is_lock_under_pkg(p):
+            allowed.append(p)
+            continue
+
+    # 去重稳定
+    return sorted(set(allowed))
 
 
-def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_version: str, *, dry_run: bool = False) -> None:
+def git_commit(
+        pubspec_path: Path,
+        changelog_path: Path,
+        project_name: str,
+        new_version: str,
+        *,
+        dry_run: bool = False,
+) -> None:
     msg = f"build: {project_name} + {new_version}"
 
     repo_root = get_git_root(Path.cwd(), dry_run=dry_run)
     if repo_root is None:
         raise CmdError("无法获取 git 仓库根目录（无法执行提交）")
 
-    paths: list[str] = [
-        to_repo_relative_posix(pubspec_path, repo_root),
-        to_repo_relative_posix(changelog_path, repo_root),
-    ]
+    add_paths = _compute_git_add_paths_for_this_publish(
+        repo_root=repo_root,
+        pubspec_path=pubspec_path,
+        changelog_path=changelog_path,
+        dry_run=dry_run,
+    )
 
-    for lock_file in _discover_pubspec_lock_files(repo_root, pubspec_path=pubspec_path):
-        paths.append(to_repo_relative_posix(lock_file, repo_root))
-
-    paths = sorted(set(paths))
+    if not add_paths:
+        print("ℹ️ git status 未发现需要提交的允许文件（pubspec/changelog/本包 pubspec.lock），跳过提交。")
+        return
 
     print("📝 git add ...")
-    run_command(["git", "add", *paths], dry_run=dry_run)
+    run_command(["git", "add", *add_paths], dry_run=dry_run)
 
     print("📝 git commit ...")
     run_command(["git", "commit", "-m", msg], dry_run=dry_run)
@@ -503,7 +531,7 @@ def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_
 
 def flutter_pub_publish(*, dry_run: bool = False) -> None:
     print("📦 flutter pub publish --force ...")
-    # ✅ 按你的要求：只有命令真正失败（非 0）才退出；warning 不再强制失败
+    # ✅ 按你的要求：只有命令失败（非 0）才退出；warning 不强制失败
     run_command(["flutter", "pub", "publish", "--force"], dry_run=dry_run)
     print("✅ 发布完成")
 
