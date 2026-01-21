@@ -71,7 +71,6 @@ def is_git_repo(cwd: Path) -> bool:
 def get_git_root(cwd: Path, *, dry_run: bool = False) -> Path | None:
     """获取 git 仓库根目录；非 git 仓库返回 None。"""
     if dry_run:
-        # dry-run 时避免调用外部命令；给一个合理占位
         return cwd.resolve()
 
     if not which("git"):
@@ -92,10 +91,7 @@ def get_git_root(cwd: Path, *, dry_run: bool = False) -> Path | None:
 
 
 def to_repo_relative_posix(path: Path, repo_root: Path) -> str:
-    """
-    将任意路径归一化为相对 repo_root 的 posix 路径字符串，
-    用于与 `git status --porcelain` 的输出对齐（它永远相对仓库根目录）。
-    """
+    """将路径归一化为相对 repo_root 的 posix 路径（与 git status 输出对齐）。"""
     abs_path = path.resolve()
     rel = abs_path.relative_to(repo_root.resolve())
     return rel.as_posix()
@@ -120,7 +116,6 @@ def run_command(
     warn_pat: re.Pattern[str] | None = None
     if fail_on_warning:
         if warning_regex is None:
-            # 常见形式：Warning:, warning:, WARNING:
             warn_pat = re.compile(r"(?im)^\s*warning\s*[:\-]")
         elif isinstance(warning_regex, str):
             warn_pat = re.compile(warning_regex)
@@ -225,7 +220,6 @@ def extract_project_name(pubspec_path: Path) -> str:
 def update_pubspec_preserve_format(pubspec_path: Path, *, dry_run: bool = False) -> tuple[str, str]:
     content = pubspec_path.read_text(encoding="utf-8")
 
-    # 版本号支持 x.y.z 或 x.y.z+build；引号可选；保持原有引号；排除注释行
     pattern = (
         r"^(?!\s*#)"
         r"(?P<prefix>\s*version\s*:\s*)"
@@ -295,7 +289,7 @@ def _git_porcelain_changed_paths(*, dry_run: bool = False) -> list[str]:
         if len(line) < 4:
             continue
         path_part = line[3:].strip()
-        if " -> " in path_part:  # rename
+        if " -> " in path_part:
             path_part = path_part.split(" -> ", 1)[1].strip()
         if path_part.startswith('"') and path_part.endswith('"'):
             path_part = path_part[1:-1]
@@ -309,7 +303,6 @@ def git_status_only_allowed_changes(
         allowed_patterns: list[re.Pattern[str]],
         dry_run: bool = False,
 ) -> tuple[bool, list[str]]:
-    """工作区变更若全部命中 allowed_exact 或 allowed_patterns 则 True，否则 False 并返回不允许的路径。"""
     changed = _git_porcelain_changed_paths(dry_run=dry_run)
 
     not_allowed: list[str] = []
@@ -323,29 +316,38 @@ def git_status_only_allowed_changes(
     return (len(not_allowed) == 0), not_allowed
 
 
-def extract_warning_lines(text: str) -> list[str]:
-    """尽量从输出中提取 warning 行（可按需调正则）。"""
+def extract_analyze_issue_lines(text: str) -> list[str]:
+    """提取 flutter analyze 的 issue 行（info/warning/error）。"""
     lines: list[str] = []
     for line in (text or "").splitlines():
-        if re.search(r"(?i)\bwarning\b", line):
+        if re.match(r"^\s*(info|warning|error)\s*•", line):
+            lines.append(line.rstrip())
+    return lines
+
+
+def extract_analyze_error_lines(text: str) -> list[str]:
+    """只提取 flutter analyze 的 error 行。"""
+    lines: list[str] = []
+    for line in (text or "").splitlines():
+        if re.match(r"^\s*error\s*•", line):
             lines.append(line.rstrip())
     return lines
 
 
 def confirm_continue_on_warnings(warnings: list[str], *, yes_warnings: bool) -> bool:
-    """有 warning 时，提示并询问是否继续提交+发布。"""
+    """有 warning/info 时，提示并询问是否继续提交+发布（有 error 会在更早处直接抛异常）。"""
     if not warnings:
         return True
 
-    print("\n⚠️ 发布检查发现 warning：")
-    max_show = 50
+    print("\n⚠️ 发布检查发现 issue（info/warning）：")
+    max_show = 80
     for i, w in enumerate(warnings[:max_show], 1):
         print(f"  {i}. {w}")
     if len(warnings) > max_show:
-        print(f"  ...（共 {len(warnings)} 条 warning，仅展示前 {max_show} 条）")
+        print(f"  ...（共 {len(warnings)} 条，仅展示前 {max_show} 条）")
 
     if yes_warnings:
-        print("ℹ️ 已指定 --yes-warnings：遇到 warning 仍继续提交并发布")
+        print("ℹ️ 已指定 --yes-warnings：遇到 issue 仍继续提交并发布")
         return True
 
     if not sys.stdin.isatty():
@@ -364,18 +366,41 @@ def flutter_pub_get(*, dry_run: bool = False) -> None:
 
 
 def flutter_analyze(*, dry_run: bool = False) -> list[str]:
+    """flutter analyze：
+    - 有 error -> 直接失败退出
+    - 只有 info/warning -> 返回 issues 列表（后续询问是否继续发布）
+    """
     print("🔎 flutter analyze ...")
-    p = run_command(["flutter", "analyze"], dry_run=dry_run)
-    if dry_run or p is None:
+
+    if dry_run:
         print("✅ flutter analyze（dry-run）")
         return []
+
+    # 不能用 run_command（它会把非 0 直接抛异常），这里自己接管返回码
+    p = subprocess.run(["flutter", "analyze"], capture_output=True, text=True)
     combined = (p.stdout or "") + "\n" + (p.stderr or "")
-    warnings = extract_warning_lines(combined)
-    if warnings:
-        print("⚠️ flutter analyze 有 warning")
-    else:
-        print("✅ flutter analyze 通过（无 warning）")
-    return warnings
+
+    error_lines = extract_analyze_error_lines(combined)
+    issue_lines = extract_analyze_issue_lines(combined)
+
+    if error_lines:
+        msg = (
+                "flutter analyze 发现 error，已中止：\n"
+                + "\n".join(f"- {e}" for e in error_lines[:200])
+                + ("\n...(error 过多，已截断)" if len(error_lines) > 200 else "")
+                + "\n\nstdout:\n"
+                + (p.stdout or "")
+                + "\n\nstderr:\n"
+                + (p.stderr or "")
+        )
+        raise CmdError(msg)
+
+    if issue_lines:
+        print(f"⚠️ flutter analyze 发现 {len(issue_lines)} 条 issue（无 error）")
+        return issue_lines
+
+    print("✅ flutter analyze 通过（无 issue）")
+    return []
 
 
 def pre_publish_checks(
@@ -400,7 +425,6 @@ def pre_publish_checks(
             to_repo_relative_posix(changelog_path, repo_root),
         }
         allowed_patterns = [
-            # ✅ 放过任意目录下的 pubspec.lock（包含 example/pubspec.lock 等）
             re.compile(r"(^|/)\bpubspec\.lock$"),
         ]
 
@@ -423,9 +447,9 @@ def pre_publish_checks(
     else:
         print("ℹ️ 当前目录不是 git 仓库，跳过 git 变更检查")
 
-    warnings = flutter_analyze(dry_run=dry_run)
+    issues = flutter_analyze(dry_run=dry_run)
 
-    ok2 = confirm_continue_on_warnings(warnings, yes_warnings=yes_warnings)
+    ok2 = confirm_continue_on_warnings(issues, yes_warnings=yes_warnings)
     if ok2:
         print("✅ 发布前检查通过（选择继续）")
     else:
@@ -434,24 +458,18 @@ def pre_publish_checks(
 
 
 def _discover_pubspec_lock_files(repo_root: Path, *, pubspec_path: Path) -> list[Path]:
-    """发现仓库内所有 pubspec.lock（含 example 等），用于一次性 git add。
-    - 只添加已存在的 lock 文件（避免无意义的路径）
-    """
+    """发现仓库内所有 pubspec.lock（含 example 等），用于一次性 git add。"""
     candidates: list[Path] = []
 
-    # 优先包含主包 lock（与 pubspec 同目录）
     main_lock = pubspec_path.with_name("pubspec.lock")
     if main_lock.exists():
         candidates.append(main_lock)
 
-    # 再包含仓库里其他 lock（例如 example/pubspec.lock）
     for p in repo_root.rglob("pubspec.lock"):
         if p.is_file() and p not in candidates:
             candidates.append(p)
 
-    # 去重并按路径排序（保证稳定）
-    candidates = sorted(candidates, key=lambda x: x.as_posix())
-    return candidates
+    return sorted(candidates, key=lambda x: x.as_posix())
 
 
 def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_version: str, *, dry_run: bool = False) -> None:
@@ -466,11 +484,9 @@ def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_
         to_repo_relative_posix(changelog_path, repo_root),
     ]
 
-    # ✅ 提交所有目录里的 pubspec.lock（包括 example/pubspec.lock）
     for lock_file in _discover_pubspec_lock_files(repo_root, pubspec_path=pubspec_path):
         paths.append(to_repo_relative_posix(lock_file, repo_root))
 
-    # 去重并保持稳定排序
     paths = sorted(set(paths))
 
     print("📝 git add ...")
@@ -487,14 +503,8 @@ def git_commit(pubspec_path: Path, changelog_path: Path, project_name: str, new_
 
 def flutter_pub_publish(*, dry_run: bool = False) -> None:
     print("📦 flutter pub publish --force ...")
-    # publish：出现 warning 或错误都抛出
-    run_command(
-        ["flutter", "pub", "publish", "--force"],
-        dry_run=dry_run,
-        fail_on_warning=True,
-        # 默认匹配行首 warning: / warning-；如果你想更激进可改：
-        # warning_regex=re.compile(r"(?im)\bwarning\b")
-    )
+    # ✅ 按你的要求：只有命令真正失败（非 0）才退出；warning 不再强制失败
+    run_command(["flutter", "pub", "publish", "--force"], dry_run=dry_run)
     print("✅ 发布完成")
 
 
@@ -512,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-publish", action="store_true", help="跳过 flutter pub publish")
     p.add_argument("--skip-pub-get", action="store_true", help="跳过 flutter pub get")
     p.add_argument("--skip-checks", action="store_true", help="跳过发布前检查（flutter analyze + git 变更白名单）")
-    p.add_argument("--yes-warnings", action="store_true", help="发布检查出现 warning 时仍继续提交并发布（非交互/CI 推荐）")
+    p.add_argument("--yes-warnings", action="store_true", help="发布检查出现 issue（info/warning）时仍继续提交并发布（非交互/CI 推荐）")
     p.add_argument("--dry-run", action="store_true", help="预演：不改文件、不执行外部命令")
     return p
 
@@ -530,7 +540,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        # 若不是 git 仓库，自动降级：跳过 pull + git 操作
         git_ok = (not args.no_git) and is_git_repo(Path.cwd()) and (not args.dry_run)
         if not git_ok and not args.no_git:
             print("ℹ️ 当前目录不是 git 仓库或未安装 git，已自动跳过 git 操作（等同 --no-git）")
@@ -550,7 +559,6 @@ def main(argv: list[str] | None = None) -> int:
         if not args.skip_pub_get:
             flutter_pub_get(dry_run=args.dry_run)
 
-        # ✅ 发布前检查放在提交/发布之前
         should_continue = True
         if (not args.no_publish) and (not args.skip_checks):
             should_continue = pre_publish_checks(
@@ -566,13 +574,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"✅ 已结束：{project_name} {old_version} → {new_version}（已更新文件，但未提交/未发布）")
             return 0
 
-        # 提交（如果允许）
         if git_ok:
             git_commit(pubspec_path, changelog_path, project_name, new_version, dry_run=args.dry_run)
         else:
             print("ℹ️ 已跳过 git 操作（--no-git 或自动降级）")
 
-        # 发布
         if not args.no_publish:
             flutter_pub_publish(dry_run=args.dry_run)
         else:
