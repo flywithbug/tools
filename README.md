@@ -21,6 +21,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
   - [`box`](#box-tool)
 - [ai/chat](#ai-chat)
   - [`box_ai_chat`](#box_tools-ai-chat-tool)
+- [ai/translate](#ai-translate)
+  - [`box_ai_translate`](#box_tools-ai-translate-tool)
 - [flutter/pub_publish](#flutter-pub_publish)
   - [`box_pub_publish`](#box_tools-flutter-pub_publish-tool)
 - [flutter/pub_upgrade](#flutter-pub_upgrade)
@@ -43,6 +45,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### ai/chat
 
 - **[`box_ai_chat`](#box_tools-ai-chat-tool)**：命令行连续对话：输入问题→等待 AI 回复→继续追问（支持 /new /reset /save /load /model 等）（[README.md](src/box_tools/ai/chat/README.md)）
+
+### ai/translate
+
+- **[`box_ai_translate`](#box_tools-ai-translate-tool)**：交互式多语言翻译：选择源语言/目标语言后输入文本，AI 实时翻译（支持中途切换）（[README.md](src/box_tools/ai/translate/README.md)）
 
 ### flutter/pub_publish
 
@@ -73,6 +79,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### ai/chat
 
 - **box_ai_chat**：[README.md](src/box_tools/ai/chat/README.md)
+
+### ai/translate
+
+- **box_ai_translate**：[README.md](src/box_tools/ai/translate/README.md)
 
 ### flutter/pub_publish
 
@@ -173,6 +183,44 @@ box_ai_chat --load ~/.box_tools/ai_chat/20260121_120000.json
 **文档**
 
 [README.md](src/box_tools/ai/chat/README.md)
+
+---
+
+<a id="ai-translate"></a>
+
+## ai/translate
+
+<a id="box_tools-ai-translate-tool"></a>
+
+### box_ai_translate
+
+**简介**：交互式多语言翻译：选择源语言/目标语言后输入文本，AI 实时翻译（支持中途切换）
+
+**命令**：`box_ai_translate`
+
+**用法**
+
+```bash
+box_ai_translate
+box_ai_translate --model gpt-4o-mini
+box_ai_translate --source en --target zh-Hans
+```
+
+**参数说明**
+
+- `--model`：指定模型（默认 gpt-4o-mini）
+- `--api-key`：显式传入 OpenAI API Key（不传则读取 OPENAI_API_KEY）
+- `--source`：源语言代码（如 en/zh-Hans/ja…；不传则交互选择）
+- `--target`：目标语言代码（如 zh-Hant/ko/fr…；不传则交互选择）
+
+**示例**
+
+- `export OPENAI_API_KEY='sk-***' && box_ai_translate`：进入翻译模式并交互选择语言
+- `box_ai_translate --source en --target zh-Hans`：跳过选项表，直接英->简中
+
+**文档**
+
+[README.md](src/box_tools/ai/translate/README.md)
 
 ---
 
