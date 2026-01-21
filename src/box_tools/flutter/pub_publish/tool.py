@@ -67,35 +67,6 @@ def is_git_repo(cwd: Path) -> bool:
         return False
 
 
-def get_git_root(cwd: Path, *, dry_run: bool = False) -> Path | None:
-    """获取 git 仓库根目录；非 git 仓库返回 None。"""
-    if dry_run:
-        return cwd.resolve()
-
-    if not which("git"):
-        return None
-
-    try:
-        p = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        root = p.stdout.strip()
-        return Path(root).resolve() if root else None
-    except Exception:
-        return None
-
-
-def to_repo_relative_posix(path: Path, repo_root: Path) -> str:
-    """将路径归一化为相对 repo_root 的 posix 路径（与 git status 输出对齐）。"""
-    abs_path = path.resolve()
-    rel = abs_path.relative_to(repo_root.resolve())
-    return rel.as_posix()
-
-
 def run_command(
         cmd: list[str],
         *,
@@ -141,6 +112,12 @@ def run_command(
     return p
 
 
+def git_pull(*, dry_run: bool = False) -> None:
+    print("🔄 git pull ...")
+    run_command(["git", "pull"], dry_run=dry_run)
+    print("✅ 代码已更新")
+
+
 def get_current_branch(*, dry_run: bool = False) -> str:
     if dry_run:
         return "(dry-run)"
@@ -151,12 +128,6 @@ def get_current_branch(*, dry_run: bool = False) -> str:
         check=True,
     )
     return p.stdout.strip()
-
-
-def git_pull(*, dry_run: bool = False) -> None:
-    print("🔄 git pull ...")
-    run_command(["git", "pull"], dry_run=dry_run)
-    print("✅ 代码已更新")
 
 
 def parse_semver(version: str):
@@ -263,9 +234,7 @@ def update_changelog(changelog_path: Path, new_version: str, msg: str, *, dry_ru
 
 
 def _git_porcelain_changed_paths(*, dry_run: bool = False) -> list[str]:
-    """返回 git 工作区发生变更的路径列表（包含 staged/unstaged/untracked）。
-    注意：路径均相对 git 仓库根目录。
-    """
+    """返回 git 工作区发生变更的路径列表（包含 staged/unstaged/untracked）。"""
     if dry_run:
         print("🧪 DRY-RUN: git status --porcelain")
         return []
@@ -397,24 +366,27 @@ def pre_publish_checks(
     print("🧰 发布前检查 ...")
 
     if is_git_repo(Path.cwd()):
-        repo_root = get_git_root(Path.cwd(), dry_run=dry_run)
-        if repo_root is None:
-            raise CmdError("无法获取 git 仓库根目录（git rev-parse --show-toplevel 失败）")
+        # 关键：git status 输出相对 repo 根目录；所以允许列表也必须相对 repo 根目录
+        # 但你希望提交阶段用 `git add .`，因此这里只做“变更是否符合规则”的校验即可。
+        repo_root_p = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        repo_root = Path(repo_root_p).resolve()
 
-        pubspec_rel = to_repo_relative_posix(pubspec_path, repo_root)
-        changelog_rel = to_repo_relative_posix(changelog_path, repo_root)
+        pubspec_rel = pubspec_path.resolve().relative_to(repo_root).as_posix()
+        changelog_rel = changelog_path.resolve().relative_to(repo_root).as_posix()
 
-        # ✅ 允许 pubspec/changelog
         allowed_exact = {pubspec_rel, changelog_rel}
 
-        # ✅ 允许“当前包目录内”的任意 pubspec.lock（包括 example/pubspec.lock）
-        # pubspec_rel 类似：ap_ui/pubspec.yaml 或 pubspec.yaml
-        pkg_dir = str(Path(pubspec_rel).parent.as_posix())
+        # 允许：当前包目录内任意 pubspec.lock（包含 example/pubspec.lock）
+        pkg_dir = Path(pubspec_rel).parent.as_posix()
         if pkg_dir == ".":
-            pkg_dir = ""  # repo 根目录
-
+            pkg_dir = ""
         if pkg_dir:
-            lock_pat = re.compile(rf"^(?:{re.escape(pkg_dir)}/).*?/??pubspec\.lock$|^(?:{re.escape(pkg_dir)}/)pubspec\.lock$")
+            lock_pat = re.compile(rf"^{re.escape(pkg_dir)}/.*pubspec\.lock$")
         else:
             lock_pat = re.compile(r"(^|/)\bpubspec\.lock$")
 
@@ -432,10 +404,10 @@ def pre_publish_checks(
                 + "\n\n已允许：\n"
                 + f"- {pubspec_rel}\n"
                 + f"- {changelog_rel}\n"
-                + (f"- {pkg_dir + '/' if pkg_dir else ''}**/pubspec.lock（仅当前包目录内）\n")
+                + f"- {(pkg_dir + '/' if pkg_dir else '')}**/pubspec.lock（仅当前包目录内）\n"
                 + "\n请先提交/暂存/清理这些文件后再发布。"
             )
-        print("✅ git 变更检查通过（允许 pubspec/changelog + 当前包目录内 pubspec.lock）")
+        print("✅ git 变更检查通过（变更均符合规则）")
     else:
         print("ℹ️ 当前目录不是 git 仓库，跳过 git 变更检查")
 
@@ -449,76 +421,23 @@ def pre_publish_checks(
     return ok2
 
 
-def _compute_git_add_paths_for_this_publish(
-        *,
-        repo_root: Path,
-        pubspec_path: Path,
-        changelog_path: Path,
-        dry_run: bool = False,
-) -> list[str]:
+def git_commit_all(project_name: str, new_version: str, *, dry_run: bool = False) -> None:
     """
-    只返回“有变化且允许”的路径，用于 git add。
-    核心：从 git status 取变化文件，而不是全仓库扫 lock。
+    按你的新规则：提交阶段不挑文件，直接 `git add .`，
+    前面 pre_publish_checks 已保证变更只包含允许范围。
     """
-    changed = _git_porcelain_changed_paths(dry_run=dry_run)
-
-    pubspec_rel = to_repo_relative_posix(pubspec_path, repo_root)
-    changelog_rel = to_repo_relative_posix(changelog_path, repo_root)
-
-    # 当前包目录
-    pkg_dir_path = Path(pubspec_rel).parent
-    pkg_dir = pkg_dir_path.as_posix()
-    if pkg_dir == ".":
-        pkg_dir = ""
-
-    def is_lock_under_pkg(p: str) -> bool:
-        if not p.endswith("pubspec.lock"):
-            return False
-        if not pkg_dir:
-            return True  # 根目录包：允许任意层级 lock（与你原设定一致）
-        # 必须在 pkg_dir/ 下
-        return p == f"{pkg_dir}/pubspec.lock" or p.startswith(f"{pkg_dir}/")
-
-    allowed: list[str] = []
-    for p in changed:
-        if p in (pubspec_rel, changelog_rel):
-            allowed.append(p)
-            continue
-        if is_lock_under_pkg(p):
-            allowed.append(p)
-            continue
-
-    # 去重稳定
-    return sorted(set(allowed))
-
-
-def git_commit(
-        pubspec_path: Path,
-        changelog_path: Path,
-        project_name: str,
-        new_version: str,
-        *,
-        dry_run: bool = False,
-) -> None:
     msg = f"build: {project_name} + {new_version}"
 
-    repo_root = get_git_root(Path.cwd(), dry_run=dry_run)
-    if repo_root is None:
-        raise CmdError("无法获取 git 仓库根目录（无法执行提交）")
+    print("📝 git add . ...")
+    run_command(["git", "add", "."], dry_run=dry_run)
 
-    add_paths = _compute_git_add_paths_for_this_publish(
-        repo_root=repo_root,
-        pubspec_path=pubspec_path,
-        changelog_path=changelog_path,
-        dry_run=dry_run,
-    )
-
-    if not add_paths:
-        print("ℹ️ git status 未发现需要提交的允许文件（pubspec/changelog/本包 pubspec.lock），跳过提交。")
-        return
-
-    print("📝 git add ...")
-    run_command(["git", "add", *add_paths], dry_run=dry_run)
+    # 没有变更则不要 commit（避免 exit 1）
+    if not dry_run:
+        p = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
+        staged = (p.stdout or "").strip()
+        if not staged:
+            print("ℹ️ 暂存区无变更，跳过 git commit/push")
+            return
 
     print("📝 git commit ...")
     run_command(["git", "commit", "-m", msg], dry_run=dry_run)
@@ -531,7 +450,6 @@ def git_commit(
 
 def flutter_pub_publish(*, dry_run: bool = False) -> None:
     print("📦 flutter pub publish --force ...")
-    # ✅ 按你的要求：只有命令失败（非 0）才退出；warning 不强制失败
     run_command(["flutter", "pub", "publish", "--force"], dry_run=dry_run)
     print("✅ 发布完成")
 
@@ -603,7 +521,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if git_ok:
-            git_commit(pubspec_path, changelog_path, project_name, new_version, dry_run=args.dry_run)
+            git_commit_all(project_name, new_version, dry_run=args.dry_run)
         else:
             print("ℹ️ 已跳过 git 操作（--no-git 或自动降级）")
 
