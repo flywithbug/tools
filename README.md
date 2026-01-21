@@ -20,7 +20,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - [box（工具集管理）](#box)
   - [`box`](#box-cli)
 - [flutter/pub_version](#flutter-pub_version)
-  - [`pub_version`](#box_tools-flutter-pub_version-cli)
+  - [`box_pub_version`](#box_tools-flutter-pub_version-cli)
 
 ---
 
@@ -34,7 +34,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter/pub_version
 
-- **[`pub_version`](#box_tools-flutter-pub_version-cli)**：升级 pubspec.yaml 的 version（支持交互选择 minor/patch）（[文档](README.md)）
+- **[`box_pub_version`](#box_tools-flutter-pub_version-cli)**：升级 Flutter pubspec.yaml 的 version（支持交互选择 minor/patch，可选 git 提交）（[文档](README.md)）
 
 ---
 
@@ -48,7 +48,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter/pub_version
 
-- **pub_version**：[README.md](README.md)
+- **box_pub_version**：[README.md](README.md)
 
 ---
 
@@ -96,19 +96,19 @@ box tools --full
 
 <a id="box_tools-flutter-pub_version-cli"></a>
 
-### pub_version
+### box_pub_version
 
-**简介**：升级 pubspec.yaml 的 version（支持交互选择 minor/patch）
+**简介**：升级 Flutter pubspec.yaml 的 version（支持交互选择 minor/patch，可选 git 提交）
 
-**命令**：`pub_version`
+**命令**：`box_pub_version`
 
 **用法**
 
 ```bash
-pub_version
-pub_version minor
-pub_version patch --no-git
-pub_version minor --file path/to/pubspec.yaml
+box_pub_version
+box_pub_version minor
+box_pub_version patch --no-git
+box_pub_version minor --file path/to/pubspec.yaml
 ```
 
 **参数说明**
@@ -118,8 +118,8 @@ pub_version minor --file path/to/pubspec.yaml
 
 **示例**
 
-- `pub_version`：进入交互菜单选择升级级别
-- `pub_version patch --no-git`：仅更新补丁号，不提交
+- `box_pub_version`：进入交互菜单选择升级级别
+- `box_pub_version patch --no-git`：仅更新补丁号，不提交
 
 **文档**
 

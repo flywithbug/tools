@@ -7,30 +7,34 @@ import sys
 from pathlib import Path
 
 BOX_TOOL = {
-    "id": "flutter.pub_version",          # 唯一标识（建议：类别.工具名）
-    "name": "pub_version",                # 命令名（console script 名）
-    "category": "flutter",                # 分类（可选）
-    "summary": "升级 pubspec.yaml 的 version（支持交互选择 minor/patch）",
+    "id": "flutter.pub_version",           # 唯一标识（建议：领域.工具名）
+    "name": "box_pub_version",             # ✅ 命令名（按规范统一加 box_ 前缀）
+    "category": "flutter",
+    "summary": "升级 Flutter pubspec.yaml 的 version（支持交互选择 minor/patch，可选 git 提交）",
     "usage": [
-        "pub_version",
-        "pub_version minor",
-        "pub_version patch --no-git",
-        "pub_version minor --file path/to/pubspec.yaml",
+        "box_pub_version",
+        "box_pub_version minor",
+        "box_pub_version patch --no-git",
+        "box_pub_version minor --file path/to/pubspec.yaml",
     ],
     "options": [
         {"flag": "--file", "desc": "指定 pubspec.yaml 路径（默认 ./pubspec.yaml）"},
         {"flag": "--no-git", "desc": "只改版本号，不执行 git add/commit/push"},
     ],
     "examples": [
-        {"cmd": "pub_version", "desc": "进入交互菜单选择升级级别"},
-        {"cmd": "pub_version patch --no-git", "desc": "仅更新补丁号，不提交"},
+        {"cmd": "box_pub_version", "desc": "进入交互菜单选择升级级别"},
+        {"cmd": "box_pub_version patch --no-git", "desc": "仅更新补丁号，不提交"},
     ],
-    "docs": "README.md",  # 文档路径（相对仓库根）
+    # ✅ 约定：docs 永远写 README.md（相对工具目录），由汇总脚本按文件所在目录解析
+    "docs": "README.md",
 }
 
 
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\+(.+))?$")
+
+
 def parse_version(version: str):
-    m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\+(.+))?$", version.strip())
+    m = _VERSION_RE.match(version.strip())
     if not m:
         raise ValueError("version 格式应为 x.y.z 或 x.y.z+build")
     major, minor, patch = map(int, m.group(1, 2, 3))
@@ -52,28 +56,59 @@ def bump(major: int, minor: int, patch: int, level: str):
 
 
 def read_version(content: str) -> str:
-    m = re.search(r"^version:\s*([^\s]+)", content, re.MULTILINE)
+    # ✅ 排除注释行：# version: ...
+    m = re.search(r"(?m)^(?!\s*#)\s*version:\s*([^\s]+)\s*$", content)
     if not m:
         raise ValueError("pubspec.yaml 中未找到 version")
-    return m.group(1)
+    return m.group(1).strip()
 
 
 def replace_version(content: str, new_version: str) -> str:
     return re.sub(
-        r"^(version:\s*)([^\s]+)",
+        r"(?m)^(?!\s*#)(\s*version:\s*)([^\s]+)\s*$",
         lambda m: f"{m.group(1)}{new_version}",
         content,
-        flags=re.MULTILINE,
+        count=1,
     )
 
-def git_commit(path: Path, version: str) -> bool:
+
+def is_git_repo(cwd: Path) -> bool:
     try:
-        subprocess.run(["git", "add", str(path)], check=True)
+        p = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(cwd),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return p.stdout.strip().lower() == "true"
+    except Exception:
+        return False
+
+
+def git_commit(pubspec_path: Path, version: str) -> bool:
+    """
+    返回 True 表示 git add/commit/push 都成功；
+    False 表示失败（但文件可能已经更新）。
+    """
+    cwd = pubspec_path.parent
+
+    # ✅ 不在 git 仓库：视为“跳过 git”，不算失败
+    if not is_git_repo(cwd):
+        print("ℹ️ 当前目录不是 git 仓库，已跳过 git 操作（等同 --no-git）")
+        return True
+
+    try:
+        subprocess.run(["git", "add", str(pubspec_path)], cwd=str(cwd), check=True)
         subprocess.run(
-            ["git", "commit", "-m", f"chore: bump version to {version}"],
+            ["git", "commit", "-m", f"chore(pub): bump version to {version}"],
+            cwd=str(cwd),
             check=True,
         )
-        subprocess.run(["git", "push"], check=True)
+        subprocess.run(["git", "push"], cwd=str(cwd), check=True)
+        return True
+    except FileNotFoundError:
+        print("⚠️ 未找到 git 命令，已跳过 git 操作（等同 --no-git）")
         return True
     except subprocess.CalledProcessError:
         return False
@@ -97,10 +132,11 @@ def choose_level_interactive(current_version: str, preview_minor: str, preview_p
 
     raise ValueError("无效输入（只能是 0/1/2 或 q）")
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="pub_version",
-        description="升级 Flutter pubspec.yaml 中的 version（支持交互选择）",
+        prog="box_pub_version",
+        description="升级 Flutter pubspec.yaml 中的 version（支持交互选择 minor/patch）",
     )
     p.add_argument(
         "level",
@@ -138,6 +174,9 @@ def main(argv: list[str] | None = None) -> int:
     if not level:
         try:
             level = choose_level_interactive(old, minor_v, patch_v)
+        except SystemExit as e:
+            # 用户主动退出（0）
+            return int(getattr(e, "code", 0) or 0)
         except Exception as e:
             print(f"❌ {e}")
             return 2
@@ -145,9 +184,14 @@ def main(argv: list[str] | None = None) -> int:
     new_major, new_minor, new_patch = bump(major, minor, patch, level)
     new_version = format_version(new_major, new_minor, new_patch, build)
 
+    if new_version == old:
+        print(f"ℹ️ 版本未变化: {old}")
+        return 0
+
     print(f"🔼 {old} → {new_version}")
 
-    path.write_text(replace_version(content, new_version), encoding="utf-8")
+    new_content = replace_version(content, new_version)
+    path.write_text(new_content, encoding="utf-8")
     print(f"✅ 已更新: {path}")
 
     if args.no_git:
@@ -155,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if git_commit(path, new_version):
-        print("✅ git commit & push 完成")
+        print("✅ git commit & push 完成（或已自动跳过）")
         return 0
 
     print("⚠️ git 操作失败（版本已更新）")
@@ -166,7 +210,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
-        # Ctrl+C：优雅退出，不打印 traceback
         print("\n已取消。")
         raise SystemExit(130)  # 130 = SIGINT 的惯例退出码
-
