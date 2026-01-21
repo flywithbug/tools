@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+发布检查/编排脚本（新项目版）
+
+功能：
+1) version patch 自增（可选）
+2) [project].dependencies 自动增减（基于工具显式依赖 + import 推断）
+3) [project.scripts] 自动增减：
+   - box 命令永远置顶
+   - 其他命令统一加 box_ 前缀
+4) [tool.hatch.build.targets.wheel].packages 自动增减（按 src 下实际包）
+5) README.md 汇总自动增减（基于 BOX_TOOL 元数据）
+6) tests/ 单元测试骨架自动生成 + pyproject pytest 配置自动维护（可选）
+
+硬性约定（强校验）：
+- 工具入口文件必须命名为 tool.py
+- tool.py 必须包含 BOX_TOOL（可 ast.literal_eval 的 dict）
+- 除 tool.py 之外，任何 .py 文件不得包含 BOX_TOOL（否则判定为结构违规）
+"""
 
 from __future__ import annotations
 
@@ -17,6 +35,7 @@ SRC_DIR = REPO_ROOT / "src"
 TEMP_MD = REPO_ROOT / "temp.md"
 README_MD = REPO_ROOT / "README.md"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
+TESTS_DIR = REPO_ROOT / "tests"
 
 
 # -------------------------
@@ -25,13 +44,13 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 @dataclass(frozen=True)
 class Tool:
-    py_path: Path               # src/.../*.py (absolute)
-    md_path: Path               # docs md (absolute) - prefer BOX_TOOL["docs"] else README.md in same folder
-    rel_py: str                 # relative path for display/link
-    rel_md: str                 # relative path for link
+    py_path: Path
+    md_path: Path
+    rel_py: str
+    rel_md: str
 
-    dir_key: str                # folder grouping key (relative to src)
-    sort_key: Tuple[str, str]   # (dir_key, stem)
+    dir_key: str
+    sort_key: Tuple[str, str]
 
     id: str
     name: str
@@ -41,26 +60,33 @@ class Tool:
     options: List[Dict[str, str]]
     examples: List[Dict[str, str]]
 
-    module: str                 # e.g. box_tools.flutter.pub_publish.tool OR box.cli
-    entrypoint: str             # e.g. box_tools.flutter.pub_publish.tool:main
+    module: str
+    entrypoint: str
 
-    extra_meta: Dict[str, Any]  # 原始 BOX_TOOL meta（用于 deps/docs 等扩展）
+    extra_meta: Dict[str, Any]
 
 
 # -------------------------
-# Extraction: BOX_TOOL
+# File discovery & BOX_TOOL extraction
 # -------------------------
 
-def iter_py_files() -> List[Path]:
+def iter_tool_entry_files() -> List[Path]:
+    """只扫描入口文件 tool.py（避免误扫 core.py/utils.py）。"""
     if not SRC_DIR.exists():
         raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
-    return [p for p in SRC_DIR.rglob("*.py") if p.is_file()]
+    return sorted([p for p in SRC_DIR.rglob("tool.py") if p.is_file()], key=lambda p: p.as_posix().lower())
+
+
+def iter_all_py_files() -> List[Path]:
+    if not SRC_DIR.exists():
+        raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
+    return sorted([p for p in SRC_DIR.rglob("*.py") if p.is_file()], key=lambda p: p.as_posix().lower())
 
 
 def extract_box_tool_literal(py_file: Path) -> Optional[Dict[str, Any]]:
     """
     抽取形如 BOX_TOOL = {...} 的 dict 字面量（不 import，避免副作用）。
-    需要 BOX_TOOL 是 ast.literal_eval 可解析的 dict。
+    要求 BOX_TOOL 能被 ast.literal_eval 解析。
     """
     try:
         src = py_file.read_text(encoding="utf-8", errors="ignore")
@@ -80,9 +106,44 @@ def extract_box_tool_literal(py_file: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
+def validate_structure_or_exit() -> None:
+    """
+    强校验：
+    1) 任何非 tool.py 的文件如果包含 BOX_TOOL -> 报错退出
+    2) 任何 tool.py 如果不包含 BOX_TOOL -> 报错退出
+    """
+    entry_files = set(iter_tool_entry_files())
+    offenders_has_box_tool: List[Path] = []
+    offenders_missing_box_tool: List[Path] = []
+
+    for py in iter_all_py_files():
+        meta = extract_box_tool_literal(py)
+        if py.name == "tool.py":
+            if meta is None:
+                offenders_missing_box_tool.append(py)
+        else:
+            if meta is not None:
+                offenders_has_box_tool.append(py)
+
+    if offenders_has_box_tool or offenders_missing_box_tool:
+        print("❌ 工具结构校验失败：")
+        if offenders_has_box_tool:
+            print("\n[发现 BOX_TOOL 但文件名不是 tool.py]（请重命名为 tool.py 或移除 BOX_TOOL）")
+            for p in offenders_has_box_tool:
+                print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
+        if offenders_missing_box_tool:
+            print("\n[文件名是 tool.py 但没有 BOX_TOOL]（请补充 BOX_TOOL 元数据）")
+            for p in offenders_missing_box_tool:
+                print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
+        raise SystemExit(2)
+
+    # 额外：至少应该存在一个工具（通常是 box）
+    if not entry_files:
+        print("❌ 未找到任何 tool.py（至少应该有 src/box/tool.py）。")
+        raise SystemExit(2)
+
+
 def module_from_py_path(py_file: Path) -> str:
-    # src/box/cli.py -> box.cli
-    # src/box_tools/flutter/pub_publish/tool.py -> box_tools.flutter.pub_publish.tool
     rel = py_file.relative_to(SRC_DIR).with_suffix("")
     return ".".join(rel.parts)
 
@@ -118,11 +179,6 @@ def norm_list_dict(v: Any) -> List[Dict[str, str]]:
 
 
 def dir_key_from_py(py_file: Path) -> str:
-    """
-    分类按目录层级（相对 src）：
-      - src/box/cli.py -> "box"
-      - src/box_tools/flutter/pub_publish/tool.py -> "box_tools/flutter/pub_publish"
-    """
     rel = py_file.relative_to(SRC_DIR)
     parent = rel.parent.as_posix()
     return parent if parent else "."
@@ -131,37 +187,34 @@ def dir_key_from_py(py_file: Path) -> str:
 def make_group_title(dir_key: str) -> str:
     if dir_key == "box":
         return "box（工具集管理）"
-
     parts = dir_key.split("/")
     if parts and parts[0] == "box_tools":
         rest = parts[1:]
-        if rest:
-            return "/".join(rest)
-        return "box_tools"
+        return "/".join(rest) if rest else "box_tools"
     return dir_key
 
 
 def _resolve_docs_md(py_file: Path, meta: Dict[str, Any]) -> Path:
     """
     文档路径规则：
-    - 优先 BOX_TOOL["docs"]（相对仓库根目录或绝对路径）
+    - 优先 BOX_TOOL["docs"]
+      - 若为绝对路径：直接用
+      - 若为相对路径：按“工具目录”相对（README.md）
     - 否则同目录 README.md
     """
     docs = meta.get("docs")
     if isinstance(docs, str) and docs.strip():
-        p = Path(docs.strip())
-        if not p.is_absolute():
-            p = REPO_ROOT / p
-        return p
+        raw = docs.strip()
+        p = Path(raw)
+        if p.is_absolute():
+            return p
+        return py_file.parent / raw
 
-    # 默认：同目录 README.md
     return py_file.parent / "README.md"
 
 
 def _rel_to_repo(p: Path) -> str:
-    if p.is_absolute():
-        return p.relative_to(REPO_ROOT).as_posix()
-    return (REPO_ROOT / p).relative_to(REPO_ROOT).as_posix()
+    return p.relative_to(REPO_ROOT).as_posix()
 
 
 def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
@@ -208,23 +261,22 @@ def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
 
 
 def _is_box_tool(t: Tool) -> bool:
-    # 以 name=box 或 module=box.cli / box.* 作为 box 识别规则（兼容你新结构）
     if t.name.strip().lower() == "box":
         return True
-    return t.module == "box.cli" or t.module.startswith("box.")
+    return t.module == "box.tool" or t.module.startswith("box.")
 
 
 def collect_tools() -> List[Tool]:
     tools: List[Tool] = []
-    for py in iter_py_files():
+    for py in iter_tool_entry_files():
         meta = extract_box_tool_literal(py)
         if not meta:
+            # 结构校验已经保证 tool.py 必有 BOX_TOOL，这里仅防御
             continue
         t = build_tool(py, meta)
         if t:
             tools.append(t)
 
-    # box 最上，其余按 (folder, filename)
     tools.sort(key=lambda t: (0, "") if _is_box_tool(t) else (1, t.sort_key[0].lower(), t.sort_key[1].lower()))
     return tools
 
@@ -294,10 +346,7 @@ def render_overview(tools: List[Tool]) -> str:
         for t in group_tools_sorted:
             a = tool_anchor_id(t)
             s = t.summary or ""
-            if t.md_path.exists():
-                doc_part = f"（[文档]({t.rel_md})）"
-            else:
-                doc_part = f"（文档缺失：`{t.rel_md}`）"
+            doc_part = f"（[文档]({t.rel_md})）" if t.md_path.exists() else f"（文档缺失：`{t.rel_md}`）"
 
             if s:
                 out.append(f"- **[`{t.name}`](#{a})**：{s}{doc_part}\n")
@@ -421,10 +470,11 @@ def render_readme(temp_header: str, tools: List[Tool]) -> str:
 
 
 # -------------------------
-# pyproject.toml patch
+# pyproject.toml patch helpers
 # -------------------------
 
 _VERSION_LINE_RE = re.compile(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$')
+
 
 def bump_patch_version(text: str) -> Tuple[str, str]:
     m = _VERSION_LINE_RE.search(text)
@@ -439,7 +489,6 @@ def bump_patch_version(text: str) -> Tuple[str, str]:
 def replace_table_block(text: str, header: str, body_lines: List[str]) -> str:
     """
     替换一个 table 块：从 [header] 开始到下一个 [..] 或 EOF。
-    替换后强制以一个空行结束（\n\n），避免粘连下一段。
     """
     pattern = re.compile(rf"(?ms)^\[{re.escape(header)}\]\s*\n.*?(?=^\[|\Z)")
     new_block = f"[{header}]\n" + "\n".join(body_lines).rstrip() + "\n\n"
@@ -451,10 +500,6 @@ def replace_table_block(text: str, header: str, body_lines: List[str]) -> str:
 
 
 def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
-    """
-    仅替换 [tool.hatch.build.targets.wheel] table 内的 packages = [...] 行。
-    没有 packages 行则追加一行；没有 table 则追加整个 table。
-    """
     table_pat = re.compile(r"(?ms)^\[tool\.hatch\.build\.targets\.wheel\]\s*\n.*?(?=^\[|\Z)")
     m = table_pat.search(text)
 
@@ -500,7 +545,6 @@ _IMPORT_TO_PIP = {
     "rich": "rich",
 }
 
-# 对“常用依赖”提供默认版本约束（可按你需要扩展）
 _DEFAULT_DEP_SPECS = {
     "openai": "openai>=1.0.0",
     "PyYAML": "PyYAML>=6.0",
@@ -508,13 +552,8 @@ _DEFAULT_DEP_SPECS = {
 
 _DEP_BASE_RE = re.compile(r"^\s*([A-Za-z0-9_.\-]+)")
 
+
 def _dep_base(dep: str) -> str:
-    """
-    从依赖字符串里抽 base name：
-      - "PyYAML>=6.0" -> "PyYAML"
-      - "openai" -> "openai"
-      - "tiktoken==0.7.0" -> "tiktoken"
-    """
     m = _DEP_BASE_RE.match(dep.strip())
     return m.group(1) if m else dep.strip()
 
@@ -542,9 +581,6 @@ def _norm_dep_list(v: Any) -> List[str]:
 
 
 def infer_deps_from_imports(py_file: Path) -> List[str]:
-    """
-    解析 import / from import，提取非 stdlib 的顶层模块名，再映射到 pip 包名。
-    """
     try:
         src = py_file.read_text(encoding="utf-8", errors="ignore")
         tree = ast.parse(src)
@@ -586,12 +622,6 @@ def infer_deps_from_imports(py_file: Path) -> List[str]:
 
 
 def collect_tool_dependencies(tools: List[Tool]) -> List[str]:
-    """
-    依赖来源：
-    1) BOX_TOOL 显式：dependencies/depends/deps/requires
-    2) import 推断（兜底）
-    合并去重：显式优先、顺序稳定。
-    """
     merged: List[str] = []
     seen: Set[str] = set()
 
@@ -647,19 +677,8 @@ def _write_single_line_dependencies(project_block: str, deps: List[str]) -> str:
 
 
 def ensure_project_dependencies_exact(text: str, desired_raw: List[str]) -> Tuple[str, List[str]]:
-    """
-    ✅ 依赖“自动增减”：
-    - desired_raw 是从工具收集到的依赖名（可能无版本约束）
-    - 从现有 dependencies 中保留已存在的版本约束（若 base name 匹配）
-    - 对于新增依赖，若在 _DEFAULT_DEP_SPECS 里则用默认约束，否则用裸包名
-    - 移除不在 desired 里的依赖
-    - 去重（按 base name）
-    返回：(新文本, 最终依赖列表)
-    """
     project_block = _read_project_block(text)
     if project_block is None:
-        # 没有 [project]：创建最小 project，并写入 dependencies
-        # 注意：name/version/requires-python 由你项目自己维护，此处不乱补
         deps_bases = []
         seen = set()
         final_deps: List[str] = []
@@ -678,7 +697,6 @@ def ensure_project_dependencies_exact(text: str, desired_raw: List[str]) -> Tupl
     existing_by_base: Dict[str, str] = {}
     for d in existing:
         base = _dep_base(d)
-        # 如果重复，保留第一个（更稳定）
         if base not in existing_by_base:
             existing_by_base[base] = d
 
@@ -693,15 +711,11 @@ def ensure_project_dependencies_exact(text: str, desired_raw: List[str]) -> Tupl
 
     final_deps: List[str] = []
     for base in desired_bases:
-        # 先保留现有 spec（如果有）
         if base in existing_by_base:
             final_deps.append(existing_by_base[base])
         else:
-            # 否则用默认 spec 或裸包名
             final_deps.append(_DEFAULT_DEP_SPECS.get(base, base))
 
-    # 写回
-    # 只改 dependencies 行，其余 [project] 字段不动
     block2 = _write_single_line_dependencies(project_block, final_deps)
     return _replace_project_block(text, block2), final_deps
 
@@ -722,53 +736,169 @@ def _command_with_prefix(name: str) -> str:
 
 
 def build_scripts(tools: List[Tool]) -> List[Tuple[str, str]]:
-    """
-    - box 命令保持为 "box"
-    - 其他命令全部加 box_ 前缀
-    - 自动增减：以 tools 列表为准
-    - box 永远排第一
-    """
     items: List[Tuple[str, str]] = []
     for t in tools:
         cmd = _command_with_prefix(t.name)
         items.append((cmd, t.entrypoint))
 
-    # 排序：box 最上，然后按 cmd 排
     items.sort(key=lambda kv: (0, "") if kv[0] == "box" else (1, kv[0].lower()))
     return items
 
 
 def update_project_scripts(text: str, scripts: List[Tuple[str, str]]) -> str:
     lines = [f'{cmd} = "{ep}"' for cmd, ep in scripts]
-    # 强制 box 第一：build_scripts 已保证
     return replace_table_block(text, "project.scripts", lines)
 
 
 # -------------------------
-# wheel packages: 自动增减（按 src 下实际包）
+# wheel packages
 # -------------------------
 
 def collect_src_packages() -> List[str]:
-    """
-    自动扫描 src/ 下的顶层包（含 __init__.py），生成 wheel packages 列表：["src/box", "src/box_tools", ...]
-    并保证 src/box 永远在最前。
-    """
     if not SRC_DIR.exists():
         return []
     pkgs: List[str] = []
     for p in SRC_DIR.iterdir():
         if p.is_dir() and (p / "__init__.py").exists():
             pkgs.append(f"src/{p.name}")
-
     pkgs = sorted(pkgs, key=lambda s: (0, "") if s.lower() == "src/box" else (1, s.lower()))
     return pkgs
 
 
 # -------------------------
-# main update
+# tests generation + pytest config
 # -------------------------
 
-def update_pyproject(tools: List[Tool], do_bump: bool) -> Tuple[str, int, List[str], List[str]]:
+def _snake(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s or "tool"
+
+
+def ensure_tests_skeleton(tools: List[Tool]) -> List[Path]:
+    TESTS_DIR.mkdir(parents=True, exist_ok=True)
+    written: List[Path] = []
+
+    conftest = TESTS_DIR / "conftest.py"
+    if not conftest.exists():
+        conftest.write_text(
+            'import pytest\n\n\n'
+            '@pytest.fixture\n'
+            'def chdir_tmp(tmp_path, monkeypatch):\n'
+            '    """切到临时目录执行（避免污染仓库）。"""\n'
+            '    monkeypatch.chdir(tmp_path)\n'
+            '    return tmp_path\n',
+            encoding="utf-8",
+        )
+        written.append(conftest)
+
+    # 已知工具：更完整模板；未知工具：smoke test（能 import + main 存在）
+    known_templates: Dict[str, str] = {
+        "box_pub_version": (
+            "from pathlib import Path\n\n"
+            "from box_tools.flutter.pub_version import tool as tool\n\n\n"
+            "def test_patch_bump_no_git(chdir_tmp):\n"
+            "    pubspec = Path('pubspec.yaml')\n"
+            "    pubspec.write_text('name: demo\\nversion: 1.2.3+abc\\n', encoding='utf-8')\n"
+            "    rc = tool.main(['patch', '--no-git', '--file', str(pubspec)])\n"
+            "    assert rc == 0\n"
+            "    assert 'version: 1.2.4+abc' in pubspec.read_text(encoding='utf-8')\n"
+        ),
+        # pub_upgrade 的强依赖比较多，默认用 smoke test；你可后续再手写更深入的 mock 测试
+        "box_pub_upgrade": (
+            "from box_tools.flutter.pub_upgrade import tool as tool\n\n\n"
+            "def test_smoke_import_only():\n"
+            "    assert hasattr(tool, 'main')\n"
+        ),
+    }
+
+    for t in tools:
+        cmd = _command_with_prefix(t.name)
+        if cmd == "box":
+            # box 核心工具暂不生成专门测试（后续可加 doctor/version 的 smoke test）
+            continue
+
+        fname = f"test_{_snake(cmd)}.py"
+        test_file = TESTS_DIR / fname
+        if test_file.exists():
+            continue
+
+        if cmd in known_templates:
+            content = known_templates[cmd]
+        else:
+            # 通用 smoke test：能 import + main 可调用（不执行外部命令）
+            content = (
+                f"import importlib\n\n\n"
+                f"def test_smoke_import():\n"
+                f"    mod = importlib.import_module('{t.module}')\n"
+                f"    assert hasattr(mod, 'main')\n"
+            )
+
+        test_file.write_text(content, encoding="utf-8")
+        written.append(test_file)
+
+    return written
+
+
+def ensure_pytest_config(text: str) -> str:
+    # [tool.pytest.ini_options]
+    pytest_lines = [
+        'testpaths = ["tests"]',
+        'addopts = "-q"',
+    ]
+    return replace_table_block(text, "tool.pytest.ini_options", pytest_lines)
+
+
+def ensure_dev_pytest_dependency(text: str) -> str:
+    """
+    维护：
+    [project.optional-dependencies]
+    dev = ["pytest>=8.0.0", ...]
+    仅做字符串级增补（避免引入 TOML parser 依赖），不做复杂格式化。
+    """
+    block_pat = re.compile(r"(?ms)^\[project\.optional-dependencies\]\s*\n.*?(?=^\[|\Z)")
+    m = block_pat.search(text)
+
+    pytest_spec = "pytest>=8.0.0"
+
+    if not m:
+        block = (
+            "[project.optional-dependencies]\n"
+            f'dev = ["{pytest_spec}"]\n\n'
+        )
+        return text.rstrip() + "\n\n" + block
+
+    block = text[m.start():m.end()]
+
+    dev_line_pat = re.compile(r'(?m)^\s*dev\s*=\s*\[(?P<body>.*)\]\s*$')
+    dm = dev_line_pat.search(block)
+
+    if not dm:
+        # 没有 dev：追加一行
+        block2 = block.rstrip() + f'\ndev = ["{pytest_spec}"]\n\n'
+        return text[:m.start()] + block2 + text[m.end():]
+
+    body = dm.group("body")
+    items = [s.strip() for s in re.findall(r"""["']([^"']+)["']""", body)]
+    bases = {_dep_base(x) for x in items}
+    if _dep_base(pytest_spec) in bases:
+        return text  # already present
+
+    items.append(pytest_spec)
+    new_body = ", ".join([f'"{x}"' for x in items])
+    block2 = dev_line_pat.sub(f"dev = [{new_body}]", block, count=1)
+
+    if not block2.endswith("\n\n"):
+        block2 = block2.rstrip() + "\n\n"
+
+    return text[:m.start()] + block2 + text[m.end():]
+
+
+# -------------------------
+# update pyproject
+# -------------------------
+
+def update_pyproject(tools: List[Tool], do_bump: bool, ensure_tests: bool) -> Tuple[str, int, List[str], List[str], List[Path]]:
     if not PYPROJECT.exists():
         raise SystemExit("未找到 pyproject.toml，请在仓库根目录执行。")
 
@@ -779,29 +909,37 @@ def update_pyproject(tools: List[Tool], do_bump: bool) -> Tuple[str, int, List[s
     if do_bump:
         text, new_version = bump_patch_version(text)
 
-    # 3) scripts：自动增减 + box 置顶 + 其余加 box_ 前缀
     scripts = build_scripts(tools)
     text = update_project_scripts(text, scripts)
 
-    # 4) wheel packages：按 src 下实际包自动增减
     wheel_pkgs = collect_src_packages()
     text = replace_wheel_packages_line(text, wheel_pkgs)
 
-    # 2) dependencies：自动增减（exact）
     deps_desired = collect_tool_dependencies(tools)
     text, final_deps = ensure_project_dependencies_exact(text, deps_desired)
+
+    written_tests: List[Path] = []
+    if ensure_tests:
+        written_tests = ensure_tests_skeleton(tools)
+        text = ensure_dev_pytest_dependency(text)
+        text = ensure_pytest_config(text)
 
     if text != original:
         PYPROJECT.write_text(text, encoding="utf-8")
 
-    return new_version, len(scripts), wheel_pkgs, final_deps
+    return new_version, len(scripts), wheel_pkgs, final_deps, written_tests
 
+
+# -------------------------
+# main
+# -------------------------
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-readme", action="store_true", help="不生成 README.md")
     ap.add_argument("--no-toml", action="store_true", help="不更新 pyproject.toml")
     ap.add_argument("--no-bump", action="store_true", help="不升级 version（仍会更新 scripts / wheel packages / dependencies）")
+    ap.add_argument("--no-tests", action="store_true", help="不生成 tests/ 与 pytest 配置")
     args = ap.parse_args()
 
     if not TEMP_MD.exists():
@@ -809,24 +947,39 @@ def main() -> None:
     if not SRC_DIR.exists():
         raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
 
+    # ✅ 先做结构强校验
+    validate_structure_or_exit()
+
     tools = collect_tools()
     if not tools:
-        raise SystemExit("未找到任何包含 BOX_TOOL 的工具脚本。")
+        raise SystemExit("未找到任何包含 BOX_TOOL 的工具入口（tool.py）。")
 
-    # 5) README 汇总自动增减
+    # README 汇总
     if not args.no_readme:
         header = TEMP_MD.read_text(encoding="utf-8", errors="ignore")
         readme = render_readme(header, tools)
         README_MD.write_text(readme, encoding="utf-8")
         print(f"[ok] README.md 已生成：{README_MD}")
 
+    # pyproject.toml 更新
     if not args.no_toml:
-        new_version, n_scripts, wheel_pkgs, final_deps = update_pyproject(tools, do_bump=not args.no_bump)
+        new_version, n_scripts, wheel_pkgs, final_deps, written_tests = update_pyproject(
+            tools,
+            do_bump=not args.no_bump,
+            ensure_tests=not args.no_tests,
+        )
         if new_version:
             print(f"[ok] pyproject.toml version -> {new_version}")
         print(f"[ok] [project.scripts] -> {n_scripts} 项（box 置顶，其余自动加 box_ 前缀）")
         print(f"[ok] wheel packages -> {wheel_pkgs}")
         print(f"[ok] project.dependencies -> {final_deps}")
+
+        if not args.no_tests:
+            if written_tests:
+                rels = [p.relative_to(REPO_ROOT).as_posix() for p in written_tests]
+                print(f"[ok] tests 已生成：{rels}")
+            else:
+                print("[ok] tests 已存在（未新增）")
 
     print("Done.")
 

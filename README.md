@@ -32,15 +32,15 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### box（工具集管理）
 
-- **[`box`](#box-tool)**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表（[文档](README.md)）
+- **[`box`](#box-tool)**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表（[文档](src/box/README.md)）
 
 ### flutter/pub_upgrade
 
-- **[`box_pub_upgrade`](#box_tools-flutter-pub_upgrade-tool)**：升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）（[文档](README.md)）
+- **[`box_pub_upgrade`](#box_tools-flutter-pub_upgrade-tool)**：升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）（[文档](src/box_tools/flutter/pub_upgrade/README.md)）
 
 ### flutter/pub_version
 
-- **[`box_pub_version`](#box_tools-flutter-pub_version-tool)**：升级 Flutter pubspec.yaml 的 version（支持交互选择 minor/patch，可选 git 提交）（[文档](README.md)）
+- **[`box_pub_version`](#box_tools-flutter-pub_version-tool)**：升级 Flutter pubspec.yaml 的 version（支持交互选择 minor/patch，可选 git 提交）（[文档](src/box_tools/flutter/pub_version/README.md)）
 
 ---
 
@@ -50,15 +50,15 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### box（工具集管理）
 
-- **box**：[README.md](README.md)
+- **box**：[src/box/README.md](src/box/README.md)
 
 ### flutter/pub_upgrade
 
-- **box_pub_upgrade**：[README.md](README.md)
+- **box_pub_upgrade**：[src/box_tools/flutter/pub_upgrade/README.md](src/box_tools/flutter/pub_upgrade/README.md)
 
 ### flutter/pub_version
 
-- **box_pub_version**：[README.md](README.md)
+- **box_pub_version**：[src/box_tools/flutter/pub_version/README.md](src/box_tools/flutter/pub_version/README.md)
 
 ---
 
@@ -96,7 +96,7 @@ box tools --full
 
 **文档**
 
-[README.md](README.md)
+[src/box/README.md](src/box/README.md)
 
 ---
 
@@ -138,7 +138,7 @@ box_pub_upgrade --skip ap_recaptcha --skip some_pkg
 
 **文档**
 
-[README.md](README.md)
+[src/box_tools/flutter/pub_upgrade/README.md](src/box_tools/flutter/pub_upgrade/README.md)
 
 ---
 
@@ -175,7 +175,7 @@ box_pub_version minor --file path/to/pubspec.yaml
 
 **文档**
 
-[README.md](README.md)
+[src/box_tools/flutter/pub_version/README.md](src/box_tools/flutter/pub_version/README.md)
 
 ---
 
