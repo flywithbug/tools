@@ -28,10 +28,11 @@ BOX_TOOL = {
         {"flag": "--no-git", "desc": "跳过 git add/commit/push（若不是 git 仓库也会自动跳过）"},
         {"flag": "--no-publish", "desc": "跳过 flutter pub publish"},
         {"flag": "--skip-pub-get", "desc": "跳过 flutter pub get"},
+        {"flag": "--skip-checks", "desc": "跳过发布前检查（flutter analyze + git clean）"},
         {"flag": "--dry-run", "desc": "仅打印将执行的操作，不改文件、不跑命令"},
     ],
     "examples": [
-        {"cmd": "box_pub_publish --msg fix null error", "desc": "拉代码→升级版本→更新 changelog→pub get→提交→发布"},
+        {"cmd": "box_pub_publish --msg fix null error", "desc": "拉代码→升级版本→更新 changelog→pub get→检查→提交→发布"},
         {"cmd": "box_pub_publish --msg release notes --no-publish", "desc": "只提交不发布"},
         {"cmd": "box_pub_publish --msg try --dry-run", "desc": "预演一次，不做任何修改"},
     ],
@@ -64,13 +65,35 @@ def is_git_repo(cwd: Path) -> bool:
         return False
 
 
-def run_command(cmd: list[str], *, dry_run: bool = False, cwd: Path | None = None) -> None:
-    """运行外部命令；失败则抛异常（携带 stderr）。"""
+def run_command(
+        cmd: list[str],
+        *,
+        dry_run: bool = False,
+        cwd: Path | None = None,
+        fail_on_warning: bool = False,
+        warning_regex: str | re.Pattern[str] | None = None,
+) -> subprocess.CompletedProcess[str] | None:
+    """运行外部命令；失败则抛异常（携带 stdout/stderr）。
+
+    - fail_on_warning: 若为 True，命令即使退出码为 0，只要输出里匹配到 warning 也视为失败。
+    """
     if dry_run:
         print("🧪 DRY-RUN:", " ".join(cmd))
-        return
+        return None
+
+    warn_pat: re.Pattern[str] | None = None
+    if fail_on_warning:
+        if warning_regex is None:
+            # 常见形式：Warning:, warning:, WARNING:
+            warn_pat = re.compile(r"(?im)^\s*warning\s*[:\-]")
+        elif isinstance(warning_regex, str):
+            warn_pat = re.compile(warning_regex)
+        else:
+            warn_pat = warning_regex
 
     p = subprocess.run(cmd, capture_output=True, text=True, cwd=str(cwd) if cwd else None)
+    combined = (p.stdout or "") + "\n" + (p.stderr or "")
+
     if p.returncode != 0:
         msg = (
             f"执行命令失败: {' '.join(cmd)}\n"
@@ -79,6 +102,16 @@ def run_command(cmd: list[str], *, dry_run: bool = False, cwd: Path | None = Non
             f"stderr:\n{p.stderr}\n"
         )
         raise CmdError(msg)
+
+    if warn_pat and warn_pat.search(combined):
+        msg = (
+            f"命令输出包含 warning，已按失败处理: {' '.join(cmd)}\n"
+            f"stdout:\n{p.stdout}\n"
+            f"stderr:\n{p.stderr}\n"
+        )
+        raise CmdError(msg)
+
+    return p
 
 
 def get_current_branch(*, dry_run: bool = False) -> str:
@@ -97,6 +130,15 @@ def git_pull(*, dry_run: bool = False) -> None:
     print("🔄 git pull ...")
     run_command(["git", "pull"], dry_run=dry_run)
     print("✅ 代码已更新")
+
+
+def git_status_is_clean(*, dry_run: bool = False) -> bool:
+    """检查 git 工作区是否干净（无未提交变更）。"""
+    if dry_run:
+        print("🧪 DRY-RUN: git status --porcelain")
+        return True
+    p = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+    return (p.stdout or "").strip() == ""
 
 
 def parse_semver(version: str):
@@ -236,9 +278,44 @@ def flutter_pub_get(*, dry_run: bool = False) -> None:
     print("✅ flutter pub get 完成")
 
 
+def flutter_analyze(*, dry_run: bool = False) -> None:
+    print("🔎 flutter analyze ...")
+    # 这里比默认更严格：只要出现 warning 字样就失败（你要的“发布前先检查”）
+    run_command(
+        ["flutter", "analyze"],
+        dry_run=dry_run,
+        fail_on_warning=True,
+        warning_regex=r"(?im)\bwarning\b",
+    )
+    print("✅ flutter analyze 通过")
+
+
+def pre_publish_checks(*, dry_run: bool = False) -> None:
+    """发布前检查：不跑 flutter test；检查 analyze + git 工作区干净。"""
+    print("🧰 发布前检查 ...")
+
+    if is_git_repo(Path.cwd()):
+        if not git_status_is_clean(dry_run=dry_run):
+            raise CmdError("发布前检查失败：git 工作区有未提交变更，请先提交/暂存/清理后再发布。")
+        print("✅ git 工作区干净")
+    else:
+        print("ℹ️ 当前目录不是 git 仓库，跳过 git clean 检查")
+
+    flutter_analyze(dry_run=dry_run)
+    print("✅ 发布前检查完成")
+
+
 def flutter_pub_publish(*, dry_run: bool = False) -> None:
     print("📦 flutter pub publish --force ...")
-    run_command(["flutter", "pub", "publish", "--force"], dry_run=dry_run)
+    # publish：出现 warning 或错误都抛出
+    run_command(
+        ["flutter", "pub", "publish", "--force"],
+        dry_run=dry_run,
+        fail_on_warning=True,
+        # 默认 warning 匹配：行首 warning: / warning-
+        # 如果你想更激进（任何位置出现 warning 都算），改成：
+        # warning_regex=r"(?im)\bwarning\b"
+    )
     print("✅ 发布完成")
 
 
@@ -255,6 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-git", action="store_true", help="跳过 git add/commit/push")
     p.add_argument("--no-publish", action="store_true", help="跳过 flutter pub publish")
     p.add_argument("--skip-pub-get", action="store_true", help="跳过 flutter pub get")
+    p.add_argument("--skip-checks", action="store_true", help="跳过发布前检查（flutter analyze + git clean）")
     p.add_argument("--dry-run", action="store_true", help="预演：不改文件、不执行外部命令")
     return p
 
@@ -298,6 +376,11 @@ def main(argv: list[str] | None = None) -> int:
             print("ℹ️ 已跳过 git 操作（--no-git 或自动降级）")
 
         if not args.no_publish:
+            if not args.skip_checks:
+                pre_publish_checks(dry_run=args.dry_run)
+            else:
+                print("ℹ️ 已跳过发布前检查（--skip-checks）")
+
             flutter_pub_publish(dry_run=args.dry_run)
         else:
             print("ℹ️ 已跳过发布（--no-publish）")
