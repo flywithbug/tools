@@ -5,11 +5,13 @@ import argparse
 import json
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from box_tools._share.openai_translate.models import OpenAIModel
 from box_tools._share.openai_translate.chat import OpenAIChat, ChatOptions, ChatSession
+
 
 BOX_TOOL = {
     "id": "ai.chat",
@@ -42,9 +44,11 @@ BOX_TOOL = {
     "dependencies": [
         "PyYAML>=6.0",
         "openai>=1.0.0",
+        "rich>=13.0.0",
     ],
     "docs": "README.md",
 }
+
 
 DEFAULT_STORE_DIR = Path.home() / ".box_tools" / "ai_chat"
 
@@ -68,20 +72,6 @@ except Exception:
     Markdown = None  # type: ignore
     Theme = None  # type: ignore
     _RICH_AVAILABLE = False
-
-
-def _now_session_id() -> str:
-    return time.strftime("%Y%m%d_%H%M%S")
-
-
-def _now_ts() -> str:
-    # 统一用本地时间字符串，写入消息里，保存/加载都能保持
-    return time.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _ensure_store_dir(store_dir: Path) -> Path:
-    store_dir.mkdir(parents=True, exist_ok=True)
-    return store_dir
 
 
 def _get_console() -> Optional["Console"]:
@@ -111,6 +101,15 @@ def _status(console: Optional["Console"], text: str):
 
     with Status(text, console=console, spinner="dots"):
         yield
+
+
+def _now_session_id() -> str:
+    return time.strftime("%Y%m%d_%H%M%S")
+
+
+def _ensure_store_dir(store_dir: Path) -> Path:
+    store_dir.mkdir(parents=True, exist_ok=True)
+    return store_dir
 
 
 def _print_help() -> None:
@@ -146,40 +145,51 @@ def _load_session(path: Path) -> tuple[ChatSession, Dict[str, str]]:
     return sess, meta
 
 
-def _normalize_model(m: str) -> str:
-    s = (m or "").strip()
-    return s if s else OpenAIModel.GPT_4O_MINI.value
+def _local_iso_ts() -> str:
+    """
+    Local time ISO 8601 with timezone offset, e.g. 2026-01-21T13:05:12+08:00
+    """
+    dt = datetime.now().astimezone()
+    # Use seconds precision; keep offset
+    return dt.replace(microsecond=0).isoformat()
 
 
-def _stamp_last_turn(session: ChatSession, user_ts: str, assistant_ts: str) -> None:
+def _format_ts_for_display(ts: Optional[str]) -> str:
     """
-    给刚刚 append 的两条消息打时间戳：
-    - 倒数第2条：user
-    - 倒数第1条：assistant
-    不依赖 ChatSession 的实现细节（只假设 messages 是 list[dict]）。
+    Convert ISO ts to a compact display like 13:05:12, or return placeholder.
     """
+    if not ts:
+        return "--:--:--"
     try:
-        if not session.messages:
-            return
-        if len(session.messages) >= 2:
-            m_user = session.messages[-2]
-            if isinstance(m_user, dict) and not m_user.get("ts"):
-                m_user["ts"] = user_ts
-        m_asst = session.messages[-1]
-        if isinstance(m_asst, dict) and not m_asst.get("ts"):
-            m_asst["ts"] = assistant_ts
+        dt = datetime.fromisoformat(ts)
+        return dt.strftime("%H:%M:%S")
     except Exception:
-        # UI enhancement only; never break chat flow
+        return "--:--:--"
+
+
+def _ensure_last_two_have_ts(session: ChatSession) -> None:
+    """
+    After we append a turn, make sure the last two messages have ts.
+    Assumes session.messages structure like [{"role": "...", "content": "..."}].
+    """
+    if not session.messages:
         return
+    # last message
+    if isinstance(session.messages[-1], dict) and not session.messages[-1].get("ts"):
+        session.messages[-1]["ts"] = _local_iso_ts()
+    # previous (if exists)
+    if len(session.messages) >= 2:
+        if isinstance(session.messages[-2], dict) and not session.messages[-2].get("ts"):
+            session.messages[-2]["ts"] = _local_iso_ts()
 
 
-def _render_answer(console: Optional["Console"], answer: str, elapsed_s: float, ts: str) -> None:
+def _render_answer(console: Optional["Console"], answer: str, elapsed_s: float, ts: Optional[str]) -> None:
     if console is None or not _RICH_AVAILABLE:
         print(answer)
-        print(f"({ts} · 耗时 {elapsed_s:.2f}s)")
+        print(f"(耗时 {elapsed_s:.2f}s @ {_format_ts_for_display(ts)})")
         return
 
-    subtitle = Text(f"{ts} · 耗时 {elapsed_s:.2f}s", style="meta")
+    subtitle = Text(f"耗时 {elapsed_s:.2f}s  ·  {_format_ts_for_display(ts)}", style="meta")
     body = Markdown(answer) if answer.strip() else Text("(空)", style="meta")
     console.print(
         Panel(
@@ -203,32 +213,38 @@ def _print_history(session: ChatSession, n: int = 20, console: Optional["Console
 
     if console is None or not _RICH_AVAILABLE:
         for m in msgs:
-            role = m.get("role", "?")
-            content = (m.get("content") or "").strip()
-            ts = (m.get("ts") or "").strip()
-            prefix = f"{ts} " if ts else ""
-            print(f"{prefix}[{role}] {content}")
+            role = (m.get("role", "?") if isinstance(m, dict) else "?")
+            content = ((m.get("content") or "") if isinstance(m, dict) else "").strip()
+            ts = (m.get("ts") if isinstance(m, dict) else None)
+            print(f"[{_format_ts_for_display(ts)}] [{role}] {content}")
         return
 
     for m in msgs:
+        if not isinstance(m, dict):
+            continue
         role = (m.get("role", "?") or "?").strip()
         content = (m.get("content") or "").strip()
-        ts = (m.get("ts") or "").strip()
-
+        ts = m.get("ts")
         style = "user" if role == "user" else ("assistant" if role in ("assistant", "ai") else "meta")
-        title_text = f"{role}"
-        subtitle_text = ts if ts else ""
 
+        title = Text(f"{role}  ", style=style)
+        subtitle = Text(_format_ts_for_display(ts), style="meta")
         body = Markdown(content) if content else Text("(空)", style="meta")
+
         console.print(
             Panel(
                 body,
-                title=Text(title_text, style=style),
-                subtitle=Text(subtitle_text, style="meta") if subtitle_text else None,
+                title=title,
+                subtitle=subtitle,
                 border_style=style,
                 padding=(1, 2),
             )
         )
+
+
+def _normalize_model(m: str) -> str:
+    s = (m or "").strip()
+    return s if s else OpenAIModel.GPT_4O_MINI.value
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -300,6 +316,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         console.print("进入对话模式：/help 查看指令。", style="meta")
         console.print(f"session={meta['session_id']} model={chat.opt.model}", style="meta")
+        if not _RICH_AVAILABLE:
+            console.print("(提示：安装 rich 可获得更美观的界面)", style="meta")
 
     while True:
         try:
@@ -437,8 +455,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
 
         # ---- normal chat ----
-        user_ts = _now_ts()
+        # NOTE: build_messages() likely appends user's message to session internally,
+        # or returns a messages list for API call. We'll still add ts to the session
+        # messages right after we append the turn.
+        #
+        # We also record a user ts right now (for saving/history purposes).
+        user_ts = _local_iso_ts()
+
         msgs = session.build_messages(user_text)
+        # If build_messages() already appended the user message into session.messages,
+        # ensure it has ts. Otherwise, ts will be attached after append_turn below.
+        if session.messages and isinstance(session.messages[-1], dict):
+            # If last is user role and missing ts, fill it.
+            if session.messages[-1].get("role") == "user" and not session.messages[-1].get("ts"):
+                session.messages[-1]["ts"] = user_ts
 
         try:
             t0 = time.perf_counter()
@@ -452,12 +482,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                 console.print(f"[错误] {e}", style="error")
             continue
 
-        assistant_ts = _now_ts()
-        _render_answer(console, ans, elapsed, assistant_ts)
-
-        # 写入 session，并给这轮对话加时间戳（会跟着 /save 保存）
+        # Append assistant turn and stamp timestamps
         session.append_turn(user_text, ans)
-        _stamp_last_turn(session, user_ts=user_ts, assistant_ts=assistant_ts)
+
+        # Ensure ts exists on the last two messages (user + assistant).
+        # For assistant timestamp, use "now" after completion (closer to real receipt time).
+        assistant_ts = _local_iso_ts()
+        if session.messages and isinstance(session.messages[-1], dict):
+            if session.messages[-1].get("role") in ("assistant", "ai") and not session.messages[-1].get("ts"):
+                session.messages[-1]["ts"] = assistant_ts
+        # user message might still be missing ts if build_messages didn't append; ensure both.
+        _ensure_last_two_have_ts(session)
+
+        _render_answer(console, ans, elapsed, assistant_ts)
 
     # unreachable
     # return 0
