@@ -94,11 +94,6 @@ def default_prompts() -> Prompts:
                 "Use natural Korean UI style.\n"
                 "Prefer concise mobile UI wording.\n"
             ),
-            "fil": (
-                "Use natural and concise Filipino UI wording.\n"
-                "Avoid overly literal translations from English.\n"
-                'Prefer system-style error phrasing (e.g., "May problema..." / "Nagkaroon ng isyu...") when appropriate.\n'
-            ),
         },
     )
 

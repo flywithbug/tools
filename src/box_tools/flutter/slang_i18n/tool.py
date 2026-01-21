@@ -71,7 +71,7 @@ def _print_report(rep) -> None:
 
     issues = getattr(rep, "issues", ()) or ()
     if issues:
-        print("\n问题列表：")
+        print("\n说明：")
         for i in issues:
             loc = ""
             if getattr(i, "path", None):
