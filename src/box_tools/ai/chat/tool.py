@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import sys
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from box_tools._share.openai_translate.models import OpenAIModel
 from box_tools._share.openai_translate.chat import OpenAIChat, ChatOptions, ChatSession
@@ -54,8 +56,6 @@ DEFAULT_STORE_DIR = Path.home() / ".box_tools" / "ai_chat"
 
 #
 # ---- pretty UI (optional) ----
-# If `rich` is available, render nicer panels + spinner.
-# If not, fall back to plain print() so the tool still works.
 #
 try:
     from rich.console import Console
@@ -91,9 +91,6 @@ def _get_console() -> Optional["Console"]:
 
 @contextmanager
 def _status(console: Optional["Console"], text: str):
-    """
-    Show a spinner during the API call when `rich` exists.
-    """
     if console is None or not _RICH_AVAILABLE:
         yield
         return
@@ -124,6 +121,7 @@ def _print_help() -> None:
         "  /save [path]         保存会话（默认 ~/.box_tools/ai_chat/<session>.json）\n"
         "  /load <path>         加载会话\n"
         "  /history [n]         打印最近 n 条（默认 20）\n"
+        "  /copy                复制上一条 AI 回复到剪贴板\n"
     )
 
 
@@ -146,18 +144,11 @@ def _load_session(path: Path) -> tuple[ChatSession, Dict[str, str]]:
 
 
 def _local_iso_ts() -> str:
-    """
-    Local time ISO 8601 with timezone offset, e.g. 2026-01-21T13:05:12+08:00
-    """
     dt = datetime.now().astimezone()
-    # Use seconds precision; keep offset
     return dt.replace(microsecond=0).isoformat()
 
 
 def _format_ts_for_display(ts: Optional[str]) -> str:
-    """
-    Convert ISO ts to a compact display like 13:05:12, or return placeholder.
-    """
     if not ts:
         return "--:--:--"
     try:
@@ -168,16 +159,10 @@ def _format_ts_for_display(ts: Optional[str]) -> str:
 
 
 def _ensure_last_two_have_ts(session: ChatSession) -> None:
-    """
-    After we append a turn, make sure the last two messages have ts.
-    Assumes session.messages structure like [{"role": "...", "content": "..."}].
-    """
     if not session.messages:
         return
-    # last message
     if isinstance(session.messages[-1], dict) and not session.messages[-1].get("ts"):
         session.messages[-1]["ts"] = _local_iso_ts()
-    # previous (if exists)
     if len(session.messages) >= 2:
         if isinstance(session.messages[-2], dict) and not session.messages[-2].get("ts"):
             session.messages[-2]["ts"] = _local_iso_ts()
@@ -247,6 +232,91 @@ def _normalize_model(m: str) -> str:
     return s if s else OpenAIModel.GPT_4O_MINI.value
 
 
+def _get_last_assistant_text(session: ChatSession) -> Optional[str]:
+    """
+    Find the latest assistant/ai message content from session.messages.
+    """
+    for m in reversed(session.messages or []):
+        if not isinstance(m, dict):
+            continue
+        role = (m.get("role") or "").strip()
+        if role in ("assistant", "ai"):
+            text = (m.get("content") or "")
+            return text if isinstance(text, str) else str(text)
+    return None
+
+
+def _copy_to_clipboard(text: str) -> Tuple[bool, str]:
+    """
+    Copy text to clipboard with best-effort cross-platform support.
+    Returns (ok, message).
+    """
+    if text is None:
+        return False, "没有可复制的内容。"
+
+    # 1) macOS: pbcopy
+    try:
+        if sys.platform == "darwin":
+            p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+            assert p.stdin is not None
+            p.stdin.write(text.encode("utf-8"))
+            p.stdin.close()
+            rc = p.wait()
+            return (rc == 0), ("已复制到剪贴板。" if rc == 0 else f"复制失败（pbcopy 返回码 {rc}）。")
+    except Exception as e:
+        # continue to fallback
+        _ = e
+
+    # 2) Windows: clip
+    try:
+        if sys.platform.startswith("win"):
+            p = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
+            assert p.stdin is not None
+            # clip expects UTF-16LE in many cases; utf-8 also often works but be safe.
+            p.stdin.write(text.encode("utf-16le"))
+            p.stdin.close()
+            rc = p.wait()
+            return (rc == 0), ("已复制到剪贴板。" if rc == 0 else f"复制失败（clip 返回码 {rc}）。")
+    except Exception as e:
+        _ = e
+
+    # 3) Linux / others: wl-copy (Wayland) then xclip (X11)
+    # Wayland: wl-copy
+    try:
+        p = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE)
+        assert p.stdin is not None
+        p.stdin.write(text.encode("utf-8"))
+        p.stdin.close()
+        rc = p.wait()
+        return (rc == 0), ("已复制到剪贴板。" if rc == 0 else f"复制失败（wl-copy 返回码 {rc}）。")
+    except Exception:
+        pass
+
+    # X11: xclip
+    try:
+        p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+        assert p.stdin is not None
+        p.stdin.write(text.encode("utf-8"))
+        p.stdin.close()
+        rc = p.wait()
+        return (rc == 0), ("已复制到剪贴板。" if rc == 0 else f"复制失败（xclip 返回码 {rc}）。")
+    except Exception:
+        pass
+
+    # 4) Optional fallback: pyperclip (if installed)
+    try:
+        import pyperclip  # type: ignore
+
+        pyperclip.copy(text)
+        return True, "已复制到剪贴板。（通过 pyperclip）"
+    except Exception:
+        return (
+            False,
+            "复制失败：未检测到可用剪贴板工具。\n"
+            "macOS 请确认 pbcopy 可用；Linux 建议安装 wl-clipboard 或 xclip；或安装 pyperclip。",
+        )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     console = _get_console()
 
@@ -266,7 +336,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     store_dir = _ensure_store_dir(Path(args.store_dir).expanduser())
     session_id = (args.session or "").strip() or _now_session_id()
 
-    # 初始化 chat client（内部会自动检测 OPENAI_API_KEY，不存在会提示配置方法）
     opt = ChatOptions(
         model=_normalize_model(args.model),
         temperature=args.temperature,
@@ -275,22 +344,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     chat = OpenAIChat(api_key=args.api_key, opt=opt)
 
-    # 初始化 session / meta
     meta: Dict[str, str] = {"session_id": session_id, "model": _normalize_model(args.model)}
     session = ChatSession(system_prompt=args.system)
 
-    # 启动加载
     if args.load:
         try:
             session, meta2 = _load_session(Path(args.load).expanduser())
             meta.update(meta2)
 
-            # session_id 优先：load 文件里的 meta.session_id > CLI --session > now
             loaded_sid = (meta.get("session_id") or "").strip()
             session_id = loaded_sid or session_id
             meta["session_id"] = session_id
 
-            # model 优先：load 文件里的 meta.model
             if meta.get("model"):
                 chat.opt = ChatOptions(
                     model=_normalize_model(meta["model"]),
@@ -316,8 +381,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         console.print("进入对话模式：/help 查看指令。", style="meta")
         console.print(f"session={meta['session_id']} model={chat.opt.model}", style="meta")
-        if not _RICH_AVAILABLE:
-            console.print("(提示：安装 rich 可获得更美观的界面)", style="meta")
 
     while True:
         try:
@@ -448,6 +511,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 _print_history(session, n=n, console=console)
                 continue
 
+            if cmd == "/copy":
+                last = _get_last_assistant_text(session)
+                ok, msg = _copy_to_clipboard(last or "")
+                if console is None:
+                    print(msg)
+                else:
+                    console.print(msg, style=("meta" if ok else "error"))
+                continue
+
             if console is None:
                 print("未知指令：/help 查看可用指令。")
             else:
@@ -455,18 +527,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
 
         # ---- normal chat ----
-        # NOTE: build_messages() likely appends user's message to session internally,
-        # or returns a messages list for API call. We'll still add ts to the session
-        # messages right after we append the turn.
-        #
-        # We also record a user ts right now (for saving/history purposes).
         user_ts = _local_iso_ts()
 
         msgs = session.build_messages(user_text)
-        # If build_messages() already appended the user message into session.messages,
-        # ensure it has ts. Otherwise, ts will be attached after append_turn below.
         if session.messages and isinstance(session.messages[-1], dict):
-            # If last is user role and missing ts, fill it.
             if session.messages[-1].get("role") == "user" and not session.messages[-1].get("ts"):
                 session.messages[-1]["ts"] = user_ts
 
@@ -482,22 +546,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 console.print(f"[错误] {e}", style="error")
             continue
 
-        # Append assistant turn and stamp timestamps
         session.append_turn(user_text, ans)
 
-        # Ensure ts exists on the last two messages (user + assistant).
-        # For assistant timestamp, use "now" after completion (closer to real receipt time).
         assistant_ts = _local_iso_ts()
         if session.messages and isinstance(session.messages[-1], dict):
             if session.messages[-1].get("role") in ("assistant", "ai") and not session.messages[-1].get("ts"):
                 session.messages[-1]["ts"] = assistant_ts
-        # user message might still be missing ts if build_messages didn't append; ensure both.
+
         _ensure_last_two_have_ts(session)
 
         _render_answer(console, ans, elapsed, assistant_ts)
-
-    # unreachable
-    # return 0
 
 
 if __name__ == "__main__":
