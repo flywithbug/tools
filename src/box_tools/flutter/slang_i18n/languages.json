@@ -1,0 +1,128 @@
+[
+  {
+    "code": "en",
+    "name_zh": "英语",
+    "asc_code": "en-US",
+    "displayName": "English",
+    "name_en": "English"
+  },
+  {
+    "code": "zh_Hant",
+    "name_zh": "中文（繁體）",
+    "asc_code": "zh-Hant",
+    "displayName": "中文（繁體）",
+    "name_en": "Traditional Chinese"
+  },
+  {
+    "code": "de",
+    "name_zh": "德语",
+    "asc_code": "de-DE",
+    "displayName": "Deutsch",
+    "name_en": "German"
+  },
+  {
+    "code": "es",
+    "name_zh": "西班牙语（西班牙）",
+    "asc_code": "es-ES",
+    "displayName": "Español (España)",
+    "name_en": "Spanish"
+  },
+  {
+    "code": "fil",
+    "name_zh": "菲律宾语",
+    "asc_code": "fil",
+    "displayName": "Filipino",
+    "name_en": "Filipino"
+  },
+  {
+    "code": "fr",
+    "name_zh": "法语",
+    "asc_code": "fr-FR",
+    "displayName": "Français",
+    "name_en": "French"
+  },
+  {
+    "code": "hi",
+    "name_zh": "印地语",
+    "asc_code": "hi",
+    "displayName": "हिन्दी",
+    "name_en": "Hindi"
+  },
+  {
+    "code": "id",
+    "name_zh": "印度尼西亚语",
+    "asc_code": "id",
+    "displayName": "Bahasa Indonesia",
+    "name_en": "Indonesian"
+  },
+  {
+    "code": "ja",
+    "name_zh": "日语",
+    "asc_code": "ja",
+    "displayName": "日本語",
+    "name_en": "Japanese"
+  },
+  {
+    "code": "kk",
+    "name_zh": "哈萨克语",
+    "displayName": "Қазақ тілі",
+    "asc_code": "kk",
+    "name_en": "Kazakh"
+  },
+  {
+    "code": "ko",
+    "name_zh": "韩语",
+    "asc_code": "ko",
+    "displayName": "한국어",
+    "name_en": "Korean"
+  },
+  {
+    "code": "pt",
+    "name_zh": "葡萄牙语",
+    "asc_code": "pt",
+    "displayName": "Português",
+    "name_en": "Portuguese"
+  },
+  {
+    "code": "ru",
+    "name_zh": "俄语",
+    "asc_code": "ru",
+    "displayName": "Русский",
+    "name_en": "Russian"
+  },
+  {
+    "code": "th",
+    "name_zh": "泰语",
+    "asc_code": "th",
+    "displayName": "ไทย",
+    "name_en": "Thai"
+  },
+  {
+    "code": "uk",
+    "name_zh": "乌克兰语",
+    "asc_code": "uk",
+    "displayName": "Українська",
+    "name_en": "Ukrainian"
+  },
+  {
+    "code": "vi",
+    "name_zh": "越南语",
+    "asc_code": "vi",
+    "displayName": "Tiếng Việt",
+    "name_en": "Vietnamese"
+  },
+  {
+    "code": "tr",
+    "name_zh": "土耳其语",
+    "asc_code": "tr",
+    "displayName": "Türkçe",
+    "name_en": "Turkish"
+  },
+  {
+    "code": "nl",
+    "name_zh": "荷兰语",
+    "asc_code": "nl-NL",
+    "displayName": "Nederlands",
+    "name_en": "Dutch"
+  }
+]

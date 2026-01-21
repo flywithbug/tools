@@ -18,6 +18,7 @@ META_KEYS: Set[str] = {"@@locale"}
 # Config Models
 # =========================
 
+
 @dataclass(frozen=True)
 class LocaleSpec:
     """Locale definition from config."""
@@ -34,6 +35,23 @@ class Options:
     normalize_filenames: bool = True
 
 
+
+@dataclass(frozen=True)
+class Prompts:
+    """
+    prompts schema（严格按示例格式）：
+    prompts:
+      default_en: |
+        ...
+      by_locale_en:
+        zh_Hant: |
+          ...
+        ja: |
+          ...
+    """
+    default_en: str = ""
+    by_locale_en: Dict[str, str] = field(default_factory=dict)
+
 @dataclass(frozen=True)
 class SlangI18nConfig:
     """Normalized config loaded from slang_i18n.yaml."""
@@ -42,7 +60,7 @@ class SlangI18nConfig:
     target_locales: Tuple[LocaleSpec, ...] = field(default_factory=tuple)
 
     openai_model: str = "gpt-4o"
-    prompt_by_locale: Dict[str, str] = field(default_factory=dict)
+    prompts: Prompts = field(default_factory=Prompts)
 
     options: Options = field(default_factory=Options)
 
