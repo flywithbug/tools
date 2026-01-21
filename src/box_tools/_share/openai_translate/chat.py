@@ -54,7 +54,7 @@ class OpenAIChat:
 def run_chat_cli(
         *,
         api_key: Optional[str] = None,
-        model: Union[OpenAIModel, str] = OpenAIModel.GPT_4O_MINI,
+        model: Union[OpenAIModel, str] = OpenAIModel.GPT_5_CHAT,
         system_prompt: str = "You are a helpful assistant.",
 ) -> int:
     chat = OpenAIChat(api_key=api_key, opt=ChatOptions(model=model))

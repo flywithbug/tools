@@ -106,7 +106,7 @@ def _normalize_model(m: str) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog=BOX_TOOL["name"], add_help=True)
-    parser.add_argument("--model", default=OpenAIModel.GPT_4O_MINI.value, help="模型名，如 gpt-4o-mini")
+    parser.add_argument("--model", default=OpenAIModel.GPT_5_CHAT.value, help="模型名，如 gpt-5-chat-latest")
     parser.add_argument("--system", default="You are a helpful assistant.", help="system prompt")
     parser.add_argument("--api-key", default=None, help="可选：显式传入 OpenAI API key（不传则读 OPENAI_API_KEY）")
     parser.add_argument("--temperature", type=float, default=0.2)
