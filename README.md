@@ -19,6 +19,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - [工具集文档索引](#section)
 - [box（工具集管理）](#box)
   - [`box`](#box-tool)
+- [flutter/pub_publish](#flutter-pub_publish)
+  - [`box_pub_publish`](#box_tools-flutter-pub_publish-tool)
 - [flutter/pub_upgrade](#flutter-pub_upgrade)
   - [`box_pub_upgrade`](#box_tools-flutter-pub_upgrade-tool)
 - [flutter/pub_version](#flutter-pub_version)
@@ -33,6 +35,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### box（工具集管理）
 
 - **[`box`](#box-tool)**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表（[README.md](src/box/README.md)）
+
+### flutter/pub_publish
+
+- **[`box_pub_publish`](#box_tools-flutter-pub_publish-tool)**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）（文档缺失：`src/box_tools/flutter/pub_publish/README.md`）
 
 ### flutter/pub_upgrade
 
@@ -51,6 +57,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### box（工具集管理）
 
 - **box**：[README.md](src/box/README.md)
+
+### flutter/pub_publish
+
+- **box_pub_publish**：未找到文档 `src/box_tools/flutter/pub_publish/README.md`（请创建该文件或在 BOX_TOOL['docs'] 指定）
 
 ### flutter/pub_upgrade
 
@@ -97,6 +107,50 @@ box tools --full
 **文档**
 
 [README.md](src/box/README.md)
+
+---
+
+<a id="flutter-pub_publish"></a>
+
+## flutter/pub_publish
+
+<a id="box_tools-flutter-pub_publish-tool"></a>
+
+### box_pub_publish
+
+**简介**：自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，提交并发布（支持 release 分支规则）
+
+**命令**：`box_pub_publish`
+
+**用法**
+
+```bash
+box_pub_publish --msg fix crash on iOS
+box_pub_publish --msg feat add new api --no-publish
+box_pub_publish --pubspec path/to/pubspec.yaml --changelog path/to/CHANGELOG.md --msg release notes
+box_pub_publish --msg hotfix --dry-run
+```
+
+**参数说明**
+
+- `--pubspec`：pubspec.yaml 路径（默认 ./pubspec.yaml）
+- `--changelog`：CHANGELOG.md 路径（默认 ./CHANGELOG.md）
+- `--msg`：更新说明（必填；可写多段，不需要引号）
+- `--no-pull`：跳过 git pull
+- `--no-git`：跳过 git add/commit/push（若不是 git 仓库也会自动跳过）
+- `--no-publish`：跳过 flutter pub publish
+- `--skip-pub-get`：跳过 flutter pub get
+- `--dry-run`：仅打印将执行的操作，不改文件、不跑命令
+
+**示例**
+
+- `box_pub_publish --msg fix null error`：拉代码→升级版本→更新 changelog→pub get→提交→发布
+- `box_pub_publish --msg release notes --no-publish`：只提交不发布
+- `box_pub_publish --msg try --dry-run`：预演一次，不做任何修改
+
+**文档**
+
+- 未找到文档：`src/box_tools/flutter/pub_publish/README.md`（请创建该文件）
 
 ---
 
