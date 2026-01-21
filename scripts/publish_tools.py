@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-发布检查/编排脚本（新项目版）
+发布检查/编排脚本（新项目版 + 内容检查 + 自动提交）
 
 功能：
 1) version patch 自增（可选）
@@ -12,12 +12,19 @@
 4) [tool.hatch.build.targets.wheel].packages 自动增减（按 src 下实际包）
 5) README.md 汇总自动增减（基于 BOX_TOOL 元数据）
 6) tests/ 单元测试骨架自动生成 + pyproject pytest 配置自动维护（可选）
+7) ✅ 内容检查（严格）：发现问题直接抛出
+8) ✅ 自动提交：检查通过且有变更时自动 git add/commit
 
 硬性约定（强校验）：
 - 工具入口文件必须命名为 tool.py
 - tool.py 必须包含 BOX_TOOL（可 ast.literal_eval 的 dict）
 - 除 tool.py 之外，任何 .py 文件不得包含 BOX_TOOL（否则判定为结构违规）
 - README 汇总的文档链接统一显示为 [README.md](path)（不显示冗长路径作为文本）
+
+内容检查（新增，严格模式）：
+- 任意工具的 docs 文件不存在 -> 报错退出
+- 任意工具 BOX_TOOL 缺少关键字段（id/name/category/summary）-> 报错退出
+- README.md / pyproject.toml 若声明要生成但没生成成功 -> 报错退出
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +73,100 @@ class Tool:
     entrypoint: str
 
     extra_meta: Dict[str, Any]
+
+
+# -------------------------
+# Git helpers (新增)
+# -------------------------
+
+def _has_cmd(cmd: str) -> bool:
+    from shutil import which
+    return which(cmd) is not None
+
+
+def is_git_repo(cwd: Path) -> bool:
+    if not _has_cmd("git"):
+        return False
+    try:
+        p = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return p.stdout.strip().lower() == "true"
+    except Exception:
+        return False
+
+
+def run_cmd(cmd: List[str], *, dry_run: bool = False) -> subprocess.CompletedProcess[str] | None:
+    if dry_run:
+        print("🧪 DRY-RUN:", " ".join(cmd))
+        return None
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise SystemExit(
+            "❌ 执行命令失败：{}\nexit code: {}\nstdout:\n{}\nstderr:\n{}\n".format(
+                " ".join(cmd), p.returncode, p.stdout, p.stderr
+            )
+        )
+    return p
+
+
+def git_changed_files(*, dry_run: bool = False) -> List[str]:
+    """
+    返回所有变更文件（含 staged/unstaged/untracked）。
+    """
+    if dry_run:
+        print("🧪 DRY-RUN: git status --porcelain")
+        return []
+
+    p = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+    lines = (p.stdout or "").splitlines()
+
+    changed: List[str] = []
+    for line in lines:
+        if len(line) < 4:
+            continue
+        path_part = line[3:].strip()
+        # rename: old -> new
+        if " -> " in path_part:
+            path_part = path_part.split(" -> ", 1)[1].strip()
+        if path_part.startswith('"') and path_part.endswith('"'):
+            path_part = path_part[1:-1]
+        changed.append(path_part)
+
+    # 去重保持稳定顺序
+    seen: Set[str] = set()
+    out: List[str] = []
+    for f in changed:
+        if f not in seen:
+            seen.add(f)
+            out.append(f)
+    return out
+
+
+def git_commit_changed_files(
+        *,
+        message: str,
+        dry_run: bool = False,
+) -> None:
+    files = git_changed_files(dry_run=dry_run)
+    if not files:
+        print("ℹ️ git 工作区无变更，无需提交")
+        return
+
+    print("📝 git add ...")
+    run_cmd(["git", "add", *files], dry_run=dry_run)
+
+    print("📝 git commit ...")
+    run_cmd(["git", "commit", "-m", message], dry_run=dry_run)
+
+    print(f"✅ 已自动提交：{message}")
+    print("   提交文件：")
+    for f in files:
+        print(f"   - {f}")
 
 
 # -------------------------
@@ -277,6 +379,51 @@ def collect_tools() -> List[Tool]:
 
     tools.sort(key=lambda t: (0, "") if _is_box_tool(t) else (1, t.sort_key[0].lower(), t.sort_key[1].lower()))
     return tools
+
+
+# -------------------------
+# 内容检查（新增，严格）
+# -------------------------
+
+def validate_tools_content_or_exit(tools: List[Tool]) -> None:
+    """
+    严格内容检查：
+    - docs 文件必须存在
+    - BOX_TOOL 必填字段必须非空（id/name/category/summary）
+    """
+    problems: List[str] = []
+
+    for t in tools:
+        if not t.id:
+            problems.append(f"[{t.rel_py}] BOX_TOOL.id 为空")
+        if not t.name:
+            problems.append(f"[{t.rel_py}] BOX_TOOL.name 为空")
+        if not t.category:
+            problems.append(f"[{t.rel_py}] BOX_TOOL.category 为空")
+        if not t.summary:
+            problems.append(f"[{t.rel_py}] BOX_TOOL.summary 为空")
+
+        if not t.md_path.exists():
+            problems.append(f"[{t.rel_py}] 文档缺失：{t.rel_md}（BOX_TOOL['docs'] 或默认 README.md）")
+
+    if problems:
+        print("❌ 内容检查失败：")
+        for p in problems:
+            print(f"  - {p}")
+        raise SystemExit(2)
+
+
+def validate_outputs_or_exit(*, gen_readme: bool, gen_toml: bool) -> None:
+    problems: List[str] = []
+    if gen_readme and not README_MD.exists():
+        problems.append("README.md 预期生成，但未找到 README.md")
+    if gen_toml and not PYPROJECT.exists():
+        problems.append("pyproject.toml 预期更新，但未找到 pyproject.toml")
+    if problems:
+        print("❌ 输出检查失败：")
+        for p in problems:
+            print(f"  - {p}")
+        raise SystemExit(2)
 
 
 # -------------------------
@@ -702,12 +849,12 @@ def ensure_project_dependencies_exact(text: str, desired_raw: List[str]) -> Tupl
             existing_by_base[base] = d
 
     desired_bases: List[str] = []
-    seen: Set[str] = set()
+    seen2: Set[str] = set()
     for raw in desired_raw:
         base = _dep_base(raw)
-        if not base or base in seen:
+        if not base or base in seen2:
             continue
-        seen.add(base)
+        seen2.add(base)
         desired_bases.append(base)
 
     final_deps: List[str] = []
@@ -941,6 +1088,13 @@ def main() -> None:
     ap.add_argument("--no-toml", action="store_true", help="不更新 pyproject.toml")
     ap.add_argument("--no-bump", action="store_true", help="不升级 version（仍会更新 scripts / wheel packages / dependencies）")
     ap.add_argument("--no-tests", action="store_true", help="不生成 tests/ 与 pytest 配置")
+
+    # ✅ 新增：检查/提交控制
+    ap.add_argument("--no-check", action="store_true", help="跳过内容检查（默认会严格检查）")
+    ap.add_argument("--no-git", action="store_true", help="不进行 git 自动提交")
+    ap.add_argument("--commit-msg", default="", help="自定义提交信息（默认自动生成）")
+    ap.add_argument("--dry-run", action="store_true", help="仅打印将执行的 git 命令（不实际提交）")
+
     args = ap.parse_args()
 
     if not TEMP_MD.exists():
@@ -948,18 +1102,27 @@ def main() -> None:
     if not SRC_DIR.exists():
         raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
 
+    # 1) 结构强校验（原本就有）
     validate_structure_or_exit()
 
+    # 2) 收集工具
     tools = collect_tools()
     if not tools:
         raise SystemExit("未找到任何包含 BOX_TOOL 的工具入口（tool.py）。")
 
+    # 3) 严格内容检查（新增）
+    if not args.no_check:
+        validate_tools_content_or_exit(tools)
+
+    # 4) 生成 README
     if not args.no_readme:
         header = TEMP_MD.read_text(encoding="utf-8", errors="ignore")
         readme = render_readme(header, tools)
         README_MD.write_text(readme, encoding="utf-8")
         print(f"[ok] README.md 已生成：{README_MD}")
 
+    # 5) 更新 pyproject / tests
+    new_version = ""
     if not args.no_toml:
         new_version, n_scripts, wheel_pkgs, final_deps, written_tests = update_pyproject(
             tools,
@@ -978,6 +1141,40 @@ def main() -> None:
                 print(f"[ok] tests 已生成：{rels}")
             else:
                 print("[ok] tests 已存在（未新增）")
+
+    # 6) 输出检查（新增）
+    if not args.no_check:
+        validate_outputs_or_exit(gen_readme=not args.no_readme, gen_toml=not args.no_toml)
+
+    # 7) 自动提交（新增）
+    if args.no_git:
+        print("ℹ️ 已跳过 git 自动提交（--no-git）")
+        print("Done.")
+        return
+
+    if not is_git_repo(REPO_ROOT):
+        print("ℹ️ 当前目录不是 git 仓库或未安装 git，跳过自动提交")
+        print("Done.")
+        return
+
+    if not args.no_check:
+        # ✅ 只有检查通过才允许提交
+        pass
+
+    default_msg = "chore: sync tools"
+    if new_version:
+        default_msg = f"chore: sync tools (version {new_version})"
+    commit_msg = (args.commit_msg or "").strip() or default_msg
+
+    # 有变更才提交
+    files = git_changed_files(dry_run=args.dry_run)
+    if not files:
+        print("ℹ️ 无文件变更，跳过提交")
+        print("Done.")
+        return
+
+    print("✅ 内容检查通过，准备自动提交...")
+    git_commit_changed_files(message=commit_msg, dry_run=args.dry_run)
 
     print("Done.")
 
