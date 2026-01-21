@@ -1,513 +1,986 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+发布检查/编排脚本（新项目版）
+
+功能：
+1) version patch 自增（可选）
+2) [project].dependencies 自动增减（基于工具显式依赖 + import 推断）
+3) [project.scripts] 自动增减：
+   - box 命令永远置顶
+   - 其他命令统一加 box_ 前缀
+4) [tool.hatch.build.targets.wheel].packages 自动增减（按 src 下实际包）
+5) README.md 汇总自动增减（基于 BOX_TOOL 元数据）
+6) tests/ 单元测试骨架自动生成 + pyproject pytest 配置自动维护（可选）
+
+硬性约定（强校验）：
+- 工具入口文件必须命名为 tool.py
+- tool.py 必须包含 BOX_TOOL（可 ast.literal_eval 的 dict）
+- 除 tool.py 之外，任何 .py 文件不得包含 BOX_TOOL（否则判定为结构违规）
+- README 汇总的文档链接统一显示为 [README.md](path)（不显示冗长路径作为文本）
+"""
+
 from __future__ import annotations
 
 import argparse
-import datetime as _dt
+import ast
 import re
-import shutil
-import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 
-BOX_TOOL = {
-    "id": "flutter.box_pub_publish",
-    "name": "box_pub_publish",
-    "category": "flutter",
-    "summary": "自动升级 pubspec.yaml 版本号，更新 CHANGELOG.md，执行 flutter pub get，发布前检查（可交互处理 warning），提交并发布（支持 release 分支规则）",
-    "usage": [
-        "box_pub_publish --msg fix crash on iOS",
-        "box_pub_publish --msg feat add new api --no-publish",
-        "box_pub_publish --pubspec path/to/pubspec.yaml --changelog path/to/CHANGELOG.md --msg release notes",
-        "box_pub_publish --msg hotfix --dry-run",
-        "box_pub_publish --msg release notes --yes-warnings",
-    ],
-    "options": [
-        {"flag": "--pubspec", "desc": "pubspec.yaml 路径（默认 ./pubspec.yaml）"},
-        {"flag": "--changelog", "desc": "CHANGELOG.md 路径（默认 ./CHANGELOG.md）"},
-        {"flag": "--msg", "desc": "更新说明（必填；可写多段，不需要引号）"},
-        {"flag": "--no-pull", "desc": "跳过 git pull"},
-        {"flag": "--no-git", "desc": "跳过 git add/commit/push（若不是 git 仓库也会自动跳过）"},
-        {"flag": "--no-publish", "desc": "跳过 flutter pub publish"},
-        {"flag": "--skip-pub-get", "desc": "跳过 flutter pub get"},
-        {"flag": "--skip-checks", "desc": "跳过发布前检查（flutter analyze + git 变更白名单）"},
-        {"flag": "--yes-warnings", "desc": "发布检查出现 warning 时仍继续提交并发布（非交互/CI 推荐）"},
-        {"flag": "--dry-run", "desc": "仅打印将执行的操作，不改文件、不跑命令"},
-    ],
-    "docs": "README.md",
-}
+REPO_ROOT = Path.cwd()
+SRC_DIR = REPO_ROOT / "src"
+TEMP_MD = REPO_ROOT / "temp.md"
+README_MD = REPO_ROOT / "README.md"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
+TESTS_DIR = REPO_ROOT / "tests"
 
 
-class CmdError(RuntimeError):
-    pass
+# -------------------------
+# Data models
+# -------------------------
+
+@dataclass(frozen=True)
+class Tool:
+    py_path: Path
+    md_path: Path
+    rel_py: str
+    rel_md: str
+
+    dir_key: str
+    sort_key: Tuple[str, str]
+
+    id: str
+    name: str
+    category: str
+    summary: str
+    usage: List[str]
+    options: List[Dict[str, str]]
+    examples: List[Dict[str, str]]
+
+    module: str
+    entrypoint: str
+
+    extra_meta: Dict[str, Any]
 
 
-def which(cmd: str) -> str | None:
-    return shutil.which(cmd)
+# -------------------------
+# File discovery & BOX_TOOL extraction
+# -------------------------
+
+def iter_tool_entry_files() -> List[Path]:
+    """只扫描入口文件 tool.py（避免误扫 core.py/utils.py）。"""
+    if not SRC_DIR.exists():
+        raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
+    return sorted([p for p in SRC_DIR.rglob("tool.py") if p.is_file()], key=lambda p: p.as_posix().lower())
 
 
-def is_git_repo(cwd: Path) -> bool:
-    if not which("git"):
-        return False
-    try:
-        p = subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return p.stdout.strip().lower() == "true"
-    except Exception:
-        return False
+def iter_all_py_files() -> List[Path]:
+    if not SRC_DIR.exists():
+        raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
+    return sorted([p for p in SRC_DIR.rglob("*.py") if p.is_file()], key=lambda p: p.as_posix().lower())
 
 
-def run_command(
-        cmd: list[str],
-        *,
-        dry_run: bool = False,
-        cwd: Path | None = None,
-        fail_on_warning: bool = False,
-        warning_regex: str | re.Pattern[str] | None = None,
-) -> subprocess.CompletedProcess[str] | None:
-    """运行外部命令；失败则抛异常（携带 stdout/stderr）。
-
-    - fail_on_warning: 若为 True，命令即使退出码为 0，只要输出里匹配到 warning 也视为失败。
+def extract_box_tool_literal(py_file: Path) -> Optional[Dict[str, Any]]:
     """
-    if dry_run:
-        print("🧪 DRY-RUN:", " ".join(cmd))
+    抽取形如 BOX_TOOL = {...} 的 dict 字面量（不 import，避免副作用）。
+    要求 BOX_TOOL 能被 ast.literal_eval 解析。
+    """
+    try:
+        src = py_file.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(src)
+    except Exception:
         return None
 
-    warn_pat: re.Pattern[str] | None = None
-    if fail_on_warning:
-        if warning_regex is None:
-            warn_pat = re.compile(r"(?im)^\s*warning\s*[:\-]")
-        elif isinstance(warning_regex, str):
-            warn_pat = re.compile(warning_regex)
-        else:
-            warn_pat = warning_regex
-
-    p = subprocess.run(cmd, capture_output=True, text=True, cwd=str(cwd) if cwd else None)
-    combined = (p.stdout or "") + "\n" + (p.stderr or "")
-
-    if p.returncode != 0:
-        msg = (
-            f"执行命令失败: {' '.join(cmd)}\n"
-            f"exit code: {p.returncode}\n"
-            f"stdout:\n{p.stdout}\n"
-            f"stderr:\n{p.stderr}\n"
-        )
-        raise CmdError(msg)
-
-    if warn_pat and warn_pat.search(combined):
-        msg = (
-            f"命令输出包含 warning，已按失败处理: {' '.join(cmd)}\n"
-            f"stdout:\n{p.stdout}\n"
-            f"stderr:\n{p.stderr}\n"
-        )
-        raise CmdError(msg)
-
-    return p
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "BOX_TOOL":
+                    try:
+                        v = ast.literal_eval(node.value)
+                    except Exception:
+                        return None
+                    return v if isinstance(v, dict) else None
+    return None
 
 
-def get_current_branch(*, dry_run: bool = False) -> str:
-    if dry_run:
-        return "(dry-run)"
-    p = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return p.stdout.strip()
-
-
-def git_pull(*, dry_run: bool = False) -> None:
-    print("🔄 git pull ...")
-    run_command(["git", "pull"], dry_run=dry_run)
-    print("✅ 代码已更新")
-
-
-def parse_semver(version: str):
-    """支持 x.y.z 或 x.y.z+build（build 原样保留）。"""
-    m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\+(.+))?$", version.strip())
-    if not m:
-        raise ValueError("version 格式应为 x.y.z 或 x.y.z+build")
-    major, minor, patch = map(int, m.group(1, 2, 3))
-    build = m.group(4)
-    return major, minor, patch, build
-
-
-def format_semver(major: int, minor: int, patch: int, build: str | None) -> str:
-    base = f"{major}.{minor}.{patch}"
-    return f"{base}+{build}" if build else base
-
-
-def compare_versions(a: str, b: str) -> int:
-    """比较两个 x.y.z（忽略 build），返回 -1/0/1。"""
-    am, an, ap, _ = parse_semver(a)
-    bm, bn, bp, _ = parse_semver(b)
-    if (am, an, ap) < (bm, bn, bp):
-        return -1
-    if (am, an, ap) > (bm, bn, bp):
-        return 1
-    return 0
-
-
-def update_version(current_version: str, branch_version: str | None) -> str:
-    """版本升级策略：
-
-    - release-<x.y.z> 分支：
-      - 若当前 < 分支版本：直接提升到分支版本（保留 build）
-      - 若当前 >= 分支版本：patch + 1（保留 build）
-
-    - 非 release 分支：patch + 1（保留 build）
+def validate_structure_or_exit() -> None:
     """
-    major, minor, patch, build = parse_semver(current_version)
+    强校验：
+    1) 任何非 tool.py 的文件如果包含 BOX_TOOL -> 报错退出
+    2) 任何 tool.py 如果不包含 BOX_TOOL -> 报错退出
+    """
+    entry_files = set(iter_tool_entry_files())
+    offenders_has_box_tool: List[Path] = []
+    offenders_missing_box_tool: List[Path] = []
 
-    if branch_version:
-        cur_base = format_semver(major, minor, patch, None)
-        cmp = compare_versions(cur_base, branch_version)
-        if cmp < 0:
-            bm, bn, bp, _ = parse_semver(branch_version)
-            return format_semver(bm, bn, bp, build)
-        return format_semver(major, minor, patch + 1, build)
+    for py in iter_all_py_files():
+        meta = extract_box_tool_literal(py)
+        if py.name == "tool.py":
+            if meta is None:
+                offenders_missing_box_tool.append(py)
+        else:
+            if meta is not None:
+                offenders_has_box_tool.append(py)
 
-    return format_semver(major, minor, patch + 1, build)
+    if offenders_has_box_tool or offenders_missing_box_tool:
+        print("❌ 工具结构校验失败：")
+        if offenders_has_box_tool:
+            print("\n[发现 BOX_TOOL 但文件名不是 tool.py]（请重命名为 tool.py 或移除 BOX_TOOL）")
+            for p in offenders_has_box_tool:
+                print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
+        if offenders_missing_box_tool:
+            print("\n[文件名是 tool.py 但没有 BOX_TOOL]（请补充 BOX_TOOL 元数据）")
+            for p in offenders_missing_box_tool:
+                print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
+        raise SystemExit(2)
+
+    if not entry_files:
+        print("❌ 未找到任何 tool.py（至少应该有 src/box/tool.py）。")
+        raise SystemExit(2)
 
 
-def extract_project_name(pubspec_path: Path) -> str:
-    content = pubspec_path.read_text(encoding="utf-8")
-    m = re.search(r"^\s*name\s*:\s*['\"]?([\w\-\.]+)['\"]?\s*$", content, flags=re.MULTILINE)
-    return m.group(1) if m else "unknown"
+def module_from_py_path(py_file: Path) -> str:
+    rel = py_file.relative_to(SRC_DIR).with_suffix("")
+    return ".".join(rel.parts)
 
 
-def update_pubspec_preserve_format(pubspec_path: Path, *, dry_run: bool = False) -> tuple[str, str]:
-    content = pubspec_path.read_text(encoding="utf-8")
+def norm_str(v: Any) -> str:
+    return str(v).strip() if v is not None else ""
 
-    pattern = (
-        r"^(?!\s*#)"
-        r"(?P<prefix>\s*version\s*:\s*)"
-        r"(?P<quote>['\"]?)"
-        r"(?P<version>\d+\.\d+\.\d+(?:\+[^\s'\"]+)?)"
-        r"(?P=quote)"
-        r"\s*$"
+
+def norm_list_str(v: Any) -> List[str]:
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple)):
+        out = []
+        for x in v:
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        return out
+    s = str(v).strip()
+    return [s] if s else []
+
+
+def norm_list_dict(v: Any) -> List[Dict[str, str]]:
+    if v is None:
+        return []
+    if not isinstance(v, (list, tuple)):
+        return []
+    out: List[Dict[str, str]] = []
+    for item in v:
+        if isinstance(item, dict):
+            out.append({str(k): str(val) for k, val in item.items()})
+    return out
+
+
+def dir_key_from_py(py_file: Path) -> str:
+    rel = py_file.relative_to(SRC_DIR)
+    parent = rel.parent.as_posix()
+    return parent if parent else "."
+
+
+def make_group_title(dir_key: str) -> str:
+    if dir_key == "box":
+        return "box（工具集管理）"
+    parts = dir_key.split("/")
+    if parts and parts[0] == "box_tools":
+        rest = parts[1:]
+        return "/".join(rest) if rest else "box_tools"
+    return dir_key
+
+
+def _resolve_docs_md(py_file: Path, meta: Dict[str, Any]) -> Path:
+    """
+    文档路径规则：
+    - 优先 BOX_TOOL["docs"]
+      - 若为绝对路径：直接用
+      - 若为相对路径：按“工具目录”相对（README.md）
+    - 否则同目录 README.md
+    """
+    docs = meta.get("docs")
+    if isinstance(docs, str) and docs.strip():
+        raw = docs.strip()
+        p = Path(raw)
+        if p.is_absolute():
+            return p
+        return py_file.parent / raw
+    return py_file.parent / "README.md"
+
+
+def _rel_to_repo(p: Path) -> str:
+    return p.relative_to(REPO_ROOT).as_posix()
+
+
+def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
+    name = norm_str(meta.get("name") or meta.get("cmd") or "")
+    if not name:
+        return None
+
+    tool_id = norm_str(meta.get("id"))
+    category = norm_str(meta.get("category") or "")
+    summary = norm_str(meta.get("summary") or meta.get("desc") or meta.get("description") or "")
+
+    usage = norm_list_str(meta.get("usage"))
+    options = norm_list_dict(meta.get("options"))
+    examples = norm_list_dict(meta.get("examples"))
+
+    md_file = _resolve_docs_md(py_file, meta)
+
+    rel_py = py_file.relative_to(REPO_ROOT).as_posix()
+    rel_md = _rel_to_repo(md_file)
+
+    dir_key = dir_key_from_py(py_file)
+    stem = py_file.stem
+    module = module_from_py_path(py_file)
+    entrypoint = f"{module}:main"
+
+    return Tool(
+        py_path=py_file,
+        md_path=md_file,
+        rel_py=rel_py,
+        rel_md=rel_md,
+        dir_key=dir_key,
+        sort_key=(dir_key, stem),
+        id=tool_id,
+        name=name,
+        category=category,
+        summary=summary,
+        usage=usage,
+        options=options,
+        examples=examples,
+        module=module,
+        entrypoint=entrypoint,
+        extra_meta=meta,
     )
-    m = re.search(pattern, content, flags=re.MULTILINE)
-    if not m:
-        raise ValueError("未在 pubspec.yaml 中找到 version 字段")
-
-    current_version = m.group("version")
-
-    current_branch = get_current_branch(dry_run=dry_run)
-    branch_version: str | None = None
-    br = re.match(r"^release-(\d+\.\d+\.\d+)$", current_branch)
-    if br:
-        branch_version = br.group(1)
-
-    new_version = update_version(current_version, branch_version)
-
-    replacement = f"{m.group('prefix')}{m.group('quote')}{new_version}{m.group('quote')}"
-    new_content = re.sub(pattern, replacement, content, count=1, flags=re.MULTILINE)
-
-    print(f"🔼 版本号: {current_version} -> {new_version}")
-
-    if dry_run:
-        print(f"🧪 DRY-RUN: 将写入 {pubspec_path}")
-        return new_version, current_version
-
-    pubspec_path.write_text(new_content, encoding="utf-8")
-    print(f"✅ 已更新: {pubspec_path}")
-    return new_version, current_version
 
 
-def update_changelog(changelog_path: Path, new_version: str, msg: str, *, dry_run: bool = False) -> None:
-    now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-    header = f"## {new_version}\n\n- {now}\n- {msg}\n\n"
-
-    if dry_run:
-        print(f"🧪 DRY-RUN: 将更新 {changelog_path}（在文件头插入新版本区块）")
-        return
-
-    if not changelog_path.exists():
-        changelog_path.write_text(header, encoding="utf-8")
-    else:
-        old = changelog_path.read_text(encoding="utf-8")
-        changelog_path.write_text(header + old, encoding="utf-8")
-
-    print(f"✅ CHANGELOG.md 已更新: {changelog_path}（版本 {new_version}）")
-
-
-def _git_porcelain_changed_paths(*, dry_run: bool = False) -> list[str]:
-    if dry_run:
-        print("🧪 DRY-RUN: git status --porcelain")
-        return []
-    p = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
-    out = (p.stdout or "").splitlines()
-
-    paths: list[str] = []
-    for line in out:
-        if len(line) < 4:
-            continue
-        path_part = line[3:].strip()
-        if " -> " in path_part:
-            path_part = path_part.split(" -> ", 1)[1].strip()
-        if path_part.startswith('"') and path_part.endswith('"'):
-            path_part = path_part[1:-1]
-        paths.append(path_part)
-    return paths
-
-
-def git_status_only_allowed_changes(
-        *,
-        allowed_patterns: list[re.Pattern[str]],
-        dry_run: bool = False,
-) -> tuple[bool, list[str]]:
-    changed = _git_porcelain_changed_paths(dry_run=dry_run)
-
-    not_allowed: list[str] = []
-    for p in changed:
-        if any(pat.search(p) for pat in allowed_patterns):
-            continue
-        not_allowed.append(p)
-
-    return (len(not_allowed) == 0), not_allowed
-
-
-def extract_warning_lines(text: str) -> list[str]:
-    lines: list[str] = []
-    for line in (text or "").splitlines():
-        if re.search(r"(?i)\bwarning\b", line):
-            lines.append(line.rstrip())
-    return lines
-
-
-def confirm_continue_on_warnings(warnings: list[str], *, yes_warnings: bool) -> bool:
-    if not warnings:
+def _is_box_tool(t: Tool) -> bool:
+    if t.name.strip().lower() == "box":
         return True
-
-    print("\n⚠️ 发布检查发现 warning：")
-    max_show = 50
-    for i, w in enumerate(warnings[:max_show], 1):
-        print(f"  {i}. {w}")
-    if len(warnings) > max_show:
-        print(f"  ...（共 {len(warnings)} 条 warning，仅展示前 {max_show} 条）")
-
-    if yes_warnings:
-        print("ℹ️ 已指定 --yes-warnings：遇到 warning 仍继续提交并发布")
-        return True
-
-    if not sys.stdin.isatty():
-        print("❌ 当前为非交互环境，且未指定 --yes-warnings，已中止提交与发布。")
-        print("   如需继续，请加 --yes-warnings")
-        return False
-
-    ans = input("\n是否继续【提交 + 发布】？[y/N] ").strip().lower()
-    return ans in ("y", "yes")
+    return t.module == "box.tool" or t.module.startswith("box.")
 
 
-def flutter_pub_get(*, dry_run: bool = False) -> None:
-    print("🧩 flutter pub get ...")
-    run_command(["flutter", "pub", "get"], dry_run=dry_run)
-    print("✅ flutter pub get 完成")
+def collect_tools() -> List[Tool]:
+    tools: List[Tool] = []
+    for py in iter_tool_entry_files():
+        meta = extract_box_tool_literal(py)
+        if not meta:
+            continue
+        t = build_tool(py, meta)
+        if t:
+            tools.append(t)
+
+    tools.sort(key=lambda t: (0, "") if _is_box_tool(t) else (1, t.sort_key[0].lower(), t.sort_key[1].lower()))
+    return tools
 
 
-def flutter_analyze(*, dry_run: bool = False) -> list[str]:
-    print("🔎 flutter analyze ...")
-    p = run_command(["flutter", "analyze"], dry_run=dry_run)
-    if dry_run or p is None:
-        print("✅ flutter analyze（dry-run）")
-        return []
-    combined = (p.stdout or "") + "\n" + (p.stderr or "")
-    warnings = extract_warning_lines(combined)
-    if warnings:
-        print("⚠️ flutter analyze 有 warning")
-    else:
-        print("✅ flutter analyze 通过（无 warning）")
-    return warnings
+# -------------------------
+# README rendering
+# -------------------------
+
+def _slugify_anchor(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9_\-\/]+", "-", s)
+    s = s.replace("/", "-")
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s or "section"
 
 
-def pre_publish_checks(
-        *,
-        dry_run: bool = False,
-        yes_warnings: bool = False,
-) -> bool:
-    """发布前检查：不跑 flutter test；检查 analyze + git 变更白名单（适配 monorepo）。"""
-    print("🧰 发布前检查 ...")
+def tool_anchor_id(t: Tool) -> str:
+    return _slugify_anchor(f"{t.dir_key}-{t.py_path.stem}")
 
-    if is_git_repo(Path.cwd()):
-        # ✅ monorepo：允许任意 package 的 pubspec.yaml / CHANGELOG.md / pubspec.lock 变化
-        allowed_patterns = [
-            re.compile(r"(^|/)\bpubspec\.yaml$"),
-            re.compile(r"(^|/)\bCHANGELOG\.md$"),
-            re.compile(r"(^|/)\bpubspec\.lock$"),
-        ]
 
-        ok, not_allowed = git_status_only_allowed_changes(
-            allowed_patterns=allowed_patterns,
-            dry_run=dry_run,
+def section_anchor_id(title: str) -> str:
+    return _slugify_anchor(title)
+
+
+def render_readme_toc(tools: List[Tool]) -> str:
+    groups: Dict[str, List[Tool]] = {}
+    for t in tools:
+        groups.setdefault(t.dir_key, []).append(t)
+
+    group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
+
+    out: List[str] = []
+    out.append("## 目录\n\n")
+    out.append(f"- [工具总览](#{section_anchor_id('工具总览')})\n")
+    out.append(f"- [工具集文档索引](#{section_anchor_id('工具集文档索引')})\n")
+
+    for gk in group_keys:
+        title = make_group_title(gk)
+        out.append(f"- [{title}](#{section_anchor_id(title)})\n")
+        for t in sorted(groups[gk], key=lambda x: (0, "") if _is_box_tool(x) else (1, x.py_path.stem.lower())):
+            a = tool_anchor_id(t)
+            out.append(f"  - [`{t.name}`](#{a})\n")
+
+    out.append("\n---\n\n")
+    return "".join(out)
+
+
+def render_overview(tools: List[Tool]) -> str:
+    groups: Dict[str, List[Tool]] = {}
+    for t in tools:
+        groups.setdefault(t.dir_key, []).append(t)
+
+    group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
+
+    out: List[str] = []
+    out.append(f'<a id="{section_anchor_id("工具总览")}"></a>\n\n')
+    out.append("## 工具总览\n\n")
+
+    for gk in group_keys:
+        title = make_group_title(gk)
+        out.append(f"### {title}\n\n")
+
+        group_tools_sorted = sorted(
+            groups[gk],
+            key=lambda t: (0, "") if _is_box_tool(t) else (1, t.py_path.stem.lower())
         )
-        if not ok:
-            raise CmdError(
-                "发布前检查失败：git 工作区存在非预期变更（不在允许列表内）：\n"
-                + "\n".join(f"- {p}" for p in not_allowed)
-                + "\n\n已允许：\n"
-                + "- 任意目录下的 pubspec.yaml\n"
-                + "- 任意目录下的 CHANGELOG.md\n"
-                + "- 任意目录下的 pubspec.lock\n"
-                + "\n请先提交/暂存/清理这些文件后再发布。"
-            )
-        print("✅ git 变更检查通过（monorepo：允许 pubspec/changelog/lock）")
+        for t in group_tools_sorted:
+            a = tool_anchor_id(t)
+            s = t.summary or ""
+            if t.md_path.exists():
+                doc_part = f"（[README.md]({t.rel_md})）"
+            else:
+                doc_part = f"（文档缺失：`{t.rel_md}`）"
+
+            if s:
+                out.append(f"- **[`{t.name}`](#{a})**：{s}{doc_part}\n")
+            else:
+                out.append(f"- **[`{t.name}`](#{a})**{doc_part}\n")
+        out.append("\n")
+
+    out.append("---\n\n")
+    return "".join(out)
+
+
+def render_docs_index(tools: List[Tool]) -> str:
+    groups: Dict[str, List[Tool]] = {}
+    for t in tools:
+        groups.setdefault(t.dir_key, []).append(t)
+
+    group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
+
+    out: List[str] = []
+    out.append(f'<a id="{section_anchor_id("工具集文档索引")}"></a>\n\n')
+    out.append("## 工具集文档索引\n\n")
+
+    for gk in group_keys:
+        title = make_group_title(gk)
+        out.append(f"### {title}\n\n")
+
+        for t in sorted(groups[gk], key=lambda x: (0, "") if _is_box_tool(x) else (1, x.py_path.stem.lower())):
+            if t.md_path.exists():
+                out.append(f"- **{t.name}**：[README.md]({t.rel_md})\n")
+            else:
+                out.append(f"- **{t.name}**：未找到文档 `{t.rel_md}`（请创建该文件或在 BOX_TOOL['docs'] 指定）\n")
+
+        out.append("\n")
+
+    out.append("---\n\n")
+    return "".join(out)
+
+
+def render_tool_detail(t: Tool) -> str:
+    out: List[str] = []
+    anchor = tool_anchor_id(t)
+    out.append(f'<a id="{anchor}"></a>\n\n')
+
+    if _is_box_tool(t):
+        out.append("## box（工具集管理）\n\n")
     else:
-        print("ℹ️ 当前目录不是 git 仓库，跳过 git 变更检查")
+        out.append(f"### {t.name}\n\n")
 
-    warnings = flutter_analyze(dry_run=dry_run)
+    if t.summary:
+        out.append(f"**简介**：{t.summary}\n\n")
 
-    ok2 = confirm_continue_on_warnings(warnings, yes_warnings=yes_warnings)
-    if ok2:
-        print("✅ 发布前检查通过（选择继续）")
+    out.append(f"**命令**：`{t.name}`\n\n")
+
+    if t.usage:
+        out.append("**用法**\n\n```bash\n")
+        out.extend([u + "\n" for u in t.usage])
+        out.append("```\n\n")
+
+    if t.options:
+        out.append("**参数说明**\n\n")
+        for opt in t.options:
+            flag = norm_str(opt.get("flag") or opt.get("name") or "")
+            desc = norm_str(opt.get("desc") or opt.get("description") or "")
+            if flag and desc:
+                out.append(f"- `{flag}`：{desc}\n")
+            elif flag:
+                out.append(f"- `{flag}`\n")
+            elif desc:
+                out.append(f"- {desc}\n")
+        out.append("\n")
+
+    if t.examples:
+        out.append("**示例**\n\n")
+        for ex in t.examples:
+            cmd = norm_str(ex.get("cmd") or ex.get("command") or "")
+            desc = norm_str(ex.get("desc") or ex.get("description") or "")
+            if cmd and desc:
+                out.append(f"- `{cmd}`：{desc}\n")
+            elif cmd:
+                out.append(f"- `{cmd}`\n")
+            elif desc:
+                out.append(f"- {desc}\n")
+        out.append("\n")
+
+    out.append("**文档**\n\n")
+    if t.md_path.exists():
+        out.append(f"[README.md]({t.rel_md})\n\n")
     else:
-        print("⛔ 已选择中止：不会执行 git commit/push，也不会 publish")
-    return ok2
+        out.append(f"- 未找到文档：`{t.rel_md}`（请创建该文件）\n\n")
+
+    out.append("---\n\n")
+    return "".join(out)
 
 
-def _discover_files_to_commit(repo_root: Path) -> list[Path]:
-    """monorepo：提交所有 pubspec.yaml / CHANGELOG.md / pubspec.lock 的变更文件（只收集存在的文件）。"""
-    targets: list[Path] = []
+def render_readme(temp_header: str, tools: List[Tool]) -> str:
+    out: List[str] = []
+    out.append(temp_header.rstrip() + "\n\n")
+    out.append(render_readme_toc(tools))
+    out.append(render_overview(tools))
+    out.append(render_docs_index(tools))
 
-    for name in ("pubspec.yaml", "CHANGELOG.md", "pubspec.lock"):
-        for p in repo_root.rglob(name):
-            if p.is_file():
-                targets.append(p)
+    box_tools = [t for t in tools if _is_box_tool(t)]
+    other_tools = [t for t in tools if t not in box_tools]
 
-    # 去重 + 稳定排序
-    uniq: dict[str, Path] = {}
-    for p in targets:
-        uniq[p.as_posix()] = p
-    return [uniq[k] for k in sorted(uniq.keys())]
+    for t in box_tools:
+        out.append(render_tool_detail(t))
 
+    groups: Dict[str, List[Tool]] = {}
+    for t in other_tools:
+        groups.setdefault(t.dir_key, []).append(t)
 
-def git_commit(
-        project_name: str,
-        new_version: str,
-        *,
-        dry_run: bool = False,
-) -> None:
-    msg = f"build: {project_name} + {new_version}"
+    group_keys = sorted(groups.keys(), key=lambda k: (1, k.lower()))
+    for gk in group_keys:
+        title = make_group_title(gk)
+        out.append(f'<a id="{section_anchor_id(title)}"></a>\n\n')
+        out.append(f"## {title}\n\n")
+        for t in sorted(groups[gk], key=lambda x: x.py_path.stem.lower()):
+            out.append(render_tool_detail(t))
 
-    repo_root = Path.cwd()
-    files = _discover_files_to_commit(repo_root)
-
-    # 只 add 这些“允许变更”的文件；如果某些包没有这些文件，不影响
-    paths = [p.as_posix() for p in files]
-
-    print("📝 git add ...")
-    run_command(["git", "add", *paths], dry_run=dry_run)
-
-    print("📝 git commit ...")
-    run_command(["git", "commit", "-m", msg], dry_run=dry_run)
-
-    print("🚀 git push ...")
-    run_command(["git", "push"], dry_run=dry_run)
-
-    print(f"✅ 已提交并推送: {msg}")
+    return "".join(out)
 
 
-def flutter_pub_publish(*, dry_run: bool = False) -> None:
-    print("📦 flutter pub publish --force ...")
-    run_command(
-        ["flutter", "pub", "publish", "--force"],
-        dry_run=dry_run,
-        fail_on_warning=True,
-    )
-    print("✅ 发布完成")
+# -------------------------
+# pyproject.toml patch helpers
+# -------------------------
+
+_VERSION_LINE_RE = re.compile(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$')
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="box_pub_publish",
-        description="自动升级 pubspec.yaml 版本号、更新 CHANGELOG、提交并发布 Flutter 包（monorepo 友好）",
-    )
-    p.add_argument("--pubspec", default="pubspec.yaml", help="pubspec.yaml 路径（默认 ./pubspec.yaml）")
-    p.add_argument("--changelog", default="CHANGELOG.md", help="CHANGELOG.md 路径（默认 ./CHANGELOG.md）")
-    p.add_argument("--msg", nargs="+",default="version", required=False,
-                   help="更新说明内容（不需要引号，可多段）")
-
-    p.add_argument("--no-pull", action="store_true", help="跳过 git pull")
-    p.add_argument("--no-git", action="store_true", help="跳过 git add/commit/push")
-    p.add_argument("--no-publish", action="store_true", help="跳过 flutter pub publish")
-    p.add_argument("--skip-pub-get", action="store_true", help="跳过 flutter pub get")
-    p.add_argument("--skip-checks", action="store_true", help="跳过发布前检查（flutter analyze + git 白名单）")
-    p.add_argument("--yes-warnings", action="store_true", help="发布检查出现 warning 时仍继续提交并发布（非交互/CI 推荐）")
-    p.add_argument("--dry-run", action="store_true", help="预演：不改文件、不执行外部命令")
-    return p
+def bump_patch_version(text: str) -> Tuple[str, str]:
+    m = _VERSION_LINE_RE.search(text)
+    if not m:
+        raise SystemExit('pyproject.toml 未找到 version = "x.y.z" 行，无法升级版本号。')
+    major, minor, patch = map(int, m.groups())
+    new_version = f"{major}.{minor}.{patch + 1}"
+    new_text = _VERSION_LINE_RE.sub(f'version = "{new_version}"', text, count=1)
+    return new_text, new_version
 
 
-def main(argv: list[str] | None = None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
-    args = build_parser().parse_args(argv)
+def replace_table_block(text: str, header: str, body_lines: List[str]) -> str:
+    """
+    替换一个 table 块：从 [header] 开始到下一个 [..] 或 EOF。
+    """
+    pattern = re.compile(rf"(?ms)^\[{re.escape(header)}\]\s*\n.*?(?=^\[|\Z)")
+    new_block = f"[{header}]\n" + "\n".join(body_lines).rstrip() + "\n\n"
 
-    pubspec_path = Path(args.pubspec)
-    changelog_path = Path(args.changelog)
-    msg_text = " ".join(args.msg).strip()
+    m = pattern.search(text)
+    if m:
+        return text[:m.start()] + new_block + text[m.end():]
+    return text.rstrip() + "\n\n" + new_block
 
-    if not msg_text:
-        print("❌ --msg 不能为空")
-        return 2
 
+def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
+    table_pat = re.compile(r"(?ms)^\[tool\.hatch\.build\.targets\.wheel\]\s*\n.*?(?=^\[|\Z)")
+    m = table_pat.search(text)
+
+    quoted = ", ".join([f'"{p}"' for p in packages])
+    new_line = f"packages = [{quoted}]"
+
+    if not m:
+        block = "[tool.hatch.build.targets.wheel]\n" + new_line + "\n\n"
+        return text.rstrip() + "\n\n" + block
+
+    block = text[m.start():m.end()]
+    if re.search(r"(?m)^packages\s*=\s*\[.*\]\s*$", block):
+        block2 = re.sub(r"(?m)^packages\s*=\s*\[.*\]\s*$", new_line, block, count=1)
+    else:
+        block2 = block.rstrip() + "\n" + new_line + "\n"
+
+    if not block2.endswith("\n\n"):
+        block2 = block2.rstrip() + "\n\n"
+
+    return text[:m.start()] + block2 + text[m.end():]
+
+
+# -------------------------
+# dependencies: collect + exact patch (增减)
+# -------------------------
+
+_STDLIB_NAMES: Set[str] = set(getattr(sys, "stdlib_module_names", set()))
+_STDLIB_FALLBACK = {
+    "argparse", "ast", "datetime", "os", "re", "subprocess", "pathlib",
+    "typing", "dataclasses", "json", "time", "sys", "textwrap", "shlex",
+    "collections", "itertools", "functools", "logging", "math", "random",
+    "traceback", "inspect", "types", "enum", "copy", "hashlib", "base64",
+    "threading", "multiprocessing", "signal", "tempfile", "contextlib",
+}
+_STDLIB_NAMES |= _STDLIB_FALLBACK
+
+_IMPORT_TO_PIP = {
+    "yaml": "PyYAML",
+    "openai": "openai",
+    "requests": "requests",
+    "toml": "toml",
+    "tomli": "tomli",
+    "rich": "rich",
+}
+
+_DEFAULT_DEP_SPECS = {
+    "openai": "openai>=1.0.0",
+    "PyYAML": "PyYAML>=6.0",
+}
+
+_DEP_BASE_RE = re.compile(r"^\s*([A-Za-z0-9_.\-]+)")
+
+
+def _dep_base(dep: str) -> str:
+    m = _DEP_BASE_RE.match(dep.strip())
+    return m.group(1) if m else dep.strip()
+
+
+def _top_import_name(mod: str) -> str:
+    return (mod or "").split(".", 1)[0].strip()
+
+
+def _norm_dep_list(v: Any) -> List[str]:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        s = v.strip()
+        return [s] if s else []
+    if isinstance(v, (list, tuple)):
+        out: List[str] = []
+        for x in v:
+            if x is None:
+                continue
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        return out
+    return []
+
+
+def infer_deps_from_imports(py_file: Path) -> List[str]:
     try:
-        # 若不是 git 仓库，自动降级：跳过 pull + git 操作
-        git_ok = (not args.no_git) and is_git_repo(Path.cwd()) and (not args.dry_run)
-        if not git_ok and not args.no_git:
-            print("ℹ️ 当前目录不是 git 仓库或未安装 git，已自动跳过 git 操作（等同 --no-git）")
+        src = py_file.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(src)
+    except Exception:
+        return []
 
-        if git_ok and (not args.no_pull):
-            git_pull(dry_run=args.dry_run)
+    imports: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = _top_import_name(alias.name)
+                if name:
+                    imports.add(name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.level > 0:
+                continue
+            name = _top_import_name(node.module or "")
+            if name:
+                imports.add(name)
 
-        if not pubspec_path.exists():
-            print(f"❌ pubspec.yaml 不存在: {pubspec_path}")
-            return 2
+    project_top_pkgs: Set[str] = set()
+    if SRC_DIR.exists():
+        for p in SRC_DIR.iterdir():
+            if p.is_dir() and (p / "__init__.py").exists():
+                project_top_pkgs.add(p.name)
 
-        project_name = extract_project_name(pubspec_path)
+    out: List[str] = []
+    seen: Set[str] = set()
+    for name in sorted(imports):
+        if name in _STDLIB_NAMES:
+            continue
+        if name in project_top_pkgs:
+            continue
+        pip_name = _IMPORT_TO_PIP.get(name, name)
+        if pip_name not in seen:
+            out.append(pip_name)
+            seen.add(pip_name)
+    return out
 
-        new_version, old_version = update_pubspec_preserve_format(pubspec_path, dry_run=args.dry_run)
-        update_changelog(changelog_path, new_version, msg_text, dry_run=args.dry_run)
 
-        if not args.skip_pub_get:
-            flutter_pub_get(dry_run=args.dry_run)
+def collect_tool_dependencies(tools: List[Tool]) -> List[str]:
+    merged: List[str] = []
+    seen: Set[str] = set()
 
-        # ✅ 发布前检查放在提交/发布之前
-        should_continue = True
-        if (not args.no_publish) and (not args.skip_checks):
-            should_continue = pre_publish_checks(dry_run=args.dry_run, yes_warnings=args.yes_warnings)
-        elif not args.no_publish:
-            print("ℹ️ 已跳过发布前检查（--skip-checks）")
+    for t in tools:
+        meta = t.extra_meta or {}
+        raw = (meta.get("dependencies") or meta.get("depends") or meta.get("deps") or meta.get("requires"))
+        explicit = _norm_dep_list(raw)
+        inferred = infer_deps_from_imports(t.py_path)
 
-        if not should_continue:
-            print(f"✅ 已结束：{project_name} {old_version} → {new_version}（已更新文件，但未提交/未发布）")
-            return 0
+        for dep in explicit + inferred:
+            if dep not in seen:
+                merged.append(dep)
+                seen.add(dep)
 
-        # 提交（如果允许）
-        if git_ok:
-            git_commit(project_name, new_version, dry_run=args.dry_run)
+    return merged
+
+
+def _read_project_block(text: str) -> Optional[str]:
+    project_pat = re.compile(r"(?ms)^\[project\]\s*\n.*?(?=^\[|\Z)")
+    m = project_pat.search(text)
+    if not m:
+        return None
+    return text[m.start():m.end()]
+
+
+def _replace_project_block(text: str, new_block: str) -> str:
+    project_pat = re.compile(r"(?ms)^\[project\]\s*\n.*?(?=^\[|\Z)")
+    m = project_pat.search(text)
+    if not m:
+        return text.rstrip() + "\n\n" + new_block.rstrip() + "\n\n"
+    return text[:m.start()] + new_block.rstrip() + "\n\n" + text[m.end():]
+
+
+def _parse_single_line_dependencies(project_block: str) -> List[str]:
+    dep_pat = re.compile(r'(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$')
+    m = dep_pat.search(project_block)
+    if not m:
+        return []
+    body = m.group("body")
+    return [s.strip() for s in re.findall(r"""["']([^"']+)["']""", body) if s.strip()]
+
+
+def _write_single_line_dependencies(project_block: str, deps: List[str]) -> str:
+    dep_pat = re.compile(r'(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$')
+    deps_line = "dependencies = [" + ", ".join([f'"{d}"' for d in deps]) + "]"
+    if dep_pat.search(project_block):
+        block2 = dep_pat.sub(deps_line, project_block, count=1)
+    else:
+        block2 = project_block.rstrip() + "\n" + deps_line + "\n"
+    if not block2.endswith("\n\n"):
+        block2 = block2.rstrip() + "\n\n"
+    return block2
+
+
+def ensure_project_dependencies_exact(text: str, desired_raw: List[str]) -> Tuple[str, List[str]]:
+    project_block = _read_project_block(text)
+    if project_block is None:
+        deps_bases = []
+        seen = set()
+        final_deps: List[str] = []
+        for raw in desired_raw:
+            base = _dep_base(raw)
+            if base in seen:
+                continue
+            seen.add(base)
+            deps_bases.append(base)
+        for base in deps_bases:
+            final_deps.append(_DEFAULT_DEP_SPECS.get(base, base))
+        new_block = "[project]\n" + _write_single_line_dependencies("", final_deps).lstrip()
+        return _replace_project_block(text, new_block), final_deps
+
+    existing = _parse_single_line_dependencies(project_block)
+    existing_by_base: Dict[str, str] = {}
+    for d in existing:
+        base = _dep_base(d)
+        if base not in existing_by_base:
+            existing_by_base[base] = d
+
+    desired_bases: List[str] = []
+    seen: Set[str] = set()
+    for raw in desired_raw:
+        base = _dep_base(raw)
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        desired_bases.append(base)
+
+    final_deps: List[str] = []
+    for base in desired_bases:
+        if base in existing_by_base:
+            final_deps.append(existing_by_base[base])
         else:
-            print("ℹ️ 已跳过 git 操作（--no-git 或自动降级）")
+            final_deps.append(_DEFAULT_DEP_SPECS.get(base, base))
 
-        # 发布
-        if not args.no_publish:
-            flutter_pub_publish(dry_run=args.dry_run)
+    block2 = _write_single_line_dependencies(project_block, final_deps)
+    return _replace_project_block(text, block2), final_deps
+
+
+# -------------------------
+# scripts: 自动增减 + box 置顶 + box_ 前缀
+# -------------------------
+
+def _command_with_prefix(name: str) -> str:
+    n = (name or "").strip()
+    if not n:
+        return n
+    if n.lower() == "box":
+        return "box"
+    if n.startswith("box_"):
+        return n
+    return f"box_{n}"
+
+
+def build_scripts(tools: List[Tool]) -> List[Tuple[str, str]]:
+    items: List[Tuple[str, str]] = []
+    for t in tools:
+        cmd = _command_with_prefix(t.name)
+        items.append((cmd, t.entrypoint))
+
+    items.sort(key=lambda kv: (0, "") if kv[0] == "box" else (1, kv[0].lower()))
+    return items
+
+
+def update_project_scripts(text: str, scripts: List[Tuple[str, str]]) -> str:
+    lines = [f'{cmd} = "{ep}"' for cmd, ep in scripts]
+    return replace_table_block(text, "project.scripts", lines)
+
+
+# -------------------------
+# wheel packages
+# -------------------------
+
+def collect_src_packages() -> List[str]:
+    if not SRC_DIR.exists():
+        return []
+    pkgs: List[str] = []
+    for p in SRC_DIR.iterdir():
+        if p.is_dir() and (p / "__init__.py").exists():
+            pkgs.append(f"src/{p.name}")
+    pkgs = sorted(pkgs, key=lambda s: (0, "") if s.lower() == "src/box" else (1, s.lower()))
+    return pkgs
+
+
+# -------------------------
+# tests generation + pytest config
+# -------------------------
+
+def _snake(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s or "tool"
+
+
+def ensure_tests_skeleton(tools: List[Tool]) -> List[Path]:
+    TESTS_DIR.mkdir(parents=True, exist_ok=True)
+    written: List[Path] = []
+
+    conftest = TESTS_DIR / "conftest.py"
+    if not conftest.exists():
+        conftest.write_text(
+            "import sys\n"
+            "from pathlib import Path\n\n"
+            "import pytest\n\n\n"
+            "REPO_ROOT = Path(__file__).resolve().parents[1]\n"
+            "SRC_DIR = REPO_ROOT / 'src'\n"
+            "if SRC_DIR.exists():\n"
+            "    sys.path.insert(0, str(SRC_DIR))\n\n\n"
+            "@pytest.fixture\n"
+            "def chdir_tmp(tmp_path, monkeypatch):\n"
+            "    \"\"\"切到临时目录执行（避免污染仓库）。\"\"\"\n"
+            "    monkeypatch.chdir(tmp_path)\n"
+            "    return tmp_path\n",
+            encoding="utf-8",
+        )
+        written.append(conftest)
+
+    known_templates: Dict[str, str] = {
+        "box_pub_version": (
+            "from pathlib import Path\n\n"
+            "from box_tools.flutter.pub_version import tool as tool\n\n\n"
+            "def test_patch_bump_no_git(chdir_tmp):\n"
+            "    pubspec = Path('pubspec.yaml')\n"
+            "    pubspec.write_text('name: demo\\nversion: 1.2.3+abc\\n', encoding='utf-8')\n"
+            "    rc = tool.main(['patch', '--no-git', '--file', str(pubspec)])\n"
+            "    assert rc == 0\n"
+            "    assert 'version: 1.2.4+abc' in pubspec.read_text(encoding='utf-8')\n"
+        ),
+        "box_pub_upgrade": (
+            "from box_tools.flutter.pub_upgrade import tool as tool\n\n\n"
+            "def test_smoke_import_only():\n"
+            "    assert hasattr(tool, 'main')\n"
+        ),
+    }
+
+    for t in tools:
+        cmd = _command_with_prefix(t.name)
+        if cmd == "box":
+            continue
+
+        fname = f"test_{_snake(cmd)}.py"
+        test_file = TESTS_DIR / fname
+        if test_file.exists():
+            continue
+
+        if cmd in known_templates:
+            content = known_templates[cmd]
         else:
-            print("ℹ️ 已跳过发布（--no-publish）")
+            content = (
+                "import importlib\n\n\n"
+                "def test_smoke_import():\n"
+                f"    mod = importlib.import_module('{t.module}')\n"
+                "    assert hasattr(mod, 'main')\n"
+            )
 
-        print(f"✅ 完成：{project_name} {old_version} → {new_version}")
-        return 0
+        test_file.write_text(content, encoding="utf-8")
+        written.append(test_file)
 
-    except (CmdError, ValueError) as e:
-        print(f"❌ {e}")
-        return 1
-    except KeyboardInterrupt:
-        print("\n⚠️ 已取消")
-        return 130
+    return written
+
+
+def ensure_pytest_config(text: str) -> str:
+    pytest_lines = [
+        'testpaths = ["tests"]',
+        'addopts = "-q"',
+    ]
+    return replace_table_block(text, "tool.pytest.ini_options", pytest_lines)
+
+
+def ensure_dev_pytest_dependency(text: str) -> str:
+    """
+    维护：
+    [project.optional-dependencies]
+    dev = ["pytest>=8.0.0", ...]
+    仅做字符串级增补（避免引入 TOML parser 依赖）。
+    """
+    block_pat = re.compile(r"(?ms)^\[project\.optional-dependencies\]\s*\n.*?(?=^\[|\Z)")
+    m = block_pat.search(text)
+
+    pytest_spec = "pytest>=8.0.0"
+
+    if not m:
+        block = (
+            "[project.optional-dependencies]\n"
+            f'dev = ["{pytest_spec}"]\n\n'
+        )
+        return text.rstrip() + "\n\n" + block
+
+    block = text[m.start():m.end()]
+
+    dev_line_pat = re.compile(r'(?m)^\s*dev\s*=\s*\[(?P<body>.*)\]\s*$')
+    dm = dev_line_pat.search(block)
+
+    if not dm:
+        block2 = block.rstrip() + f'\ndev = ["{pytest_spec}"]\n\n'
+        return text[:m.start()] + block2 + text[m.end():]
+
+    body = dm.group("body")
+    items = [s.strip() for s in re.findall(r"""["']([^"']+)["']""", body)]
+    bases = {_dep_base(x) for x in items}
+    if _dep_base(pytest_spec) in bases:
+        return text
+
+    items.append(pytest_spec)
+    new_body = ", ".join([f'"{x}"' for x in items])
+    block2 = dev_line_pat.sub(f"dev = [{new_body}]", block, count=1)
+
+    if not block2.endswith("\n\n"):
+        block2 = block2.rstrip() + "\n\n"
+
+    return text[:m.start()] + block2 + text[m.end():]
+
+
+# -------------------------
+# update pyproject
+# -------------------------
+
+def update_pyproject(tools: List[Tool], do_bump: bool, ensure_tests: bool) -> Tuple[str, int, List[str], List[str], List[Path]]:
+    if not PYPROJECT.exists():
+        raise SystemExit("未找到 pyproject.toml，请在仓库根目录执行。")
+
+    original = PYPROJECT.read_text(encoding="utf-8", errors="ignore")
+    text = original
+    new_version = ""
+
+    if do_bump:
+        text, new_version = bump_patch_version(text)
+
+    scripts = build_scripts(tools)
+    text = update_project_scripts(text, scripts)
+
+    wheel_pkgs = collect_src_packages()
+    text = replace_wheel_packages_line(text, wheel_pkgs)
+
+    deps_desired = collect_tool_dependencies(tools)
+    text, final_deps = ensure_project_dependencies_exact(text, deps_desired)
+
+    written_tests: List[Path] = []
+    if ensure_tests:
+        written_tests = ensure_tests_skeleton(tools)
+        text = ensure_dev_pytest_dependency(text)
+        text = ensure_pytest_config(text)
+
+    if text != original:
+        PYPROJECT.write_text(text, encoding="utf-8")
+
+    return new_version, len(scripts), wheel_pkgs, final_deps, written_tests
+
+
+# -------------------------
+# main
+# -------------------------
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--no-readme", action="store_true", help="不生成 README.md")
+    ap.add_argument("--no-toml", action="store_true", help="不更新 pyproject.toml")
+    ap.add_argument("--no-bump", action="store_true", help="不升级 version（仍会更新 scripts / wheel packages / dependencies）")
+    ap.add_argument("--no-tests", action="store_true", help="不生成 tests/ 与 pytest 配置")
+    args = ap.parse_args()
+
+    if not TEMP_MD.exists():
+        raise SystemExit("未找到 temp.md（需要放在仓库根目录作为 README 文件头）。")
+    if not SRC_DIR.exists():
+        raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
+
+    validate_structure_or_exit()
+
+    tools = collect_tools()
+    if not tools:
+        raise SystemExit("未找到任何包含 BOX_TOOL 的工具入口（tool.py）。")
+
+    if not args.no_readme:
+        header = TEMP_MD.read_text(encoding="utf-8", errors="ignore")
+        readme = render_readme(header, tools)
+        README_MD.write_text(readme, encoding="utf-8")
+        print(f"[ok] README.md 已生成：{README_MD}")
+
+    if not args.no_toml:
+        new_version, n_scripts, wheel_pkgs, final_deps, written_tests = update_pyproject(
+            tools,
+            do_bump=not args.no_bump,
+            ensure_tests=not args.no_tests,
+        )
+        if new_version:
+            print(f"[ok] pyproject.toml version -> {new_version}")
+        print(f"[ok] [project.scripts] -> {n_scripts} 项（box 置顶，其余自动加 box_ 前缀）")
+        print(f"[ok] wheel packages -> {wheel_pkgs}")
+        print(f"[ok] project.dependencies -> {final_deps}")
+
+        if not args.no_tests:
+            if written_tests:
+                rels = [p.relative_to(REPO_ROOT).as_posix() for p in written_tests]
+                print(f"[ok] tests 已生成：{rels}")
+            else:
+                print("[ok] tests 已存在（未新增）")
+
+    print("Done.")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
