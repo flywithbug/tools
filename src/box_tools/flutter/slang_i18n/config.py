@@ -1,232 +1,435 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Dict, List, Optional, Tuple
 
-from box_tools._share.openai_translate.models import OpenAIModel
-from .model import Locale, Options, Prompts, ProjectConfig
+import yaml
 
-CONFIG_FILE = "slang_i18n.yaml"
-
-ALLOWED_OPENAI_MODELS = (
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-4.1",
-    "gpt-4.1-mini",
+from .models import (
+    LocaleSpec,
+    Options,
+    SlangI18nConfig,
+    Issue,
+    IssueCode,
+    IssueLevel,
+    Report,
+    META_KEYS,
 )
 
 
-def _require_yaml():
+# =========================
+# Errors
+# =========================
+
+class ConfigError(RuntimeError):
+    pass
+
+
+# =========================
+# Helpers
+# =========================
+
+def _p(path: str | Path) -> Path:
+    return path if isinstance(path, Path) else Path(path)
+
+
+def _as_str(x: object, default: str = "") -> str:
+    if x is None:
+        return default
+    s = str(x).strip()
+    return s if s else default
+
+
+def _dedupe_keep_order(items: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for x in items:
+        if x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return out
+
+
+def _normalize_locale_code(code: str) -> str:
+    # 你当前 languages.json 里用的是 zh_Hant 这种风格，这里先“原样保留”
+    # 后续如果要强制 normalize（比如 zh-Hant -> zh_Hant），在这里扩展即可
+    return _as_str(code)
+
+
+# =========================
+# languages.json
+# =========================
+
+@dataclass(frozen=True)
+class LanguageRow:
+    code: str
+    name_en: str = ""
+    display_name: str = ""
+
+
+def load_languages_json(
+        *,
+        root_dir: Path,
+        filename: str = "languages.json",
+) -> Tuple[LanguageRow, ...]:
+    """
+    读取当前目录的 languages.json，作为语言真理源。
+    期望格式：list[ {code, name_en?, displayName? ...} ]  (见你提供的示例)。
+    """
+    path = root_dir / filename
+    if not path.exists():
+        raise ConfigError(f"未找到 {filename}：{path}")
+
     try:
-        import yaml  # type: ignore
-        return yaml
-    except Exception:
-        raise SystemExit(
-            "❌ 缺少依赖 PyYAML（import yaml 失败）\n"
-            "修复方式：\n"
-            "1) pipx 安装：pipx inject box pyyaml\n"
-            "2) 或在 pyproject.toml dependencies 加入 PyYAML>=6.0 后重新发布/安装\n"
-        )
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise ConfigError(f"{filename} 解析失败：{e}")
+
+    if not isinstance(data, list):
+        raise ConfigError(f"{filename} 格式错误：顶层必须是数组 list")
+
+    rows: List[LanguageRow] = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise ConfigError(f"{filename} 格式错误：第 {i} 项不是 object")
+        code = _normalize_locale_code(_as_str(item.get("code")))
+        if not code:
+            raise ConfigError(f"{filename} 格式错误：第 {i} 项缺少 code")
+        name_en = _as_str(item.get("name_en"), "")
+        display_name = _as_str(item.get("displayName"), "")
+        rows.append(LanguageRow(code=code, name_en=name_en, display_name=display_name))
+
+    return tuple(rows)
 
 
-def _schema_error(msg: str) -> ValueError:
-    return ValueError(
-        "slang_i18n.yaml 格式错误：\n"
-        f"- {msg}\n\n"
-        "期望结构（新 schema）示例：\n"
-        "openAIModel: gpt-4o\n"
-        "source_locale:\n"
-        "  code: en\n"
-        "  name_en: English\n"
-        "target_locales:\n"
-        "  - code: zh_Hant\n"
-        "    name_en: Traditional Chinese\n"
-        "prompts:\n"
-        "  default_en: |\n"
-        "    Translate UI strings naturally.\n"
-        "  by_locale_en:\n"
-        "    zh_Hant: |\n"
-        "      Use Taiwan Traditional Chinese UI style.\n"
-        "options:\n"
-        "  sort_keys: true\n"
-        "  cleanup_extra_keys: true\n"
-        "  incremental_translate: true\n"
-        "  normalize_filenames: true\n"
-    )
+def derive_locales_from_languages_json(
+        *,
+        languages: Tuple[LanguageRow, ...],
+        source_locale: str = "en",
+) -> Tuple[LocaleSpec, Tuple[LocaleSpec, ...]]:
+    """
+    规则：
+    - source_locale 默认 en
+    - target_locales = languages.json 中除 source 之外的其他语言
+    - 生成后再次检查：target 不得包含 source（去重）
+    """
+    src = _normalize_locale_code(source_locale) or "en"
+
+    # 取 name_en：优先 name_en，其次 displayName，其次空
+    def _name(row: LanguageRow) -> str:
+        return row.name_en or row.display_name or ""
+
+    # 构造 locale map（按 languages.json 顺序）
+    codes = [_normalize_locale_code(r.code) for r in languages if _normalize_locale_code(r.code)]
+    codes = _dedupe_keep_order(codes)
+
+    src_spec = None
+    for r in languages:
+        if _normalize_locale_code(r.code) == src:
+            src_spec = LocaleSpec(code=src, name_en=_name(r) or "English")
+            break
+    if src_spec is None:
+        # languages.json 里没 en 也没关系：仍然固定 source=en
+        src_spec = LocaleSpec(code=src, name_en="English")
+
+    targets: List[LocaleSpec] = []
+    for r in languages:
+        c = _normalize_locale_code(r.code)
+        if not c or c == src:
+            continue
+        targets.append(LocaleSpec(code=c, name_en=_name(r)))
+
+    # 再保险：如果 targets 中仍有 src（异常数据），剔除
+    targets = [t for t in targets if t.code != src]
+
+    # 再去重（按出现顺序）
+    seen = set()
+    dedup_targets: List[LocaleSpec] = []
+    for t in targets:
+        if t.code in seen:
+            continue
+        seen.add(t.code)
+        dedup_targets.append(t)
+
+    return src_spec, tuple(dedup_targets)
 
 
-def _need_nonempty_str(obj: Dict[str, Any], key: str, path: str) -> str:
-    v = obj.get(key)
-    if not isinstance(v, str) or not v.strip():
-        raise _schema_error(f"{path}.{key} 必须是非空字符串")
-    return v.strip()
+# =========================
+# YAML load / validate
+# =========================
+
+def default_config_path(root_dir: Path) -> Path:
+    return root_dir / "slang_i18n.yaml"
 
 
-def _need_bool(obj: Dict[str, Any], key: str, path: str) -> bool:
-    v = obj.get(key)
-    if not isinstance(v, bool):
-        raise _schema_error(f"{path}.{key} 必须是 bool（true/false）")
-    return v
+def load_config_yaml(path: Path) -> Dict[str, object]:
+    if not path.exists():
+        raise ConfigError(f"配置文件不存在：{path}")
+    try:
+        obj = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise ConfigError(f"YAML 解析失败：{e}")
+    if not isinstance(obj, dict):
+        raise ConfigError("配置文件格式错误：顶层必须是 mapping/object")
+    return obj
 
 
-def _need_openai_model(cfg: Dict[str, Any]) -> str:
-    v = cfg.get("openAIModel", OpenAIModel.GPT_4O.value)
-    if v is None:
-        v = OpenAIModel.GPT_4O.value
-    if not isinstance(v, str) or not v.strip():
-        raise _schema_error("openAIModel 必须是非空字符串")
-    v = v.strip()
-    if v not in set(ALLOWED_OPENAI_MODELS):
-        raise _schema_error(f"openAIModel 不合法：{v!r}，可选：{', '.join(ALLOWED_OPENAI_MODELS)}")
-    return v
+def parse_config_dict(
+        *,
+        root_dir: Path,
+        raw: Dict[str, object],
+) -> SlangI18nConfig:
+    """
+    将 YAML dict 解析为强类型 Config（做基础校验，不做目录扫描）。
+    """
+    i18n_dir = _as_str(raw.get("i18nDir"), "i18n")
+    i18n_path = (root_dir / i18n_dir).resolve()
 
-
-def validate_config(raw: Any) -> ProjectConfig:
-    if not isinstance(raw, dict):
-        raise _schema_error("根节点必须是 YAML object/map")
-
-    openai_model = _need_openai_model(raw)
-
-    src_raw = raw.get("source_locale")
+    src_raw = raw.get("source_locale") or {}
     if not isinstance(src_raw, dict):
-        raise _schema_error("source_locale 必须是 object/map（包含 code / name_en）")
-    src = Locale(
-        code=_need_nonempty_str(src_raw, "code", "source_locale"),
-        name_en=_need_nonempty_str(src_raw, "name_en", "source_locale"),
-    )
+        raise ConfigError("source_locale 必须是 object")
+    src_code = _normalize_locale_code(_as_str(src_raw.get("code"), "en")) or "en"
+    src_name_en = _as_str(src_raw.get("name_en"), "English")
+    source_locale = LocaleSpec(code=src_code, name_en=src_name_en)
 
-    targets_raw = raw.get("target_locales")
-    if not isinstance(targets_raw, list) or not targets_raw:
-        raise _schema_error("target_locales 必须是非空数组（每项为 {code, name_en}）")
+    tgt_raw = raw.get("target_locales") or []
+    if not isinstance(tgt_raw, list):
+        raise ConfigError("target_locales 必须是数组 list")
+    targets: List[LocaleSpec] = []
+    for i, item in enumerate(tgt_raw):
+        if not isinstance(item, dict):
+            raise ConfigError(f"target_locales[{i}] 必须是 object")
+        code = _normalize_locale_code(_as_str(item.get("code")))
+        if not code:
+            raise ConfigError(f"target_locales[{i}] 缺少 code")
+        name_en = _as_str(item.get("name_en"), "")
+        targets.append(LocaleSpec(code=code, name_en=name_en))
 
-    seen: set[str] = set()
-    targets: List[Locale] = []
-    for i, it in enumerate(targets_raw):
-        if not isinstance(it, dict):
-            raise _schema_error(f"target_locales[{i}] 必须是 object/map（包含 code / name_en）")
-        code = _need_nonempty_str(it, "code", f"target_locales[{i}]")
-        name_en = _need_nonempty_str(it, "name_en", f"target_locales[{i}]")
-        if code == src.code:
-            raise _schema_error(f"target_locales[{i}].code 不应等于 source_locale.code（{src.code}）")
-        if code in seen:
-            raise _schema_error(f"target_locales[{i}].code 重复：{code}")
-        seen.add(code)
-        targets.append(Locale(code=code, name_en=name_en))
+    # 去掉 target 中与 source 重复的 code（你明确要求）
+    targets = [t for t in targets if t.code != source_locale.code]
 
-    prompts_raw = raw.get("prompts") or {}
-    if not isinstance(prompts_raw, dict):
-        raise _schema_error("prompts 必须是 object/map（可省略）")
-    default_en = prompts_raw.get("default_en") or ""
-    if not isinstance(default_en, str):
-        raise _schema_error("prompts.default_en 必须是字符串（可为空）")
-    by_locale_raw = prompts_raw.get("by_locale_en") or {}
-    if not isinstance(by_locale_raw, dict):
-        raise _schema_error("prompts.by_locale_en 必须是 object/map（可省略）")
-    by_locale: Dict[str, str] = {}
-    for k, v in by_locale_raw.items():
-        if not isinstance(k, str) or not k.strip():
-            raise _schema_error("prompts.by_locale_en 的 key 必须是非空字符串（locale code）")
-        if not isinstance(v, str):
-            raise _schema_error(f"prompts.by_locale_en[{k!r}] 必须是字符串")
-        by_locale[k.strip()] = v
-    prompts = Prompts(default_en=default_en, by_locale_en=by_locale)
+    # 目标去重
+    seen = set()
+    dedup_targets: List[LocaleSpec] = []
+    for t in targets:
+        if t.code in seen:
+            continue
+        seen.add(t.code)
+        dedup_targets.append(t)
 
-    opts_raw = raw.get("options")
-    if not isinstance(opts_raw, dict):
-        raise _schema_error("options 必须是 object/map")
-    normalize_filenames = opts_raw.get("normalize_filenames", True)
-    if not isinstance(normalize_filenames, bool):
-        raise _schema_error("options.normalize_filenames 必须是 bool（true/false）")
+    model_name = _as_str(raw.get("openAIModel"), "gpt-4o")
+
+    prompt_by_locale: Dict[str, str] = {}
+    pbl_raw = raw.get("prompt_by_locale") or {}
+    if pbl_raw is not None:
+        if not isinstance(pbl_raw, dict):
+            raise ConfigError("prompt_by_locale 必须是 object")
+        for k, v in pbl_raw.items():
+            prompt_by_locale[_normalize_locale_code(_as_str(k))] = _as_str(v)
+
+    opt_raw = raw.get("options") or {}
+    if not isinstance(opt_raw, dict):
+        raise ConfigError("options 必须是 object")
 
     options = Options(
-        sort_keys=_need_bool(opts_raw, "sort_keys", "options"),
-        cleanup_extra_keys=_need_bool(opts_raw, "cleanup_extra_keys", "options"),
-        incremental_translate=_need_bool(opts_raw, "incremental_translate", "options"),
-        normalize_filenames=normalize_filenames,
+        sort_keys=bool(opt_raw.get("sort_keys", True)),
+        incremental_translate=bool(opt_raw.get("incremental_translate", True)),
+        cleanup_extra_keys=bool(opt_raw.get("cleanup_extra_keys", True)),
+        normalize_filenames=bool(opt_raw.get("normalize_filenames", True)),
     )
 
-    return ProjectConfig(
-        openai_model=openai_model,
-        source_locale=src,
-        target_locales=targets,
-        prompts=prompts,
+    return SlangI18nConfig(
+        i18n_dir=i18n_path,
+        source_locale=source_locale,
+        target_locales=tuple(dedup_targets),
+        openai_model=model_name,
+        prompt_by_locale=prompt_by_locale,
         options=options,
     )
 
 
-def read_config(path: Path) -> ProjectConfig:
-    yaml = _require_yaml()
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return validate_config(raw)
+def validate_config(cfg: SlangI18nConfig) -> Report:
+    """
+    结构校验（不触及文件命名推断、不读 JSON）。
+    """
+    issues: List[Issue] = []
+
+    if not cfg.i18n_dir:
+        issues.append(Issue(IssueLevel.ERROR, IssueCode.CONFIG_INVALID, "i18nDir 不能为空"))
+    # i18nDir 不一定必须存在（init 可以创建），但 doctor 会更严格
+    if not cfg.source_locale.code:
+        issues.append(Issue(IssueLevel.ERROR, IssueCode.CONFIG_INVALID, "source_locale.code 不能为空"))
+
+    # 检查重复 locale（source + targets）
+    all_codes = [cfg.source_locale.code] + [t.code for t in cfg.target_locales]
+    dups = [c for c in _dedupe_keep_order(all_codes) if all_codes.count(c) > 1]
+    if dups:
+        issues.append(Issue(
+            IssueLevel.WARN,
+            IssueCode.CONFIG_INVALID,
+            f"检测到重复 locale code：{dups}（建议去重；source 不应出现在 target）",
+            details={"duplicates": dups},
+        ))
+
+    return Report(action="validate_config", issues=tuple(issues))
 
 
-def read_config_or_throw(path: Path) -> ProjectConfig:
-    if not path.exists():
-        raise FileNotFoundError(f"❌ 未找到 {CONFIG_FILE}（请先 slang_i18n init）")
-    return read_config(path)
+# =========================
+# init: commented YAML template generation
+# =========================
 
+def generate_commented_yaml_template(
+        *,
+        cfg: SlangI18nConfig,
+        languages_json_path: Optional[Path] = None,
+) -> str:
+    """
+    生成带详细注释的 slang_i18n.yaml 文本。
+    注意：这里手写 YAML 文本（而不是 yaml.dump），以便保证注释可控、可读。
+    """
+    lj = f"{languages_json_path}" if languages_json_path else "languages.json"
+    src = cfg.source_locale.code
+    # target locales dump lines
+    tgt_lines = []
+    for t in cfg.target_locales:
+        name = t.name_en.replace('"', '\\"')
+        tgt_lines.append(f"  - code: {t.code}\n    name_en: \"{name}\"")
 
-def _config_template_text() -> str:
-    # 直接沿用你现有脚本的模板（保留注释），避免用户迁移成本:contentReference[oaicite:1]{index=1}
-    from textwrap import dedent
-    return dedent(
-        """\
-        # slang_i18n.yaml
-        # Flutter slang i18n 配置（NEW schema）
-        #
-        # 目录约定：
-        # - 在项目根目录执行
-        # - i18n/ 目录存在
-        # - 若 i18n/ 下存在子目录：只处理子目录中的 *.i18n.json（视为模块）
-        # - 若 i18n/ 下无子目录：处理 i18n/ 根目录中的 *.i18n.json
+    # prompt_by_locale lines（只写已有的）
+    pbl_lines = []
+    if cfg.prompt_by_locale:
+        for k, v in cfg.prompt_by_locale.items():
+            vv = (v or "").rstrip("\n")
+            pbl_lines.append(f"  {k}: |\n" + "\n".join([f"    {line}" for line in vv.splitlines()]))
 
-        # OpenAI 模型（默认 gpt-4o）
-        # 可选值（枚举）：
-        # - gpt-4o
-        # - gpt-4o-mini
-        # - gpt-4.1
-        # - gpt-4.1-mini
-        openAIModel: gpt-4o
-
-        # 源语言（结构化：code + 英文语言名）
-        source_locale:
-          code: en
-          name_en: English
-
-        # 目标语言列表：每项包含 code + 英文语言名
-        target_locales:
-          - code: zh_Hant
-            name_en: Traditional Chinese
-          - code: ja
-            name_en: Japanese
-          - code: ko
-            name_en: Korean
-          - code: fr
-            name_en: French
-
-        prompts:
-          default_en: |
-            Translate UI strings naturally for a mobile app.
-            Be concise, clear, and consistent.
-
-          by_locale_en:
-            zh_Hant: |
-              Use Taiwan Traditional Chinese UI style.
-
-        options:
-          sort_keys: true
-          cleanup_extra_keys: true
-          incremental_translate: true
-          normalize_filenames: true
-        """
+    return (
+            "# slang_i18n.yaml\n"
+            "# ---------------------------------------------\n"
+            "# Flutter slang 多语言管理与 AI 翻译工具配置\n"
+            "# 生成规则：\n"
+            f"# - init 会读取当前目录 {lj} 作为语言真理源\n"
+            f"# - source_locale 默认 {src}\n"
+            "# - target_locales = languages.json 中除 source 外的其他语言\n"
+            "# ---------------------------------------------\n\n"
+            "# 多语言根目录：\n"
+            "# - 单业务模式：i18nDir 下直接放 {{locale}}.json（例如 en.json）\n"
+            "# - 多业务模式：i18nDir 下有子目录（home/trade），每个目录一组 {{prefix}}_{{locale}}.json\n"
+            "i18nDir: i18n\n\n"
+            "# 源语言（唯一权威语言，默认 en）\n"
+            "source_locale:\n"
+            f"  code: {cfg.source_locale.code}\n"
+            f"  name_en: \"{cfg.source_locale.name_en.replace('\"','\\\\\"')}\"\n\n"
+            "# 目标语言列表（由 languages.json 生成；会自动剔除与 source 重复的 code）\n"
+            "target_locales:\n"
+            + ("\n".join(tgt_lines) if tgt_lines else "  []") + "\n\n"
+                                                                "# OpenAI 模型名（用于 translate）\n"
+                                                                f"openAIModel: {cfg.openai_model}\n\n"
+                                                                "# 按语言附加翻译提示（可选）：用于约束特定语言的口吻/术语\n"
+                                                                "# 例如：zh_hant 使用台湾用语；ja 使用更自然的日语 UI 表达\n"
+                                                                "prompt_by_locale:\n"
+            + ("\n".join(pbl_lines) if pbl_lines else "  {}") + "\n\n"
+                                                                "# 工具行为开关\n"
+                                                                "options:\n"
+                                                                "  # sort：是否对 key 排序（@@locale 永远置顶）\n"
+                                                                f"  sort_keys: {str(cfg.options.sort_keys).lower()}\n"
+                                                                "  # translate：是否默认增量翻译（只翻译 source 有、target 缺的 key）\n"
+                                                                f"  incremental_translate: {str(cfg.options.incremental_translate).lower()}\n"
+                                                                "  # check/clean：是否启用冗余 key 治理（target 比 source 多的 key）\n"
+                                                                f"  cleanup_extra_keys: {str(cfg.options.cleanup_extra_keys).lower()}\n"
+                                                                "  # 是否做文件名规范化（后续如需将 zh-Hant 统一为 zh_Hant，可扩展）\n"
+                                                                f"  normalize_filenames: {str(cfg.options.normalize_filenames).lower()}\n"
     )
 
 
-def init_config(path: Path) -> None:
-    _require_yaml()
-    if path.exists():
-        _ = read_config(path)  # 存在就校验，不覆盖
-        print(f"✅ {CONFIG_FILE} 已存在且格式正确（不会覆盖）")
-        return
-    path.write_text(_config_template_text(), encoding="utf-8")
-    print(f"📝 已生成 {CONFIG_FILE}（新 schema，含注释）")
+# =========================
+# init: reconcile existing config with languages.json
+# =========================
+
+@dataclass(frozen=True)
+class UpgradeDiff:
+    source_code: str
+    config_all: Tuple[str, ...]
+    languages_all: Tuple[str, ...]
+    added: Tuple[str, ...]    # languages.json 有，但 config 没有
+    removed: Tuple[str, ...]  # config 有，但 languages.json 没有
+
+
+def diff_config_with_languages(
+        *,
+        cfg: SlangI18nConfig,
+        languages: Tuple[LanguageRow, ...],
+) -> UpgradeDiff:
+    lang_codes = _dedupe_keep_order([_normalize_locale_code(r.code) for r in languages if _normalize_locale_code(r.code)])
+    cfg_codes = _dedupe_keep_order([cfg.source_locale.code] + [t.code for t in cfg.target_locales])
+
+    lang_set = set(lang_codes)
+    cfg_set = set(cfg_codes)
+
+    added = tuple([c for c in lang_codes if c not in cfg_set])
+    removed = tuple([c for c in cfg_codes if c not in lang_set])
+
+    return UpgradeDiff(
+        source_code=cfg.source_locale.code,
+        config_all=tuple(cfg_codes),
+        languages_all=tuple(lang_codes),
+        added=added,
+        removed=removed,
+    )
+
+
+def build_cfg_from_languages_json(
+        *,
+        root_dir: Path,
+        i18n_dir: str = "i18n",
+        openai_model: str = "gpt-4o",
+        prompt_by_locale: Optional[Dict[str, str]] = None,
+        options: Optional[Options] = None,
+        source_locale_code: str = "en",
+        languages_filename: str = "languages.json",
+) -> Tuple[SlangI18nConfig, Path]:
+    """
+    init 生成新配置时使用：读取 languages.json 并产出 cfg。
+    """
+    root_dir = root_dir.resolve()
+    languages = load_languages_json(root_dir=root_dir, filename=languages_filename)
+    src, targets = derive_locales_from_languages_json(languages=languages, source_locale=source_locale_code)
+
+    cfg = SlangI18nConfig(
+        i18n_dir=(root_dir / i18n_dir).resolve(),
+        source_locale=src,
+        target_locales=targets,
+        openai_model=openai_model,
+        prompt_by_locale=prompt_by_locale or {},
+        options=options or Options(),
+    )
+    return cfg, (root_dir / languages_filename)
+
+
+def update_cfg_targets_from_languages_json(
+        *,
+        cfg: SlangI18nConfig,
+        languages: Tuple[LanguageRow, ...],
+) -> SlangI18nConfig:
+    """
+    升级配置时使用：
+    - source_locale 保持不变（默认 en）
+    - target_locales 根据 languages.json 重新生成（排除 source，并去重）
+    - 其他字段（i18nDir/openAIModel/options/prompt_by_locale）保持原样
+    """
+    src_code = cfg.source_locale.code or "en"
+    src_spec, targets = derive_locales_from_languages_json(languages=languages, source_locale=src_code)
+
+    # source 仍沿用 cfg 的 name_en（避免被 languages.json 覆盖）
+    source_locale = LocaleSpec(code=src_spec.code, name_en=cfg.source_locale.name_en or src_spec.name_en or "English")
+
+    return SlangI18nConfig(
+        i18n_dir=cfg.i18n_dir,
+        source_locale=source_locale,
+        target_locales=targets,
+        openai_model=cfg.openai_model,
+        prompt_by_locale=dict(cfg.prompt_by_locale),
+        options=cfg.options,
+    )
