@@ -14,7 +14,8 @@ import yaml
 # ----------------------------
 DEFAULT_TEMPLATE_NAME = "slang_i18n.yaml"   # 内置模板文件（带注释）
 DEFAULT_LANGUAGES_NAME = "languages.json"  # 本地语言列表文件
-LOCALE_META_KEY = "@@locale"               # i18n json 的 meta key（如果你后面要用到）
+LOCALE_META_KEY = "@@locale"               # i18n json 的 meta key（固定第一位）
+
 
 # ----------------------------
 # 异常类型
@@ -22,6 +23,7 @@ LOCALE_META_KEY = "@@locale"               # i18n json 的 meta key（如果你�
 class ConfigError(RuntimeError):
     """用于启动阶段的配置错误（更友好的报错与解决建议）"""
     pass
+
 
 # ----------------------------
 # 数据模型（按你的默认模板 schema）
@@ -34,7 +36,7 @@ class Locale:
 
 @dataclass(frozen=True)
 class I18nConfig:
-    i18n_dir: Path                 # 这里存“绝对路径”（已按 project_root 解析）
+    i18n_dir: Path                 # 绝对路径（按 project_root 解析）
     source_locale: Locale
     target_locales: List[Locale]
     openai_model: str
@@ -53,6 +55,7 @@ def override_i18n_dir(cfg: I18nConfig, i18n_dir: Path) -> I18nConfig:
         prompts=cfg.prompts,
         options=cfg.options,
     )
+
 
 # ----------------------------
 # 内置文件读取（模板 / 默认 languages）
@@ -106,6 +109,7 @@ def load_target_locales_from_languages_json(languages_path: Path, source_code: s
         out.append({"code": code, "name_en": name_en})
 
     return out
+
 
 # ----------------------------
 # YAML 模板“保注释”局部替换：只替换 target_locales block
@@ -171,7 +175,7 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
     # 3) 校验配置（此处不强制要求 i18nDir 已存在，因为 init 会创建）
     raw = assert_config_ok(cfg_path, project_root=project_root, check_i18n_dir_exists=False)
 
-    # 4) 创建 i18nDir 目录（按 project_root 解析）
+    # 4)创建 i18nDir 目录（按 project_root 解析）
     i18n_dir_path = (project_root / raw["i18nDir"]).resolve()
     i18n_dir_path.mkdir(parents=True, exist_ok=True)
 
@@ -258,7 +262,7 @@ def load_config(cfg_path: Path, project_root: Optional[Path] = None) -> I18nConf
 
 
 # ----------------------------
-# validate_config：字段 + 类型 + 关键语义校验（新增 i18nDir）
+# validate_config：字段 + 类型 + 关键语义校验（含 i18nDir）
 # ----------------------------
 def validate_config(raw: Dict) -> None:
     required_top = ["openAIModel", "maxWorkers", "i18nDir", "source_locale", "target_locales", "prompts", "options"]
@@ -323,7 +327,7 @@ def validate_config(raw: Dict) -> None:
 
 
 # ----------------------------
-# 本地文件管理 / actions（目前给最小骨架，后续你可继续扩）
+# JSON 读写 + flat 校验 + key 排序
 # ----------------------------
 def list_locale_files(i18n_dir: Path) -> List[Path]:
     if not i18n_dir.exists():
@@ -331,17 +335,17 @@ def list_locale_files(i18n_dir: Path) -> List[Path]:
     return sorted(i18n_dir.glob("**/*.json"))
 
 
-def read_json(path: Path) -> Dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def is_meta_key(key: str) -> bool:
+    return isinstance(key, str) and key.startswith("@@")
 
-
-def write_json(path: Path, data_obj: Dict) -> None:
-    path.write_text(json.dumps(data_obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 def ensure_flat_json(obj: Any, file_path: Path) -> Dict[str, Any]:
     """
-    确保 JSON 顶层是 object，且 value 只能是 string（或 @@locale 也是 string）。
-    遇到嵌套 object/array 直接失败。
+    规则：
+    - JSON 顶层必须是 object
+    - 禁止嵌套 object/array（flat）
+    - 对普通 key：value 必须是 string（当前允许 None）
+    - 对 @@* 元字段：允许非 string（例如 @@dirty: true）
     """
     if not isinstance(obj, dict):
         raise ValueError(f"JSON 顶层必须是 object: {file_path}")
@@ -349,6 +353,11 @@ def ensure_flat_json(obj: Any, file_path: Path) -> Dict[str, Any]:
     for k, v in obj.items():
         if isinstance(v, (dict, list)):
             raise ValueError(f"检测到嵌套 JSON（不允许）：{file_path} key={k}")
+
+        if is_meta_key(k):
+            # @@* 元字段不强制 string 类型
+            continue
+
         if v is not None and not isinstance(v, str):
             raise ValueError(f"value 必须是 string：{file_path} key={k} type={type(v).__name__}")
 
@@ -356,25 +365,32 @@ def ensure_flat_json(obj: Any, file_path: Path) -> Dict[str, Any]:
 
 
 def sort_json_keys(data_obj: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    排序规则：
+    1) @@locale 固定第一（如果存在）
+    2) 其它 @@* 元字段按 key 字典序排在顶部
+    3) 普通 key 按 key 字典序排在后面
+    """
     out: Dict[str, Any] = {}
 
-    # 1) @@locale 永远第一（如果存在）
+    # 1) @@locale 固定第一
     if LOCALE_META_KEY in data_obj:
         out[LOCALE_META_KEY] = data_obj[LOCALE_META_KEY]
 
-    # 2) 其它 @@*（排除 @@locale）按字典序
-    other_meta = sorted(
+    # 2) 其它 @@*（排除 @@locale）字典序
+    other_meta_items: List[Tuple[str, Any]] = sorted(
         ((k, v) for k, v in data_obj.items() if is_meta_key(k) and k != LOCALE_META_KEY),
         key=lambda kv: kv[0],
     )
-    out.update(dict(other_meta))
+    out.update(dict(other_meta_items))
 
-    # 3) 普通 key 按字典序
-    normal = sorted(
+    # 3) 普通 key 字典序
+    normal_items: List[Tuple[str, Any]] = sorted(
         ((k, v) for k, v in data_obj.items() if not is_meta_key(k)),
         key=lambda kv: kv[0],
     )
-    out.update(dict(normal))
+    out.update(dict(normal_items))
+
     return out
 
 
@@ -384,11 +400,13 @@ def read_json(path: Path) -> Dict[str, Any]:
 
 
 def write_json(path: Path, data_obj: Dict[str, Any]) -> None:
-    # 写入前也做一次 flat 校验
     ensure_flat_json(data_obj, path)
     path.write_text(json.dumps(data_obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# ----------------------------
+# actions
+# ----------------------------
 def run_sort(cfg: I18nConfig) -> None:
     """
     给 i18nDir 下所有 *.json 执行 key 排序（递归子目录）
@@ -400,10 +418,8 @@ def run_sort(cfg: I18nConfig) -> None:
 
     changed = 0
     for fp in files:
-        if fp.suffix.lower() != ".json":
-            continue
-
         original = fp.read_text(encoding="utf-8")
+
         data_obj = read_json(fp)
         sorted_obj = sort_json_keys(data_obj)
 
@@ -422,6 +438,7 @@ def backup_file(path: Path) -> Path:
 
 
 def run_check(cfg: I18nConfig) -> int:
+    # 目前先保留最小骨架：保证 JSON 可读且 flat（含 @@* 宽松规则）
     for fp in list_locale_files(cfg.i18n_dir):
         read_json(fp)
     print("✅ check（当前为最小骨架）通过")
@@ -429,6 +446,7 @@ def run_check(cfg: I18nConfig) -> int:
 
 
 def run_clean(cfg: I18nConfig) -> None:
+    # 目前先保留最小骨架
     print("✅ clean（当前为最小骨架）完成")
 
 
