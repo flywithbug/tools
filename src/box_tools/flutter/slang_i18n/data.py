@@ -194,7 +194,7 @@ def assert_config_ok(cfg_path: Path) -> Dict:
     if not cfg_path.exists():
         raise ConfigError(
             f"配置文件不存在：{cfg_path}\n"
-            f"解决方法：运行 `slang_i18n init` 生成默认配置。"
+            f"解决方法：运行 `box_slang_i18n init` 生成默认配置。"
         )
 
     try:
@@ -203,7 +203,7 @@ def assert_config_ok(cfg_path: Path) -> Dict:
         raise ConfigError(
             f"配置文件无法解析为 YAML：{cfg_path}\n"
             f"原因：{e}\n"
-            f"解决方法：修复 YAML 格式或运行 `slang_i18n init` 重新生成。"
+            f"解决方法：修复 YAML 格式或运行 `box_slang_i18n init` 重新生成。"
         )
 
     try:
@@ -212,7 +212,7 @@ def assert_config_ok(cfg_path: Path) -> Dict:
         raise ConfigError(
             f"配置文件校验失败：{cfg_path}\n"
             f"原因：{e}\n"
-            f"解决方法：修复配置字段/类型，或运行 `slang_i18n init` 重新生成。"
+            f"解决方法：修复配置字段/类型，或运行 `box_slang_i18n init` 重新生成。"
         )
 
     return raw

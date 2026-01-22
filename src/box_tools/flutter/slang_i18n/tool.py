@@ -65,7 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["menu", "init", "sort", "translate", "check", "clean", "doctor"],
         help="子命令",
     )
-    p.add_argument("--config", default="slang_i18n.yaml", help="配置文件路径（默认 slang_i18n.yaml）")
+    p.add_argument(
+        "--config",
+        default=data.DEFAULT_TEMPLATE_NAME,
+        help=f"配置文件路径（默认 {data.DEFAULT_TEMPLATE_NAME}，基于 project-root）",
+    )
+
     p.add_argument("--project-root", default=".", help="项目根目录（默认当前目录）")
     p.add_argument("--i18n-dir", default=None, help="覆盖配置中的 i18nDir（可选）")
     p.add_argument("--no-incremental", action="store_true", help="translate：关闭增量翻译（全量翻译）")
