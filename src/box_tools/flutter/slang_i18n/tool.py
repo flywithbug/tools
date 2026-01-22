@@ -24,24 +24,27 @@ BOX_TOOL = {
         "box_slang_i18n doctor",
         "box_slang_i18n translate",
         "box_slang_i18n translate --no-incremental",
-        f"box_slang_i18n --config slang_i18n.yaml",
+        "box_slang_i18n --config slang_i18n.yaml",
         "box_slang_i18n --project-root path/to/project",
     ],
     "options": [
         {"flag": "command", "desc": "子命令：menu/init/sort/translate/doctor（默认 menu）"},
-        {"flag": "--config", "desc": f"配置文件路径（默认 slang_i18n.yaml，基于 project-root）"},
+        {"flag": "--config", "desc": "配置文件路径（默认 slang_i18n.yaml，基于 project-root）"},
         {"flag": "--project-root", "desc": "项目根目录（默认当前目录）"},
         {"flag": "--i18n-dir", "desc": "覆盖配置中的 i18nDir（相对 project-root 或绝对路径）"},
         {"flag": "--no-incremental", "desc": "translate：关闭增量翻译，改为全量翻译"},
     ],
     "examples": [
-        {"cmd": "box_slang_i18n init", "desc": "生成/校验配置文件（保留模板注释），并确保 languages.json 存在，同时创建 i18nDir"},
+        {
+            "cmd": "box_slang_i18n init",
+            "desc": "生成/校验配置文件（保留模板注释），并确保 languages.json 存在，同时创建 i18nDir",
+        },
         {"cmd": "box_slang_i18n", "desc": "进入交互菜单（启动会优先校验配置 + 检查 i18nDir 目录）"},
         {"cmd": "box_slang_i18n sort", "desc": "对 i18n JSON 执行排序（按工具规则）"},
         {"cmd": "box_slang_i18n doctor", "desc": "环境/结构诊断：配置合法、目录结构、文件命名、@@locale/flat 等"},
         {"cmd": "box_slang_i18n translate", "desc": "AI 增量翻译：只翻译缺失 key（排除 @@locale）"},
         {"cmd": "box_slang_i18n translate --no-incremental", "desc": "AI 全量翻译：按 source 覆盖生成 target 的翻译内容"},
-        {"cmd": f"box_slang_i18n --project-root ./app --config slang_i18n.yaml init", "desc": "在指定项目根目录下初始化"},
+        {"cmd": "box_slang_i18n --project-root ./app --config slang_i18n.yaml init", "desc": "在指定项目根目录下初始化"},
     ],
     "dependencies": [
         "PyYAML>=6.0",
@@ -49,6 +52,7 @@ BOX_TOOL = {
     ],
     "docs": "README.md",
 }
+
 
 
 def build_parser() -> argparse.ArgumentParser:

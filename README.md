@@ -70,7 +70,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter/slang_i18n
 
-- **[`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)**：Flutter slang i18n 资源管理 CLI：基于默认模板生成/校验配置（保留注释），支持 sort/check/clean/doctor，以及 AI 增量翻译（translate）（[README.md](src/box_tools/flutter/slang_i18n/README.md)）
+- **[`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)**：Flutter slang i18n 资源管理 CLI：基于默认模板生成/校验配置（保留注释），支持 sort/doctor，以及 AI 增量翻译（translate）（[README.md](src/box_tools/flutter/slang_i18n/README.md)）
 
 ---
 
@@ -413,7 +413,7 @@ box_riverpod_gen Product --legacy
 
 ### box_slang_i18n
 
-**简介**：Flutter slang i18n 资源管理 CLI：基于默认模板生成/校验配置（保留注释），支持 sort/check/clean/doctor，以及 AI 增量翻译（translate）
+**简介**：Flutter slang i18n 资源管理 CLI：基于默认模板生成/校验配置（保留注释），支持 sort/doctor，以及 AI 增量翻译（translate）
 
 **命令**：`box_slang_i18n`
 
@@ -423,30 +423,26 @@ box_riverpod_gen Product --legacy
 box_slang_i18n
 box_slang_i18n init
 box_slang_i18n sort
-box_slang_i18n check
-box_slang_i18n clean
 box_slang_i18n doctor
 box_slang_i18n translate
 box_slang_i18n translate --no-incremental
-box_slang_i18n --config path/to/slang_i18n.yaml
+box_slang_i18n --config slang_i18n.yaml
 box_slang_i18n --project-root path/to/project
 ```
 
 **参数说明**
 
-- `command`：子命令：menu/init/sort/translate/check/clean/doctor（默认 menu）
+- `command`：子命令：menu/init/sort/translate/doctor（默认 menu）
 - `--config`：配置文件路径（默认 slang_i18n.yaml，基于 project-root）
 - `--project-root`：项目根目录（默认当前目录）
-- `--i18n-dir`：覆盖配置中的 i18nDir（可选）
+- `--i18n-dir`：覆盖配置中的 i18nDir（相对 project-root 或绝对路径）
 - `--no-incremental`：translate：关闭增量翻译，改为全量翻译
 
 **示例**
 
-- `box_slang_i18n init`：生成/校验配置文件（保留模板注释），并确保 languages.json 存在
-- `box_slang_i18n`：进入交互菜单（启动会优先校验配置，不合法会直接提示修复/运行 init）
+- `box_slang_i18n init`：生成/校验配置文件（保留模板注释），并确保 languages.json 存在，同时创建 i18nDir
+- `box_slang_i18n`：进入交互菜单（启动会优先校验配置 + 检查 i18nDir 目录）
 - `box_slang_i18n sort`：对 i18n JSON 执行排序（按工具规则）
-- `box_slang_i18n check`：检查冗余 key（CI 可用，失败返回非 0）
-- `box_slang_i18n clean`：删除冗余 key（删除前备份，删除后自动排序）
 - `box_slang_i18n doctor`：环境/结构诊断：配置合法、目录结构、文件命名、@@locale/flat 等
 - `box_slang_i18n translate`：AI 增量翻译：只翻译缺失 key（排除 @@locale）
 - `box_slang_i18n translate --no-incremental`：AI 全量翻译：按 source 覆盖生成 target 的翻译内容
