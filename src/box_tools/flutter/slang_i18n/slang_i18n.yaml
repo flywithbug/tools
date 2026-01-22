@@ -23,6 +23,9 @@ source_locale:
   code: en
   name_en: English
 
+# 多语言目录
+i18nDir: i18n
+
 # 目标语言列表：每项包含 code + 英文语言名
 # 注意：code 用于文件读写与命名；name_en 用于翻译提示词与 translate_flat_dict 入参（更稳定，避免串语言）
 target_locales:
