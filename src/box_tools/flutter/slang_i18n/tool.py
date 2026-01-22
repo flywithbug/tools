@@ -15,14 +15,12 @@ BOX_TOOL = {
     "category": "flutter",
     "summary": (
         "Flutter slang i18n 资源管理 CLI：基于默认模板生成/校验配置（保留注释），"
-        "支持 sort/check/clean/doctor，以及 AI 增量翻译（translate）"
+        "支持 sort/doctor，以及 AI 增量翻译（translate）"
     ),
     "usage": [
         "box_slang_i18n",
         "box_slang_i18n init",
         "box_slang_i18n sort",
-        "box_slang_i18n check",
-        "box_slang_i18n clean",
         "box_slang_i18n doctor",
         "box_slang_i18n translate",
         "box_slang_i18n translate --no-incremental",
@@ -30,7 +28,7 @@ BOX_TOOL = {
         "box_slang_i18n --project-root path/to/project",
     ],
     "options": [
-        {"flag": "command", "desc": "子命令：menu/init/sort/translate/check/clean/doctor（默认 menu）"},
+        {"flag": "command", "desc": "子命令：menu/init/sort/translate/doctor（默认 menu）"},
         {"flag": "--config", "desc": f"配置文件路径（默认 {data.DEFAULT_TEMPLATE_NAME}，基于 project-root）"},
         {"flag": "--project-root", "desc": "项目根目录（默认当前目录）"},
         {"flag": "--i18n-dir", "desc": "覆盖配置中的 i18nDir（相对 project-root 或绝对路径）"},
@@ -40,8 +38,6 @@ BOX_TOOL = {
         {"cmd": "box_slang_i18n init", "desc": "生成/校验配置文件（保留模板注释），并确保 languages.json 存在，同时创建 i18nDir"},
         {"cmd": "box_slang_i18n", "desc": "进入交互菜单（启动会优先校验配置 + 检查 i18nDir 目录）"},
         {"cmd": "box_slang_i18n sort", "desc": "对 i18n JSON 执行排序（按工具规则）"},
-        {"cmd": "box_slang_i18n check", "desc": "检查冗余 key（CI 可用，失败返回非 0）"},
-        {"cmd": "box_slang_i18n clean", "desc": "删除冗余 key（删除前备份，删除后自动排序）"},
         {"cmd": "box_slang_i18n doctor", "desc": "环境/结构诊断：配置合法、目录结构、文件命名、@@locale/flat 等"},
         {"cmd": "box_slang_i18n translate", "desc": "AI 增量翻译：只翻译缺失 key（排除 @@locale）"},
         {"cmd": "box_slang_i18n translate --no-incremental", "desc": "AI 全量翻译：按 source 覆盖生成 target 的翻译内容"},
@@ -62,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
         "command",
         nargs="?",
         default="menu",
-        choices=["menu", "init", "sort", "translate", "check", "clean", "doctor"],
+        choices=["menu", "init", "sort", "translate", "doctor"],
         help="子命令",
     )
     p.add_argument(
@@ -78,29 +74,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_menu(cfg_path: Path, project_root: Path) -> int:
     menu = [
-        ("1", "sort",      "排序"),
-        ("2", "translate", "翻译（默认增量）"),
-        ("3", "check",     "检查冗余"),
-        ("4", "clean",     "删除冗余"),
-        ("5", "doctor",    "环境诊断"),
-        ("6", "init",      "生成/校验配置"),
-        ("0", "exit",      "退出"),
+        ("sort",      "排序"),
+        ("translate", "翻译（默认增量）"),
+        ("doctor",    "环境诊断"),
+        ("init",      "生成/校验配置"),
     ]
 
     while True:
         print("\n=== box_slang_i18n ===")
-        for k, cmd, label in menu:
-            print(f"{k}. {cmd:<10} {label}")
+        for idx, (cmd, label) in enumerate(menu, start=1):
+            print(f"{idx}. {cmd:<10} {label}")
+        print("0. exit       退出")
 
         choice = input("> ").strip()
         if choice == "0":
             return 0
 
-        cmd = next((c for k, c, _ in menu if k == choice), None)
-        if not cmd:
+        if not choice.isdigit():
             print("无效选择")
             continue
 
+        idx = int(choice)
+        if not (1 <= idx <= len(menu)):
+            print("无效选择")
+            continue
+
+        cmd = menu[idx - 1][0]
         argv = ["box_slang_i18n", cmd, "--config", str(cfg_path), "--project-root", str(project_root)]
         return main(argv)
 
@@ -149,13 +148,6 @@ def main(argv=None) -> int:
 
     if args.command == "sort":
         data.run_sort(cfg)
-        return 0
-
-    if args.command == "check":
-        return data.run_check(cfg)
-
-    if args.command == "clean":
-        data.run_clean(cfg)
         return 0
 
     if args.command == "doctor":
