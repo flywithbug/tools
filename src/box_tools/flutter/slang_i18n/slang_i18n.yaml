@@ -15,7 +15,7 @@
 # - gpt-4.1-mini
 openAIModel: gpt-4o
 
-# 0=自动（2..8）；>0 固定并发
+# 0=自动（2..6）；>0 固定并发
 maxWorkers: 0
 
 # 源语言（结构化：code + 英文语言名）

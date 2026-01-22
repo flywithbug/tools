@@ -35,6 +35,7 @@ class _TaskResult:
     tgt_code: str
     tgt_lang_name: str
     tgt_file: Any  # Path
+    tgt_obj: Dict[str, Any]  # 含 @@*
     batch_sec: float
     out: Dict[str, Any]
     src_for_translate: Dict[str, str]
@@ -72,7 +73,7 @@ def run_translate(cfg: data.I18nConfig, incremental: bool = True) -> None:
 
     mode = "增量" if incremental else "全量"
 
-    tasks, total_keys, per_lang_total = _build_tasks(
+    tasks, total_keys, _per_lang_total = _build_tasks(
         cfg=cfg,
         module_dirs=module_dirs,
         src_code=src_code,
@@ -101,7 +102,11 @@ def run_translate(cfg: data.I18nConfig, incremental: bool = True) -> None:
     max_workers = _compute_workers(max_workers_cfg, total_batches)
     print(f"- 并发: {max_workers} workers（maxWorkers={max_workers_cfg}）")
 
+    # ✅ 总耗时：从“翻译开始”到“全部结束”的墙钟时间
     start_all = time.perf_counter()
+
+    # ✅ 累计每条任务耗时（用于对比并发节省）
+    sum_batch_sec = 0.0
 
     # 控制每批打印多少条翻译内容（避免日志爆炸）
     MAX_PRINT_PER_BATCH = 200
@@ -123,9 +128,10 @@ def run_translate(cfg: data.I18nConfig, incremental: bool = True) -> None:
 
         for fut in as_completed(futures):
             r = fut.result()
+            sum_batch_sec += r.batch_sec  # ✅ 汇总每条耗时（串行近似耗时）
 
-            # 写回文件（主线程做，避免并发写日志混乱；文件彼此不同也没关系，但这样更稳）
-            merged = dict(tasks[r.idx - 1].tgt_obj)  # 按 idx 找对应 task（idx 从 1 开始）
+            # 写回文件（主线程做，避免并发写日志混乱）
+            merged = dict(r.tgt_obj)
             for k, v in r.out.items():
                 if data.is_meta_key(k):
                     continue
@@ -158,7 +164,18 @@ def run_translate(cfg: data.I18nConfig, incremental: bool = True) -> None:
     print(f"- Source: {src_code} ({src_lang_name})")
     print(f"- 总批次: {total_batches}")
     print(f"- 总翻译 key: {done_keys}/{total_keys}")
-    print(f"- 总耗时: {total_elapsed:.2f}s")
+    print(f"- 总耗时(墙钟): {total_elapsed:.2f}s")
+
+    # ✅ 新增：每条耗时汇总（累计翻译耗时）
+    print(f"- 累计翻译耗时(∑每条): {sum_batch_sec:.2f}s")
+
+    # ✅ 新增：并发节省与加速比
+    saved = sum_batch_sec - total_elapsed
+    if saved > 0:
+        print(f"- 并发节省: {saved:.2f}s")
+    if total_elapsed > 0 and sum_batch_sec > 0:
+        print(f"- 加速比: {sum_batch_sec / total_elapsed:.2f}x")
+
     if total_elapsed > 0:
         print(f"- 平均速度: {done_keys / total_elapsed:.2f} key/s")
 
@@ -195,7 +212,6 @@ def _compute_workers(max_workers_cfg: int, total_batches: int) -> int:
 
     # maxWorkers == 0：自适应 2~8
     cpu = os.cpu_count() or 4
-    # 一个简单的启发式：cpu//2 更保守，避免把本机打满；再 clamp 到 2~8
     guess = max(2, min(8, max(2, cpu // 2)))
     return min(guess, total_batches)
 
@@ -217,8 +233,7 @@ def _build_tasks(
     total_keys = 0
     per_lang_total: Dict[str, int] = {t.code: 0 for t in targets}
 
-    # 先扫描，生成待翻译任务列表（稳定顺序）
-    staged: List[Tuple[str, Any, Any, Dict[str, Any], Dict[str, str], str]] = []
+    staged: List[Tuple[str, Any, Dict[str, Any], Dict[str, str], str, str]] = []
     # (module_name, tgt_file, tgt_obj, src_for_translate, tgt_code, tgt_lang_name)
 
     for md in module_dirs:
@@ -258,7 +273,6 @@ def _build_tasks(
     if total_batches == 0:
         return [], 0, per_lang_total
 
-    # 为每个 staged 任务补 idx/total/prompt，并统计 key 总数
     for i, (module_name, tgt_file, tgt_obj, src_for_translate, tgt_code, tgt_lang_name) in enumerate(staged, start=1):
         n_keys = len(src_for_translate)
         total_keys += n_keys
@@ -298,7 +312,6 @@ def _translate_one(t: _Task) -> _TaskResult:
     )
     t1 = time.perf_counter()
 
-    # 只统计“成功产出”的 key（out 里存在且为非空字符串）
     success = 0
     for k, v in out.items():
         if data.is_meta_key(k):
@@ -313,6 +326,7 @@ def _translate_one(t: _Task) -> _TaskResult:
         tgt_code=t.tgt_code,
         tgt_lang_name=t.tgt_lang_name,
         tgt_file=t.tgt_file,
+        tgt_obj=t.tgt_obj,  # ✅ 不再依赖 tasks[idx-1]
         batch_sec=(t1 - t0),
         out=out,
         src_for_translate=t.src_for_translate,
