@@ -463,7 +463,7 @@ def check_i18n_naming_and_existence(cfg: I18nConfig) -> List[DoctorIssue]:
     doctor 用检查：
     - i18nDir 下必须有业务子目录（模块目录）
     - 每个模块目录下，每个 locale 必须存在规范文件名：{folderName}_{code}.i18n.json
-    - 目录内出现 *.json 但不是规范命名的文件 -> 报 bad_name（不自动改名）
+    - 目录内出现 *.i18n.json 但不是规范命名的文件 -> 报 bad_name（不自动改名）
     """
     issues: List[DoctorIssue] = []
 
@@ -481,8 +481,8 @@ def check_i18n_naming_and_existence(cfg: I18nConfig) -> List[DoctorIssue]:
     for md in module_dirs:
         expected_names = {expected_i18n_filename(md, code) for code in locale_codes}
 
-        # 1) 检查目录内非规范 json 文件（保守策略：看到 *.json 就要求符合规范）
-        for fp in sorted(md.glob("*.json")):
+        # 1) 只检查 *.i18n.json（避免误伤其它 json）
+        for fp in sorted(md.glob(f"*{I18N_FILE_SUFFIX}")):
             if fp.name not in expected_names:
                 issues.append(DoctorIssue(
                     kind="bad_name",
@@ -541,12 +541,85 @@ def sync_i18n_files(cfg: I18nConfig) -> int:
 
 
 # ----------------------------
+# 冗余字段检查：source_locale 没有，但其他语言有
+# ----------------------------
+@dataclass
+class RedundantKeyIssue:
+    file: Path
+    keys: List[str]
+
+
+def _source_file_for_module(cfg: I18nConfig, module_dir: Path) -> Path:
+    return module_dir / expected_i18n_filename(module_dir, cfg.source_locale.code)
+
+
+def check_redundant_keys(cfg: I18nConfig) -> List[RedundantKeyIssue]:
+    """
+    冗余字段定义：
+    - 以 source_locale 文件为唯一真相源
+    - 忽略所有 @@* 元字段
+    - 其他语言文件中存在但 source 没有的 key -> 冗余
+    """
+    issues: List[RedundantKeyIssue] = []
+
+    for md in list_module_dirs(cfg.i18n_dir):
+        src_file = _source_file_for_module(cfg, md)
+        if not src_file.exists():
+            # 缺失由命名/存在性检查处理，这里不重复报
+            continue
+
+        src_obj = read_json(src_file)
+        src_keys = {k for k in src_obj.keys() if not is_meta_key(k)}
+
+        for fp in sorted(md.glob(f"*{I18N_FILE_SUFFIX}")):
+            if fp == src_file:
+                continue
+
+            obj = read_json(fp)
+            extra = sorted([k for k in obj.keys() if (not is_meta_key(k)) and (k not in src_keys)])
+            if extra:
+                issues.append(RedundantKeyIssue(file=fp, keys=extra))
+
+    return issues
+
+
+def delete_redundant_keys(redundant: List[RedundantKeyIssue]) -> int:
+    """
+    删除冗余字段（删除前备份 .bak）
+    返回影响文件数
+    """
+    affected = 0
+    for it in redundant:
+        fp = it.file
+        if not fp.exists():
+            continue
+
+        backup_file(fp)
+
+        obj = read_json(fp)
+        for k in it.keys:
+            obj.pop(k, None)
+
+        # 删除后顺便排序一下 key（保证 @@locale 第一）
+        obj = sort_json_keys(obj)
+        fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        affected += 1
+        print(f"✅ 清理冗余字段：{fp} -> {len(it.keys)} 个")
+    return affected
+
+
+# ----------------------------
 # actions
 # ----------------------------
 def run_sort(cfg: I18nConfig) -> None:
     """
-    给 i18nDir 下所有 *.json 执行 key 排序（递归子目录）
+    排序前必须先通过 doctor（doctor 允许交互修复）
     """
+    if run_doctor(cfg) != 0:
+        print("❌ sort 中止：doctor 检测未通过")
+        return
+
     files = list_locale_files(cfg.i18n_dir)
     if not files:
         print(f"⚠️ 未找到任何 JSON 文件：{cfg.i18n_dir}")
@@ -614,57 +687,78 @@ def delete_bad_name_files(cfg: I18nConfig) -> int:
             print(f"⚠️ 删除失败：{src}，原因：{e}")
 
     return deleted
+
+
 def run_doctor(cfg: I18nConfig) -> int:
     if not cfg.i18n_dir.exists():
         print(f"❌ i18nDir 不存在：{cfg.i18n_dir}")
         return 1
 
+    # 1) 命名/缺失检查
     issues = check_i18n_naming_and_existence(cfg)
-    if not issues:
-        print("✅ doctor 通过")
-        return 0
 
-    # 先打印全部问题
-    for it in issues:
-        where = f" ({it.path})" if it.path else ""
-        print(f"❌ [{it.kind}] {it.message}{where}")
+    if issues:
+        for it in issues:
+            where = f" ({it.path})" if it.path else ""
+            print(f"❌ [{it.kind}] {it.message}{where}")
 
-    # 1) 缺失文件 -> 是否 sync
-    has_missing = any(it.kind == "missing" for it in issues)
-    if has_missing:
+        # 缺失 -> sync
+        if any(it.kind == "missing" for it in issues):
+            try:
+                ans = input("\n检测到缺失语言文件，是否执行 sync 自动创建？(y/N) ").strip().lower()
+            except EOFError:
+                ans = ""
+            if ans in ("y", "yes"):
+                created = sync_i18n_files(cfg)
+                print(f"✅ sync 完成：创建 {created} 个缺失文件\n")
+
+        # bad_name -> 删除（不重命名）
+        issues2 = check_i18n_naming_and_existence(cfg)
+        if any(it.kind == "bad_name" for it in issues2):
+            try:
+                ans = input(
+                    "\n检测到不符合规范命名的语言文件，是否删除？（将先生成 .bak 备份）(y/N) "
+                ).strip().lower()
+            except EOFError:
+                ans = ""
+            if ans in ("y", "yes"):
+                deleted = delete_bad_name_files(cfg)
+                print(f"✅ delete 完成：删除 {deleted} 个文件（均已备份）\n")
+
+    # 2) 冗余字段检查（source_locale 没有，其他语言有）
+    redundant = check_redundant_keys(cfg)
+    if redundant:
+        print("\n❌ 检测到冗余字段（source_locale 中不存在）：")
+        for it in redundant:
+            print(f"  - {it.file}:")
+            for k in it.keys:
+                print(f"      • {k}")
+
         try:
-            ans = input("\n检测到缺失语言文件，是否执行 sync 自动创建？(y/N) ").strip().lower()
+            ans = input("\n是否删除这些冗余字段？（将先生成 .bak 备份）(y/N) ").strip().lower()
         except EOFError:
             ans = ""
 
         if ans in ("y", "yes"):
-            created = sync_i18n_files(cfg)
-            print(f"✅ sync 完成：创建 {created} 个缺失文件\n")
+            affected = delete_redundant_keys(redundant)
+            print(f"✅ 冗余字段清理完成：影响 {affected} 个文件\n")
 
-    # 2) bad_name -> 是否删除（不重命名）
-    issues = check_i18n_naming_and_existence(cfg)
-    has_bad_name = any(it.kind == "bad_name" for it in issues)
-    if has_bad_name:
-        try:
-            ans = input(
-                "\n检测到不符合规范命名的语言文件，是否删除？"
-                "（将先生成 .bak 备份）(y/N) "
-            ).strip().lower()
-        except EOFError:
-            ans = ""
-
-        if ans in ("y", "yes"):
-            deleted = delete_bad_name_files(cfg)
-            print(f"✅ delete 完成：删除 {deleted} 个文件（均已备份）\n")
-
-    # 3) 最终检查
+    # 3) 最终检查：命名/缺失 + 冗余
     final_issues = check_i18n_naming_and_existence(cfg)
-    if not final_issues:
+    final_redundant = check_redundant_keys(cfg)
+
+    if not final_issues and not final_redundant:
         print("✅ doctor 通过")
         return 0
 
-    for it in final_issues:
-        where = f" ({it.path})" if it.path else ""
-        print(f"❌ [{it.kind}] {it.message}{where}")
+    if final_issues:
+        for it in final_issues:
+            where = f" ({it.path})" if it.path else ""
+            print(f"❌ [{it.kind}] {it.message}{where}")
+
+    if final_redundant:
+        print("\n❌ 仍存在冗余字段：")
+        for it in final_redundant:
+            print(f"  - {it.file}: {len(it.keys)} 个")
 
     return 1
