@@ -253,8 +253,9 @@ def validate_config(raw: Dict) -> None:
         raise ValueError("openAIModel 必须是非空字符串")
 
     mw = raw["maxWorkers"]
-    if not isinstance(mw, int) or mw <= 0:
-        raise ValueError("maxWorkers 必须是正整数")
+    if not isinstance(mw, int) or mw < 0:
+        raise ValueError("maxWorkers 必须是 0（自动）或正整数（固定并发）")
+
 
     src = raw["source_locale"]
     if not isinstance(src, dict):
