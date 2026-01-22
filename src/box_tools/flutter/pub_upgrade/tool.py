@@ -231,7 +231,7 @@ def _find_dep_blocks(pubspec_text: str) -> dict[str, list[str]]:
         # 包名行：两个空格起，形如 "  foo:"
         m = re.match(r"^(\s+)([A-Za-z0-9_]+)\s*:\s*(.*)$", line)
         if m:
-            indent, pkg, tail = m.group(1), m.group(2), m.group(3)
+            indent, pkg, _tail = m.group(1), m.group(2), m.group(3)
 
             # 新包出现
             flush()
@@ -303,6 +303,7 @@ def _extract_constraint(block: list[str]) -> str | None:
                 if tail != "":
                     # 多行时经常是空字符串（已被 regex 捕获为 ''），这里防御
                     pass
+
     # 多行：version:
     text = "".join(block)
     m2 = re.search(r"(?m)^\s*version:\s*([^\s]+)\s*$", text)
@@ -318,20 +319,47 @@ def _extract_constraint(block: list[str]) -> str | None:
     return None
 
 
-def _replace_constraint(block: list[str], new_constraint: str) -> tuple[list[str], bool]:
+def _apply_prefix_like(original_spec: str, new_version: str) -> str:
     """
-    替换版本约束：
-    - 多行：替换 version: xxx
-    - 单行：替换 foo: xxx
+    将 new_version 按 original_spec 的“写法”进行包装：
+    - 原来有 ^ 则保留 ^
+    - 原来有引号则保留引号类型
+    """
+    s = (original_spec or "").strip()
+    quote = ""
+    if (len(s) >= 2) and ((s[0] == s[-1]) and (s[0] in ("'", '"'))):
+        quote = s[0]
+        s_inner = s[1:-1].strip()
+    else:
+        s_inner = s
+
+    caret = "^" if s_inner.startswith("^") else ""
+    out = f"{caret}{new_version}"
+    if quote:
+        return f"{quote}{out}{quote}"
+    return out
+
+
+def _replace_constraint(block: list[str], new_version: str) -> tuple[list[str], bool]:
+    """
+    替换版本约束，并保留原写法：
+    - 多行：替换 version: xxx（保留 ^ 与引号）
+    - 单行：替换 foo: xxx（保留 ^ 与引号）
     返回 (new_block, changed)
     """
     text = "".join(block)
 
     # 多行：version: ...
     if re.search(r"(?m)^\s*version:\s*", text):
+        m0 = re.search(r"(?m)^\s*version:\s*(.+?)\s*$", text)
+        if not m0:
+            return block, False
+        old_spec = m0.group(1).strip()
+        new_spec = _apply_prefix_like(old_spec, new_version)
+
         new_text, n = re.subn(
-            r"(?m)^(\s*version:\s*)([^\s]+)\s*$",
-            lambda m: f"{m.group(1)}{new_constraint}",
+            r"(?m)^(\s*version:\s*)(.+?)\s*$",
+            lambda m: f"{m.group(1)}{new_spec}",
             text,
             count=1,
         )
@@ -339,9 +367,11 @@ def _replace_constraint(block: list[str], new_constraint: str) -> tuple[list[str
 
     # 单行：foo: ^1.2.3
     first = block[0]
-    m = re.match(r"^(\s*[A-Za-z0-9_]+\s*:\s*)([^\s]+)\s*$", first)
+    m = re.match(r"^(\s*[A-Za-z0-9_]+\s*:\s*)(.+?)\s*$", first)
     if m:
-        new_first = f"{m.group(1)}{new_constraint}\n"
+        old_spec = m.group(2).strip()
+        new_spec = _apply_prefix_like(old_spec, new_version)
+        new_first = f"{m.group(1)}{new_spec}\n"
         new_block = [new_first] + block[1:]
         return new_block, True
 
@@ -467,7 +497,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip",
         action="append",
         default=[],
-        help="跳过某些包名（可多次指定）。默认 ap_recaptcha",
+        help="跳过某些包名（可多次指定）。默认不跳过任何包",
     )
     return p
 
@@ -483,7 +513,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # 默认不过滤域名：只要 hosted + url 就算私有组件
     private_host_keywords = tuple(args.private_host) if args.private_host else tuple()
-    skip_packages = set(args.skip) if args.skip else {"ap_recaptcha"}
+    # ✅ 修复：默认不跳过任何包（避免 ap_recaptcha 永久被漏掉）
+    skip_packages = set(args.skip) if args.skip else set()
 
     # ✅ git 自动降级：非 git 仓库 / 无 git 命令时，视为 --no-git
     git_enabled = (not args.no_git) and is_git_repo(Path.cwd())
@@ -556,9 +587,9 @@ def main(argv: list[str] | None = None) -> int:
     # 写回 pubspec.yaml（逐包替换对应块）
     changed = False
     new_pubspec_text = pubspec_text
-    for pkg, old_constraint, target in plan:
+    for pkg, _old_constraint, target in plan:
         block = dep_blocks[pkg]
-        new_block, ch = _replace_constraint(block, target)
+        new_block, ch = _replace_constraint(block, target)  # ✅ 修复：保留 ^/引号写法
         if not ch:
             continue
 
