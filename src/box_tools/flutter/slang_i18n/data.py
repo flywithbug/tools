@@ -396,7 +396,33 @@ def sort_json_keys(data_obj: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def read_json(path: Path) -> Dict[str, Any]:
-    obj = json.loads(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as e:
+        # 给出：文件、行列、以及错误行附近片段，便于定位
+        line = e.lineno
+        col = e.colno
+
+        lines = text.splitlines()
+        # 取错误行上下各 2 行（可按需调）
+        start = max(0, line - 3)
+        end = min(len(lines), line + 2)
+
+        snippet = []
+        for i in range(start, end):
+            prefix = ">>" if (i + 1) == line else "  "
+            snippet.append(f"{prefix} {i+1:>4}: {lines[i]}")
+
+        snippet_text = "\n".join(snippet)
+
+        raise ValueError(
+            f"❌ JSON 格式错误：{path}\n"
+            f"位置：第 {line} 行，第 {col} 列\n"
+            f"原因：{e.msg}\n"
+            f"附近内容：\n{snippet_text}\n"
+        ) from None
+
     return ensure_flat_json(obj, path)
 
 
