@@ -428,7 +428,7 @@ def read_json(path: Path) -> Dict[str, Any]:
 JSON_INDENT = 4
 
 def json_pretty(obj: Dict[str, Any]) -> str:
-    return json.dumps(obj, ensure_ascii=False, indent=JSON_INDENT) + "\n"
+    return json.dumps(obj, ensure_ascii=False, indent=JSON_INDENT)
 
 
 def write_json(path: Path, data_obj: Dict[str, Any]) -> None:
