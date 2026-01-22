@@ -586,6 +586,34 @@ def run_clean(cfg: I18nConfig) -> None:
     print("✅ clean（当前为最小骨架）完成")
 
 
+def delete_bad_name_files(cfg: I18nConfig) -> int:
+    """
+    删除命名不规范的 *.i18n.json 文件（安全删除：先生成 .bak 再删除）。
+    返回删除的文件数量。
+    """
+    deleted = 0
+    issues = check_i18n_naming_and_existence(cfg)
+
+    for it in issues:
+        if it.kind != "bad_name" or not it.path:
+            continue
+
+        src = it.path
+        if not src.exists() or not src.is_file():
+            continue
+
+        if not src.name.endswith(I18N_FILE_SUFFIX):
+            continue
+
+        try:
+            backup_file(src)
+            src.unlink()
+            print(f"✅ 删除（已备份 .bak）：{src}")
+            deleted += 1
+        except Exception as e:
+            print(f"⚠️ 删除失败：{src}，原因：{e}")
+
+    return deleted
 def run_doctor(cfg: I18nConfig) -> int:
     if not cfg.i18n_dir.exists():
         print(f"❌ i18nDir 不存在：{cfg.i18n_dir}")
@@ -601,7 +629,7 @@ def run_doctor(cfg: I18nConfig) -> int:
         where = f" ({it.path})" if it.path else ""
         print(f"❌ [{it.kind}] {it.message}{where}")
 
-    # 如果存在缺失文件，提示是否 sync
+    # 1) 缺失文件 -> 是否 sync
     has_missing = any(it.kind == "missing" for it in issues)
     if has_missing:
         try:
@@ -613,16 +641,30 @@ def run_doctor(cfg: I18nConfig) -> int:
             created = sync_i18n_files(cfg)
             print(f"✅ sync 完成：创建 {created} 个缺失文件\n")
 
-            # 再检查一次
-            issues2 = check_i18n_naming_and_existence(cfg)
-            if not issues2:
-                print("✅ doctor 通过")
-                return 0
+    # 2) bad_name -> 是否删除（不重命名）
+    issues = check_i18n_naming_and_existence(cfg)
+    has_bad_name = any(it.kind == "bad_name" for it in issues)
+    if has_bad_name:
+        try:
+            ans = input(
+                "\n检测到不符合规范命名的语言文件，是否删除？"
+                "（将先生成 .bak 备份）(y/N) "
+            ).strip().lower()
+        except EOFError:
+            ans = ""
 
-            for it in issues2:
-                where = f" ({it.path})" if it.path else ""
-                print(f"❌ [{it.kind}] {it.message}{where}")
+        if ans in ("y", "yes"):
+            deleted = delete_bad_name_files(cfg)
+            print(f"✅ delete 完成：删除 {deleted} 个文件（均已备份）\n")
 
-            return 1
+    # 3) 最终检查
+    final_issues = check_i18n_naming_and_existence(cfg)
+    if not final_issues:
+        print("✅ doctor 通过")
+        return 0
+
+    for it in final_issues:
+        where = f" ({it.path})" if it.path else ""
+        print(f"❌ [{it.kind}] {it.message}{where}")
 
     return 1
