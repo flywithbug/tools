@@ -356,22 +356,26 @@ def ensure_flat_json(obj: Any, file_path: Path) -> Dict[str, Any]:
 
 
 def sort_json_keys(data_obj: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    - @@locale 永远第一（如果存在）
-    - 其它 key 按字典序
-    """
-    if LOCALE_META_KEY in data_obj:
-        meta_val = data_obj[LOCALE_META_KEY]
-        rest_items: List[Tuple[str, Any]] = sorted(
-            ((k, v) for k, v in data_obj.items() if k != LOCALE_META_KEY),
-            key=lambda kv: kv[0],
-        )
-        out: Dict[str, Any] = {LOCALE_META_KEY: meta_val}
-        out.update(dict(rest_items))
-        return out
+    out: Dict[str, Any] = {}
 
-    # 没有 @@locale 就纯字典序（不强行补）
-    return dict(sorted(data_obj.items(), key=lambda kv: kv[0]))
+    # 1) @@locale 永远第一（如果存在）
+    if LOCALE_META_KEY in data_obj:
+        out[LOCALE_META_KEY] = data_obj[LOCALE_META_KEY]
+
+    # 2) 其它 @@*（排除 @@locale）按字典序
+    other_meta = sorted(
+        ((k, v) for k, v in data_obj.items() if is_meta_key(k) and k != LOCALE_META_KEY),
+        key=lambda kv: kv[0],
+    )
+    out.update(dict(other_meta))
+
+    # 3) 普通 key 按字典序
+    normal = sorted(
+        ((k, v) for k, v in data_obj.items() if not is_meta_key(k)),
+        key=lambda kv: kv[0],
+    )
+    out.update(dict(normal))
+    return out
 
 
 def read_json(path: Path) -> Dict[str, Any]:
