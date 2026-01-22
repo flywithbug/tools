@@ -364,34 +364,24 @@ def ensure_flat_json(obj: Any, file_path: Path) -> Dict[str, Any]:
 
     return obj
 
-
 def sort_json_keys(data_obj: Dict[str, Any]) -> Dict[str, Any]:
     """
     排序规则：
-    1) @@locale 固定第一（如果存在）
-    2) 其它 @@* 元字段按 key 字典序排在顶部
-    3) 普通 key 按 key 字典序排在后面
+    1) 所有 @@* 元字段按 key 字典序排在顶部（不再固定 @@locale 第一）
+    2) 普通 key 按 key 字典序排在后面
     """
-    out: Dict[str, Any] = {}
-
-    # 1) @@locale 固定第一
-    if LOCALE_META_KEY in data_obj:
-        out[LOCALE_META_KEY] = data_obj[LOCALE_META_KEY]
-
-    # 2) 其它 @@*（排除 @@locale）字典序
-    other_meta_items: List[Tuple[str, Any]] = sorted(
-        ((k, v) for k, v in data_obj.items() if is_meta_key(k) and k != LOCALE_META_KEY),
+    meta_items: List[Tuple[str, Any]] = sorted(
+        ((k, v) for k, v in data_obj.items() if is_meta_key(k)),
         key=lambda kv: kv[0],
     )
-    out.update(dict(other_meta_items))
-
-    # 3) 普通 key 字典序
     normal_items: List[Tuple[str, Any]] = sorted(
         ((k, v) for k, v in data_obj.items() if not is_meta_key(k)),
         key=lambda kv: kv[0],
     )
-    out.update(dict(normal_items))
 
+    out: Dict[str, Any] = {}
+    out.update(dict(meta_items))
+    out.update(dict(normal_items))
     return out
 
 
