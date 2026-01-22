@@ -1,396 +1,234 @@
+# box_slang_i18n 产品需求文档（PRD）
 
----
-
-# A. 需求文档（PRD）
-
-## 1. 项目背景与目标
+## 1. 背景与定位
 
 ### 1.1 背景
 
-Flutter 项目使用 `slang` / `slang_flutter` 管理多语言资源，随着项目增长，出现以下问题：
+在 Flutter 多语言项目中，基于 `slang` 的 i18n JSON 文件往往存在以下长期痛点：
 
-* 多语言 JSON 文件结构不统一
-* 多业务模块下文件命名混乱
-* 翻译过程重复、不可控
-* 冗余 key 长期积累
-* 语言风格无法统一约束
-* 缺少 CI 可用的校验工具
+* key 数量庞大，排序与结构不统一
+* 配置文件（如 slang_i18n.yaml）容易缺失或被误改
+* 多语言增量翻译成本高，重复劳动严重
+* 多人协作时，i18n 目录结构与语言文件质量难以保持一致
 
-### 1.2 目标
+### 1.2 工具定位
 
-构建一个 **Flutter i18n 多语言资源管理与 AI 翻译 CLI 工具**，用于：
+`box_slang_i18n` 是一个 **CLI 工具**，隶属于 `box` 工具集，专注于 **Flutter slang i18n 资源的生命周期管理**：
 
-* 统一创建与维护 slang 兼容的多语言 JSON
-* 强制结构规范（flat + `@@locale`）
-* 支持单业务 / 多业务模块
-* 提供增量翻译能力（基于 AI）
-* 检测并清理冗余 key
-* 支持 CI 校验（doctor / check）
+* 初始化（init）
+* 结构与环境诊断（doctor）
+* 排序与规范化（sort）
+* AI 辅助翻译（translate）
 
----
+该工具强调：
 
-## 2. 非目标（明确不做）
-
-* ❌ 不生成 Dart / slang 代码
-* ❌ 不修改 Dart 源码
-* ❌ 不支持嵌套 JSON
-* ❌ 不做 GUI
-* ❌ 不自动重命名业务 key
+* 强约定、可诊断、可自动修复
+* 保留人工可读性（保留注释、不破坏格式）
+* 增量优先，避免无意义全量改动
 
 ---
 
-## 3. 配置文件（slang_i18n.yaml）
+## 2. 设计原则
 
-### 3.1 配置结构（已冻结）
+1. **配置即真相**
 
-```yaml
-i18nDir: i18n
+    * 一切行为以 `slang_i18n.yaml` 为中心
+    * CLI 参数仅作为覆盖，不隐式修改配置
 
-source_locale:
-  code: en
-  name_en: English
+2. **安全默认值**
 
-target_locales:
-  - code: zh_hans
-    name_en: Simplified Chinese
-  - code: zh_hant
-    name_en: Traditional Chinese
-  - code: ja
-    name_en: Japanese
+    * 默认不做破坏性操作
+    * 翻译默认增量模式
 
-openAIModel: gpt-4o
+3. **可诊断性优先**
 
-prompt_by_locale:
-  zh_hant: |
-    Use Traditional Chinese.
-    Prefer Taiwan-style UI wording.
-  ja: |
-    Use natural Japanese UI expressions.
+    * 所有失败都给出可行动的提示
+    * `doctor` 是一等公民
 
-options:
-  sort_keys: true
-  incremental_translate: true
-  cleanup_extra_keys: true
-  normalize_filenames: true
-```
+4. **静态声明，动态执行**
 
-### 3.2 配置语义
-
-* `source_locale`：**唯一权威语言**
-* `target_locales`：只允许 source → target
-* `prompt_by_locale`：翻译 system prompt 的附加约束
-* `i18nDir`：多语言根目录
+    * 工具元信息（BOX_TOOL）必须是纯静态字面量
+    * 运行期逻辑全部在 CLI 内完成
 
 ---
 
-## 4. 强约束规则（不可违反）
+## 3. 用户画像与使用场景
 
-### 4.1 JSON 必须平铺（Flat JSON Only）
+### 3.1 用户画像
 
-**合法**
+* Flutter 工程师
+* 使用 slang / JSON 作为 i18n 方案
+* 中大型项目（10+ 语言）
+* 对工具可控性与可维护性有要求
 
-```json
-{
-  "@@locale": "en",
-  "home_title": "Home"
-}
-```
+### 3.2 典型场景
 
-**非法**
-
-```json
-{
-  "home": { "title": "Home" }
-}
-```
-
-规则：
-
-* 顶层 object
-* value 只能是 string
-* 禁止 object / array / 任意嵌套
+* 新项目初始化 i18n 目录
+* CI 前对 i18n 文件做结构校验
+* 日常新增 key 后做排序
+* 翻译新语言或补齐缺失翻译
 
 ---
 
-### 4.2 `@@locale` 元字段（强制）
+## 4. 功能需求
 
-* 每个 JSON 文件必须包含：
+### 4.1 init —— 初始化与配置校验
 
-```json
-"@@locale": "<locale_code>"
-```
+#### 目标
 
-* 规则：
+* 降低项目首次接入 slang i18n 的成本
+* 确保配置文件与目录结构一致
 
-    * 顶层字段
-    * 第一个 key
-    * value 必须与文件名 locale 一致
-* `@@locale`：
+#### 行为
 
-    * 不参与翻译
-    * 不参与冗余检查
-    * 不允许被删除
+* 若 `slang_i18n.yaml` 不存在：
 
----
+    * 生成默认模板（保留注释）
+* 若存在：
 
-## 5. 目录结构与文件命名
+    * 校验 YAML 合法性
+* 确保：
 
-### 5.1 模式判定
+    * `languages.json` 存在
+    * `i18nDir` 目录存在（必要时创建）
 
-* `i18nDir` 下无子目录 → **单业务模式**
-* `i18nDir` 下有子目录 → **多业务模式**
+#### 失败情况
 
----
-
-### 5.2 单业务模式
-
-```text
-i18n/
-  en.json
-  zh_hans.json
-  ja.json
-```
-
-命名规则：
-
-```
-{{locale}}.json
-```
+* YAML 语法错误 → 明确指出行号
+* 路径无权限 → 给出修复建议
 
 ---
 
-### 5.3 多业务模式
+### 4.2 doctor —— 环境与结构诊断
 
-```text
-i18n/
-  home/
-  trade/
-```
+#### 目标
 
-#### 命名推断规则
+* 在执行破坏性操作前，提前暴露问题
 
-1. 扫描是否存在 `*_{{locale}}.json`
-2. 若存在：
+#### 检查项
 
-    * 使用已有 prefix
-3. 若不存在：
+* 配置文件是否存在且合法
+* i18n 目录结构是否符合约定
+* JSON 文件是否可解析
+* 是否存在非法 key（如 @@locale 冲突）
+* flat / nested 结构一致性
 
-    * 使用目录名作为 prefix
+#### 输出
 
-文件模板：
-
-```
-{{prefix}}_{{locale}}.json
-```
-
-#### 创建顺序（强制）
-
-1. 创建 source locale 文件
-2. 创建 target locale 文件
-
-#### 冲突
-
-* 同目录多个 prefix → doctor 报错
-* 不自动猜测
+* 明确区分：error / warn / hint
+* 所有问题必须可定位、可修复
 
 ---
 
-## 6. CLI 功能需求
+### 4.3 sort —— i18n 文件排序
 
-### CLI 菜单（冻结）
+#### 目标
 
-```
-("1", "sort",      "排序"),
-("2", "translate", "翻译（默认增量）"),
-("3", "check",     "检查冗余"),
-("4", "clean",     "删除冗余"),
-("5", "doctor",    "环境诊断"),
-("6", "init",      "生成/校验配置"),
-("0", "exit"),
-```
+* 降低 diff 噪音
+* 保持多语言 key 顺序一致
 
----
+#### 行为
 
-### 6.1 init
+* 读取 source language（通常为 baseLocale）
+* 按工具规则排序 key
+* 同步排序所有 target language
+* 保留原有注释与格式
 
-* 生成或校验配置文件
-* 创建 i18nDir（可选）
-* 创建 source locale 文件（含 `@@locale`）
+#### 非目标
+
+* 不修改 key 内容
+* 不自动删除 key
 
 ---
 
-### 6.2 sort
+### 4.4 translate —— AI 翻译
 
-* `@@locale` 永远第一
-* 其他 key 按字典序
-* 若发现嵌套 JSON → 拒绝执行
+#### 模式
 
----
+##### 增量模式（默认）
 
-### 6.3 translate
+* 仅翻译缺失 key
+* 不覆盖已有翻译
+* 自动跳过 @@locale
 
-* 默认 **增量翻译**
-* 排除 `@@locale`
-* 使用 OpenAI 翻译底座
-* 若发现嵌套 → 拒绝执行
+##### 全量模式（--no-incremental）
 
----
+* 以 source 为准
+* 覆盖生成 target 翻译
 
-### 6.4 check
+#### 依赖
 
-* 冗余定义：
+* OpenAI API
+* 明确失败重试与速率限制提示
 
-  ```
-  target_keys - source_keys
-  ```
-* 排除 `@@locale`
-* 发现嵌套：
+#### 安全性
 
-    * 提示平铺
-    * 返回失败状态（CI）
+* 明确告知：翻译结果需人工 review
 
 ---
 
-### 6.5 clean
+## 5. CLI 设计
 
-* 删除冗余 key
-* 删除前备份
-* 永不删除 `@@locale`
-* 删除后自动 sort
+### 5.1 命令
 
----
+* `box_slang_i18n`
+* `box_slang_i18n init`
+* `box_slang_i18n sort`
+* `box_slang_i18n doctor`
+* `box_slang_i18n translate`
 
-### 6.6 doctor
+### 5.2 全局参数
 
-必须检查：
-
-* 配置合法性
-* 目录结构
-* prefix 冲突
-* JSON 是否平铺
-* `@@locale` 是否存在
-* `@@locale` 与文件名是否一致
-* OpenAI API Key（如需翻译）
+* `--config`：配置文件路径（默认 slang_i18n.yaml）
+* `--project-root`：项目根目录（默认当前目录）
+* `--i18n-dir`：覆盖配置中的 i18nDir
 
 ---
 
-# B. 技术设计与架构文档（Tech Design）
+## 6. 元信息与发布约束
 
-## 1. 设计目标
+### 6.1 BOX_TOOL 约束
 
-* 与现有 `box_tools` 工具体系一致
-* tool.py 保持“瘦”
-* 核心规则集中
-* 高可测试性
-* 易于扩展（未来翻译引擎 / ICU）
+* 必须为 **纯字面量 dict**
+* 禁止：
 
----
+    * f-string
+    * 变量引用
+    * 函数调用
 
-## 2. 组件位置
+### 6.2 工具集集成
 
-```
-box_tools/flutter/slang_i18n/
-```
-
----
-
-## 3. 目录结构（最终推荐）
-
-```
-slang_i18n/
-├── README.md
-├── __init__.py
-├── tool.py                 # CLI 入口
-├── models.py               # 纯数据模型
-├── config.py               # 配置加载与校验
-├── layout.py               # 目录扫描与 prefix 推断
-├── json_ops.py             # JSON flat / @@locale / 排序
-├── actions_core.py         # sort / check / clean / doctor / init
-├── actions_translate.py    # translate（单独）
-```
+* 通过 `box tools` 可发现
+* `box tools --full` 展示完整 usage / options / examples
+* 更新通过 `box update`
 
 ---
 
-## 4. Model 层设计原则
+## 7. 非功能性需求
 
-* 只使用 `@dataclass`
-* 不做 IO
-* 不执行业务
-* 三类模型：
-
-    1. Config Model
-    2. Layout / Group Model
-    3. JsonFileState Model
+* 启动速度 < 300ms（不含翻译）
+* 错误信息必须中文、可执行
+* 所有默认行为必须可预测
 
 ---
 
-## 5. Actions 拆分原则（已确认）
+## 8. 不在本期范围（明确排除）
 
-### actions_core.py
-
-包含：
-
-* run_init
-* run_sort
-* run_check
-* run_clean
-* run_doctor
-
-特点：
-
-* 不依赖 OpenAI
-* 可用于 CI
-* 低风险操作
+* GUI 界面
+* 自动提交 git
+* 自动发布 slang 代码生成
+* 翻译质量保证（仅提供工具能力）
 
 ---
 
-### actions_translate.py
+## 9. 成功标准
 
-包含：
-
-* run_translate
-
-特点：
-
-* 唯一调用 OpenAI
-* 高风险、高成本
-* 强前置校验
+* 新项目 5 分钟内完成 i18n 初始化
+* 日常 i18n 维护不再依赖手工排序
+* 翻译流程从“人工 copy-paste”变为“review 为主”
 
 ---
 
-## 6. tool.py 职责边界
+## 10. 结语
 
-tool.py 只负责：
-
-* BOX_TOOL 定义
-* argparse
-* 菜单交互
-* action 分发
-
-不负责：
-
-* 目录扫描
-* JSON 处理
-* 翻译逻辑
-
----
-
-## 7. 核心设计原则（冻结）
-
-* **结构优先于翻译**
-* **source locale 是唯一真理**
-* **默认增量**
-* **translate 必须隔离**
-* **doctor / check 可作为 CI gate**
-* **所有规则集中，不分散**
-
----
-
-## 8. 当前状态
-
-✅ 需求已完整
-✅ 技术架构已确定
-✅ 与现有工具体系完全对齐
-✅ 可直接进入开发
-
----
+`box_slang_i18n` 不是“又一个翻译工具”，而是一个 **对 i18n 混乱保持零容忍的工程化助手**。它的价值不在于“做得多”，而在于“永远做对、做稳、做可解释的事”。

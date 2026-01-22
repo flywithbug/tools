@@ -425,10 +425,15 @@ def read_json(path: Path) -> Dict[str, Any]:
 
     return ensure_flat_json(obj, path)
 
+JSON_INDENT = 4
+
+def json_pretty(obj: Dict[str, Any]) -> str:
+    return json.dumps(obj, ensure_ascii=False, indent=JSON_INDENT) + "\n"
+
 
 def write_json(path: Path, data_obj: Dict[str, Any]) -> None:
     ensure_flat_json(data_obj, path)
-    path.write_text(json.dumps(data_obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json_pretty(data_obj), encoding="utf-8")
 
 
 # ----------------------------
@@ -560,7 +565,8 @@ def sync_i18n_files(cfg: I18nConfig) -> int:
 
         obj: Dict[str, Any] = {LOCALE_META_KEY: code}
         obj = sort_json_keys(obj)  # 确保 @@locale 固定第一
-        p.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        p.write_text(json_pretty(obj), encoding="utf-8")
+
         created += 1
 
     return created
@@ -624,7 +630,8 @@ def delete_redundant_keys(redundant: List[RedundantKeyIssue]) -> int:
             obj.pop(k, None)
 
         obj = sort_json_keys(obj)
-        fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        fp.write_text(json_pretty(obj), encoding="utf-8")
+
 
         affected += 1
     return affected
@@ -653,7 +660,8 @@ def run_sort(cfg: I18nConfig) -> None:
         data_obj = read_json(fp)
         sorted_obj = sort_json_keys(data_obj)
 
-        new_text = json.dumps(sorted_obj, ensure_ascii=False, indent=2) + "\n"
+        new_text = json_pretty(sorted_obj)
+
         if new_text != original:
             fp.write_text(new_text, encoding="utf-8")
             changed += 1
