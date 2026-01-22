@@ -14,7 +14,9 @@ import yaml
 # ----------------------------
 DEFAULT_TEMPLATE_NAME = "slang_i18n.yaml"   # 内置模板文件（带注释）
 DEFAULT_LANGUAGES_NAME = "languages.json"  # 本地语言列表文件
+
 LOCALE_META_KEY = "@@locale"               # i18n json 的 meta key（固定第一位）
+I18N_FILE_SUFFIX = ".i18n.json"            # 业务文件后缀
 
 
 # ----------------------------
@@ -175,7 +177,7 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
     # 3) 校验配置（此处不强制要求 i18nDir 已存在，因为 init 会创建）
     raw = assert_config_ok(cfg_path, project_root=project_root, check_i18n_dir_exists=False)
 
-    # 4)创建 i18nDir 目录（按 project_root 解析）
+    # 4) 创建 i18nDir 目录（按 project_root 解析）
     i18n_dir_path = (project_root / raw["i18nDir"]).resolve()
     i18n_dir_path.mkdir(parents=True, exist_ok=True)
 
@@ -327,7 +329,7 @@ def validate_config(raw: Dict) -> None:
 
 
 # ----------------------------
-# JSON 读写 + flat 校验 + key 排序
+# JSON 扫描 + flat 校验 + 排序
 # ----------------------------
 def list_locale_files(i18n_dir: Path) -> List[Path]:
     if not i18n_dir.exists():
@@ -355,7 +357,6 @@ def ensure_flat_json(obj: Any, file_path: Path) -> Dict[str, Any]:
             raise ValueError(f"检测到嵌套 JSON（不允许）：{file_path} key={k}")
 
         if is_meta_key(k):
-            # @@* 元字段不强制 string 类型
             continue
 
         if v is not None and not isinstance(v, str):
@@ -405,6 +406,141 @@ def write_json(path: Path, data_obj: Dict[str, Any]) -> None:
 
 
 # ----------------------------
+# i18n 文件命名规范检查（用于 doctor / sync）
+# folderName = 文件夹名转 lowerCamelCase
+# 文件名：{{folderName}}_{{code}}.i18n.json
+# ----------------------------
+def to_lower_camel(folder: str) -> str:
+    """
+    folder -> lowerCamelCase
+    分隔符：任何非字母数字（_ - 空格 等）
+    """
+    s = folder.strip()
+    if not s:
+        return s
+
+    parts = [p for p in re.split(r"[^0-9A-Za-z]+", s) if p]
+    if not parts:
+        return s
+
+    cap = [p[:1].upper() + p[1:].lower() if p else "" for p in parts]
+    joined = "".join(cap)
+    return joined[:1].lower() + joined[1:]
+
+
+def expected_i18n_filename(module_dir: Path, locale_code: str) -> str:
+    folder_name = to_lower_camel(module_dir.name)
+    return f"{folder_name}_{locale_code}{I18N_FILE_SUFFIX}"
+
+
+def list_module_dirs(i18n_dir: Path) -> List[Path]:
+    if not i18n_dir.exists():
+        return []
+    return sorted([p for p in i18n_dir.iterdir() if p.is_dir()])
+
+
+def all_locale_codes(cfg: I18nConfig) -> List[str]:
+    codes = [cfg.source_locale.code] + [t.code for t in cfg.target_locales]
+    seen = set()
+    out: List[str] = []
+    for c in codes:
+        if c in seen:
+            continue
+        seen.add(c)
+        out.append(c)
+    return out
+
+
+@dataclass
+class DoctorIssue:
+    kind: str        # "missing" | "bad_name" | "no_module_dirs"
+    message: str
+    path: Optional[Path] = None
+
+
+def check_i18n_naming_and_existence(cfg: I18nConfig) -> List[DoctorIssue]:
+    """
+    doctor 用检查：
+    - i18nDir 下必须有业务子目录（模块目录）
+    - 每个模块目录下，每个 locale 必须存在规范文件名：{folderName}_{code}.i18n.json
+    - 目录内出现 *.json 但不是规范命名的文件 -> 报 bad_name（不自动改名）
+    """
+    issues: List[DoctorIssue] = []
+
+    module_dirs = list_module_dirs(cfg.i18n_dir)
+    if not module_dirs:
+        issues.append(DoctorIssue(
+            kind="no_module_dirs",
+            message=f"i18nDir 下未发现任何业务子目录：{cfg.i18n_dir}",
+            path=cfg.i18n_dir,
+        ))
+        return issues
+
+    locale_codes = all_locale_codes(cfg)
+
+    for md in module_dirs:
+        expected_names = {expected_i18n_filename(md, code) for code in locale_codes}
+
+        # 1) 检查目录内非规范 json 文件（保守策略：看到 *.json 就要求符合规范）
+        for fp in sorted(md.glob("*.json")):
+            if fp.name not in expected_names:
+                issues.append(DoctorIssue(
+                    kind="bad_name",
+                    message=(
+                        f"文件名不符合规范：{fp.name}；应为 "
+                        f"{to_lower_camel(md.name)}_{{code}}{I18N_FILE_SUFFIX}"
+                    ),
+                    path=fp,
+                ))
+
+        # 2) 检查缺失文件
+        for code in locale_codes:
+            expected = md / expected_i18n_filename(md, code)
+            if not expected.exists():
+                issues.append(DoctorIssue(
+                    kind="missing",
+                    message=f"缺少语言文件：{expected.name}",
+                    path=expected,
+                ))
+
+    return issues
+
+
+def sync_i18n_files(cfg: I18nConfig) -> int:
+    """
+    自动创建缺失的语言文件（仅处理 kind=missing）：
+    - 文件名按规范：{folderName}_{code}.i18n.json
+    - 内容最小化：只写 @@locale（并保证 @@locale 第一行）
+    返回创建的文件数量
+    """
+    created = 0
+    issues = check_i18n_naming_and_existence(cfg)
+
+    for it in issues:
+        if it.kind != "missing" or not it.path:
+            continue
+
+        p = it.path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if p.exists():
+            continue
+
+        name = p.name
+        if not name.endswith(I18N_FILE_SUFFIX):
+            code = cfg.source_locale.code
+        else:
+            base = name[: -len(I18N_FILE_SUFFIX)]  # 去掉 .i18n.json
+            code = base.split("_")[-1] if "_" in base else cfg.source_locale.code
+
+        obj: Dict[str, Any] = {LOCALE_META_KEY: code}
+        obj = sort_json_keys(obj)  # 确保 @@locale 固定第一
+        p.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        created += 1
+
+    return created
+
+
+# ----------------------------
 # actions
 # ----------------------------
 def run_sort(cfg: I18nConfig) -> None:
@@ -438,7 +574,7 @@ def backup_file(path: Path) -> Path:
 
 
 def run_check(cfg: I18nConfig) -> int:
-    # 目前先保留最小骨架：保证 JSON 可读且 flat（含 @@* 宽松规则）
+    # 最小骨架：保证 JSON 可读且 flat（含 @@* 宽松规则）
     for fp in list_locale_files(cfg.i18n_dir):
         read_json(fp)
     print("✅ check（当前为最小骨架）通过")
@@ -446,7 +582,7 @@ def run_check(cfg: I18nConfig) -> int:
 
 
 def run_clean(cfg: I18nConfig) -> None:
-    # 目前先保留最小骨架
+    # 最小骨架
     print("✅ clean（当前为最小骨架）完成")
 
 
@@ -454,5 +590,39 @@ def run_doctor(cfg: I18nConfig) -> int:
     if not cfg.i18n_dir.exists():
         print(f"❌ i18nDir 不存在：{cfg.i18n_dir}")
         return 1
-    print("✅ doctor（当前为最小骨架）通过")
-    return 0
+
+    issues = check_i18n_naming_and_existence(cfg)
+    if not issues:
+        print("✅ doctor 通过")
+        return 0
+
+    # 先打印全部问题
+    for it in issues:
+        where = f" ({it.path})" if it.path else ""
+        print(f"❌ [{it.kind}] {it.message}{where}")
+
+    # 如果存在缺失文件，提示是否 sync
+    has_missing = any(it.kind == "missing" for it in issues)
+    if has_missing:
+        try:
+            ans = input("\n检测到缺失语言文件，是否执行 sync 自动创建？(y/N) ").strip().lower()
+        except EOFError:
+            ans = ""
+
+        if ans in ("y", "yes"):
+            created = sync_i18n_files(cfg)
+            print(f"✅ sync 完成：创建 {created} 个缺失文件\n")
+
+            # 再检查一次
+            issues2 = check_i18n_naming_and_existence(cfg)
+            if not issues2:
+                print("✅ doctor 通过")
+                return 0
+
+            for it in issues2:
+                where = f" ({it.path})" if it.path else ""
+                print(f"❌ [{it.kind}] {it.message}{where}")
+
+            return 1
+
+    return 1
