@@ -5,7 +5,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import yaml
 
@@ -16,14 +16,12 @@ DEFAULT_TEMPLATE_NAME = "slang_i18n.yaml"   # 内置模板文件（带注释）
 DEFAULT_LANGUAGES_NAME = "languages.json"  # 本地语言列表文件
 LOCALE_META_KEY = "@@locale"               # i18n json 的 meta key（如果你后面要用到）
 
-
 # ----------------------------
 # 异常类型
 # ----------------------------
 class ConfigError(RuntimeError):
     """用于启动阶段的配置错误（更友好的报错与解决建议）"""
     pass
-
 
 # ----------------------------
 # 数据模型（按你的默认模板 schema）
@@ -36,7 +34,7 @@ class Locale:
 
 @dataclass(frozen=True)
 class I18nConfig:
-    i18n_dir: Path
+    i18n_dir: Path                 # 这里存“绝对路径”（已按 project_root 解析）
     source_locale: Locale
     target_locales: List[Locale]
     openai_model: str
@@ -47,7 +45,7 @@ class I18nConfig:
 
 def override_i18n_dir(cfg: I18nConfig, i18n_dir: Path) -> I18nConfig:
     return I18nConfig(
-        i18n_dir=i18n_dir,
+        i18n_dir=i18n_dir.resolve(),
         source_locale=cfg.source_locale,
         target_locales=cfg.target_locales,
         openai_model=cfg.openai_model,
@@ -55,7 +53,6 @@ def override_i18n_dir(cfg: I18nConfig, i18n_dir: Path) -> I18nConfig:
         prompts=cfg.prompts,
         options=cfg.options,
     )
-
 
 # ----------------------------
 # 内置文件读取（模板 / 默认 languages）
@@ -75,7 +72,7 @@ def ensure_languages_json(project_root: Path) -> Path:
 
     src = _pkg_file(DEFAULT_LANGUAGES_NAME)
     if not src.exists():
-        raise FileNotFoundError(f"内置默认 languages.json 不存在：{src}")
+        raise FileNotFoundError(f"内置默认 {DEFAULT_LANGUAGES_NAME} 不存在：{src}")
 
     dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
     return dst
@@ -89,7 +86,7 @@ def load_target_locales_from_languages_json(languages_path: Path, source_code: s
     """
     arr = json.loads(languages_path.read_text(encoding="utf-8"))
     if not isinstance(arr, list):
-        raise ValueError("languages.json 顶层必须是数组")
+        raise ValueError(f"{DEFAULT_LANGUAGES_NAME} 顶层必须是数组")
 
     seen = set()
     out: List[Dict[str, str]] = []
@@ -110,7 +107,6 @@ def load_target_locales_from_languages_json(languages_path: Path, source_code: s
 
     return out
 
-
 # ----------------------------
 # YAML 模板“保注释”局部替换：只替换 target_locales block
 # ----------------------------
@@ -125,19 +121,16 @@ def _yaml_block_for_target_locales(locales: List[Dict[str, str]]) -> str:
 def replace_target_locales_block(template_text: str, new_locales: List[Dict[str, str]]) -> str:
     """
     仅替换模板中 `target_locales:` 段落的内容，其他注释/排版保留。
-    匹配规则：从 `target_locales:` 开始，吃掉其后的所有缩进行（列表项、注释、空行），直到遇到下一段顶层 key。
+    匹配规则：从 `target_locales:` 开始，替换到下一个顶层 key 之前。
     """
     new_block = _yaml_block_for_target_locales(new_locales)
 
-    # 方案：找到 target_locales 段开始位置，然后找到“下一个顶层 key”位置作为段落结束。
-    # 顶层 key 简化匹配：行首非空白 + 某些字符 + 冒号
     start_match = re.search(r"(?m)^target_locales:\s*$", template_text)
     if not start_match:
         raise ValueError("模板中未找到 target_locales: 段落")
 
     start = start_match.start()
 
-    # 从 start 往后找下一段顶层 key（排除 target_locales 自己）
     after = template_text[start_match.end():]
     next_key = re.search(r"(?m)^(?!target_locales:)[A-Za-z_][A-Za-z0-9_]*:\s*$", after)
 
@@ -146,13 +139,11 @@ def replace_target_locales_block(template_text: str, new_locales: List[Dict[str,
     else:
         end = len(template_text)
 
-    # 计算替换区间：从 start 行开始到 end
-    # 但我们要替换的是整个 target_locales block，所以应从 start 行起替换到 end
     return template_text[:start] + new_block + template_text[end:]
 
 
 # ----------------------------
-# init：生成/校验配置，确保 languages.json 存在
+# init：生成/校验配置，确保 languages.json + i18nDir 存在
 # ----------------------------
 def init_config(project_root: Path, cfg_path: Path) -> None:
     project_root = project_root.resolve()
@@ -169,7 +160,7 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
 
         tpl_text = tpl.read_text(encoding="utf-8")
         raw_tpl = yaml.safe_load(tpl_text) or {}
-        validate_config(raw_tpl)  # 模板自身也要合法
+        validate_config(raw_tpl)  # 模板自身也要合法（必须包含 i18nDir）
 
         source_code = raw_tpl["source_locale"]["code"]
         targets = load_target_locales_from_languages_json(languages_path, source_code)
@@ -177,20 +168,32 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
         out_text = replace_target_locales_block(tpl_text, targets)
         cfg_path.write_text(out_text, encoding="utf-8")
 
-    # 3) 无论是否新建，都做一次校验（不重写，保留用户注释/排版）
-    assert_config_ok(cfg_path)
+    # 3) 校验配置（此处不强制要求 i18nDir 已存在，因为 init 会创建）
+    raw = assert_config_ok(cfg_path, project_root=project_root, check_i18n_dir_exists=False)
+
+    # 4) 创建 i18nDir 目录（按 project_root 解析）
+    i18n_dir_path = (project_root / raw["i18nDir"]).resolve()
+    i18n_dir_path.mkdir(parents=True, exist_ok=True)
 
 
 # ----------------------------
-# 启动优先校验入口
+# 启动优先校验入口（可选检查 i18nDir 是否存在）
 # ----------------------------
-def assert_config_ok(cfg_path: Path) -> Dict:
+def assert_config_ok(
+        cfg_path: Path,
+        project_root: Optional[Path] = None,
+        check_i18n_dir_exists: bool = True,
+) -> Dict:
     """
     启动时优先校验：
     - 文件存在性
     - YAML 可解析
     - schema + 语义校验
+    - （可选）i18nDir 目录存在性
     """
+    cfg_path = cfg_path.resolve()
+    project_root = (project_root or cfg_path.parent).resolve()
+
     if not cfg_path.exists():
         raise ConfigError(
             f"配置文件不存在：{cfg_path}\n"
@@ -215,16 +218,30 @@ def assert_config_ok(cfg_path: Path) -> Dict:
             f"解决方法：修复配置字段/类型，或运行 `box_slang_i18n init` 重新生成。"
         )
 
+    if check_i18n_dir_exists:
+        i18n_dir_path = (project_root / raw["i18nDir"]).resolve()
+        if not i18n_dir_path.exists() or not i18n_dir_path.is_dir():
+            raise ConfigError(
+                f"i18nDir 目录不存在：{i18n_dir_path}\n"
+                f"解决方法：\n"
+                f"  1) 创建目录：mkdir -p {i18n_dir_path}\n"
+                f"  2) 或运行 `box_slang_i18n init` 让工具初始化\n"
+                f"  3) 或修改 {cfg_path.name} 里的 i18nDir 指向正确目录"
+            )
+
     return raw
 
 
 # ----------------------------
-# load_config：把 raw dict 转成 I18nConfig
+# load_config：把 raw dict 转成 I18nConfig（i18n_dir 解析为绝对路径）
 # ----------------------------
-def load_config(cfg_path: Path) -> I18nConfig:
-    raw = assert_config_ok(cfg_path)
+def load_config(cfg_path: Path, project_root: Optional[Path] = None) -> I18nConfig:
+    cfg_path = cfg_path.resolve()
+    project_root = (project_root or cfg_path.parent).resolve()
 
-    i18n_dir = Path(str(raw.get("i18nDir", "i18n")))
+    raw = assert_config_ok(cfg_path, project_root=project_root, check_i18n_dir_exists=True)
+
+    i18n_dir = (project_root / raw["i18nDir"]).resolve()
 
     src = raw["source_locale"]
     targets = raw["target_locales"]
@@ -241,10 +258,10 @@ def load_config(cfg_path: Path) -> I18nConfig:
 
 
 # ----------------------------
-# validate_config：字段 + 类型 + 关键语义校验
+# validate_config：字段 + 类型 + 关键语义校验（新增 i18nDir）
 # ----------------------------
 def validate_config(raw: Dict) -> None:
-    required_top = ["openAIModel", "maxWorkers", "source_locale", "target_locales", "prompts", "options"]
+    required_top = ["openAIModel", "maxWorkers", "i18nDir", "source_locale", "target_locales", "prompts", "options"]
     for k in required_top:
         if k not in raw:
             raise ValueError(f"配置缺少字段：{k}")
@@ -256,6 +273,9 @@ def validate_config(raw: Dict) -> None:
     if not isinstance(mw, int) or mw < 0:
         raise ValueError("maxWorkers 必须是 0（自动）或正整数（固定并发）")
 
+    i18n_dir = raw["i18nDir"]
+    if not isinstance(i18n_dir, str) or not i18n_dir.strip():
+        raise ValueError("i18nDir 必须是非空字符串（例如 i18n）")
 
     src = raw["source_locale"]
     if not isinstance(src, dict):
@@ -281,11 +301,9 @@ def validate_config(raw: Dict) -> None:
             raise ValueError(f"target_locales[{i}].code/name_en 不能为空")
         codes.append(code)
 
-    # 语义：target code 唯一
     if len(set(codes)) != len(codes):
         raise ValueError("target_locales.code 存在重复，请去重")
 
-    # 语义：target 不应包含 source
     src_code = str(src["code"]).strip()
     if src_code in set(codes):
         raise ValueError("target_locales 里包含 source_locale.code，请移除（source 不能作为 target）")
@@ -328,15 +346,12 @@ def backup_file(path: Path) -> Path:
 
 
 def run_sort(cfg: I18nConfig) -> None:
-    # 先留空：你如果有 flat/@@locale/sort 规则，可在这里补齐
-    # 这里给个最小可运行版本：不做变更，只遍历验证 JSON 可读
     for fp in list_locale_files(cfg.i18n_dir):
         read_json(fp)
     print("✅ sort（当前为最小骨架）完成")
 
 
 def run_check(cfg: I18nConfig) -> int:
-    # 最小骨架：你可替换成 PRD 的 extra keys 检查逻辑
     for fp in list_locale_files(cfg.i18n_dir):
         read_json(fp)
     print("✅ check（当前为最小骨架）通过")
@@ -344,12 +359,10 @@ def run_check(cfg: I18nConfig) -> int:
 
 
 def run_clean(cfg: I18nConfig) -> None:
-    # 最小骨架：你可替换成 PRD 的 clean + backup + sort
     print("✅ clean（当前为最小骨架）完成")
 
 
 def run_doctor(cfg: I18nConfig) -> int:
-    # 最小骨架：先检查目录存在
     if not cfg.i18n_dir.exists():
         print(f"❌ i18nDir 不存在：{cfg.i18n_dir}")
         return 1
