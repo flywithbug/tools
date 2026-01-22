@@ -16,12 +16,9 @@ from .config import (
     default_config_path,
     ensure_languages_json,
     load_languages_json,
-    build_cfg_from_languages_json,
     generate_commented_yaml_template,
     load_config_yaml,
     parse_config_dict,
-    diff_config_with_languages,
-    update_cfg_targets_from_languages_json,
 )
 
 
