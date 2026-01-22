@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple
 
 from .models import RuntimeOptions
 from .actions_core import run_init, run_doctor, run_sort, run_check, run_clean
+from .config import ConfigError, default_config_path, load_config
 
 BOX_TOOL = {
     "id": "flutter.slang_i18n",
@@ -31,7 +32,6 @@ BOX_TOOL = {
     "docs": "README.md",
 }
 
-
 MENU: List[Tuple[str, str, str]] = [
     ("1", "sort", "排序（sort）"),
     ("2", "translate", "翻译（translate：默认增量）"),
@@ -41,19 +41,19 @@ MENU: List[Tuple[str, str, str]] = [
     ("6", "init", "生成/校验配置（init）"),
     ("0", "exit", "退出"),
 ]
-
 ACTION_BY_KEY = {k: action for k, action, _ in MENU}
 
 
-def _print_menu() -> None:
+def _print_menu(only_init: bool = False) -> None:
     print("\n请选择功能：")
-    for k, _, label in MENU:
+    for k, action, label in MENU:
+        if only_init and action not in ("init", "exit"):
+            continue
         print(f"  {k}. {label}")
     print("")
 
 
 def _print_report(rep) -> None:
-    # 结构化打印 Report（来自 models.py）
     print(f"\n== {rep.action} 结果 ==")
     if hasattr(rep, "counts_by_level"):
         c = rep.counts_by_level()
@@ -79,7 +79,6 @@ def _print_report(rep) -> None:
             print(f"- [{i.level.value}] {i.code.value}: {i.message}{loc}")
             details = getattr(i, "details", None) or {}
             if details:
-                # 简洁打印 details（不展开太深）
                 print(f"    details: {details}")
     else:
         print("\n未发现问题。")
@@ -87,6 +86,49 @@ def _print_report(rep) -> None:
     ok = getattr(rep, "ok", True)
     print("\n状态：", "OK" if ok else "FAILED")
     print("")
+
+
+def _print_config_missing_help(cfg_path: Path) -> None:
+    print(f"[错误] 未找到配置文件：{cfg_path}")
+    print("建议：")
+    print("  1) 在项目根目录执行：box_slang_i18n --action init")
+    print("  2) 或使用 --config 指定配置文件路径")
+    print("  3) 确认 --root 指向你的项目根目录")
+    print("")
+
+
+def _print_config_invalid_help(cfg_path: Path, err: Exception) -> None:
+    print(f"[错误] 配置文件校验失败：{cfg_path}")
+    print(f"原因：{err}")
+    print("建议：")
+    print("  1) 执行：box_slang_i18n --action init 生成/修复配置模板")
+    print("  2) 或手动修复 YAML 格式与字段类型（source_locale/target_locales/options/prompts 等）")
+    print("")
+
+
+def _startup_check_config(root_dir: Path, rt: RuntimeOptions) -> bool:
+    """
+    ✅ 启动即检查（只做一次）：
+    - 缺失：提示 + False
+    - 非法：提示 + False
+    - 正常：True
+    注意：这里不禁止 init，只是告诉上层“当前配置是否 OK”
+    """
+    cfg_path = rt.config_path or default_config_path(root_dir)
+
+    if not cfg_path.exists():
+        _print_config_missing_help(cfg_path)
+        return False
+
+    try:
+        _ = load_config(root_dir=root_dir, config_path=cfg_path)
+        return True
+    except ConfigError as e:
+        _print_config_invalid_help(cfg_path, e)
+        return False
+    except Exception as e:
+        _print_config_invalid_help(cfg_path, e)
+        return False
 
 
 def _run_action(action: str, root_dir: Path, rt: RuntimeOptions) -> int:
@@ -153,13 +195,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         config_path=cfg_path,
     )
 
+    # ✅ 启动即检查（只检查一次）
+    config_ok = _startup_check_config(root_dir, rt)
+
     # 非交互：直接 action
     if args.action:
-        return _run_action(args.action, root_dir, rt)
+        action = args.action.strip().lower()
+        # 配置不 OK 时：只允许 init；其他 action 直接失败退出（但提示已在启动时打印）
+        if not config_ok and action != "init":
+            return 2
+        return _run_action(action, root_dir, rt)
 
-    # 交互菜单
+    # 交互菜单：配置不 OK 时，只开放 init/exit
+    only_init = not config_ok
+
     while True:
-        _print_menu()
+        _print_menu(only_init=only_init)
+
         try:
             s = input("选择 > ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -173,10 +225,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("退出。")
             return 0
 
-        action = ACTION_BY_KEY.get(s) or s  # 允许直接输入 action 名称
+        action = ACTION_BY_KEY.get(s) or s
+        action = (action or "").strip().lower()
+
+        if only_init and action not in ("init", "exit"):
+            print("[提示] 当前配置文件缺失或不合法，请先执行 init 修复配置。")
+            continue
+
         code = _run_action(action, root_dir, rt)
 
-        # 非 0 的返回码不直接退出，方便继续测试；需要退出就选 0
+        # init 可能修复配置：成功后刷新一次状态，解锁菜单
+        if action == "init":
+            config_ok = _startup_check_config(root_dir, rt)
+            only_init = not config_ok
+
         if code != 0:
             print(f"[提示] action 返回码：{code}（继续可再次选择菜单）")
 

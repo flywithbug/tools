@@ -499,3 +499,14 @@ def update_cfg_targets_from_languages_json(*, cfg: SlangI18nConfig, languages: T
         prompts=cfg.prompts,
         options=cfg.options,
     )
+
+def load_config(*, root_dir: Path, config_path: Optional[Path] = None) -> SlangI18nConfig:
+    """
+    统一加载配置入口：
+    - config_path 为空时，默认使用 root_dir/slang_i18n.yaml
+    - 负责 YAML 加载 + parse 校验
+    - 失败抛出 ConfigError（供上层打印友好提示）
+    """
+    path = config_path or default_config_path(root_dir)
+    raw = load_config_yaml(path)
+    return parse_config_dict(root_dir=root_dir, raw=raw)
