@@ -11,38 +11,6 @@ from pathlib import Path
 from typing import Any
 
 
-BOX_TOOL = {
-    "id": "flutter.box_pub_upgrade",
-    "name": "box_pub_upgrade",
-    "category": "flutter",
-    "summary": "升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）",
-    "usage": [
-        "box_pub_upgrade",
-        "box_pub_upgrade --yes",
-        "box_pub_upgrade --no-git",
-        "box_pub_upgrade --private-host dart.cloudsmith.io",
-        "box_pub_upgrade --private-host dart.cloudsmith.io --private-host my.private.repo",
-        "box_pub_upgrade --skip ap_recaptcha --skip some_pkg",
-    ],
-    "options": [
-        {"flag": "--yes", "desc": "跳过确认，直接执行升级"},
-        {"flag": "--no-git", "desc": "只更新依赖与 lock，不执行 git pull/commit/push（兼容 --no-commit）"},
-        {
-            "flag": "--private-host",
-            "desc": "私服 hosted url 关键字（可多次指定）。默认不过滤：任何 hosted/url 都算私有依赖",
-        },
-        {"flag": "--skip", "desc": "跳过某些包名（可多次指定）"},
-    ],
-    "examples": [
-        {"cmd": "box_pub_upgrade", "desc": "默认交互：比对 -> 展示清单 -> 确认升级"},
-        {"cmd": "box_pub_upgrade --yes --no-git", "desc": "直接升级（不提交/不拉取）"},
-        {"cmd": "box_pub_upgrade --private-host my.private.repo", "desc": "仅升级 url 含关键词的 hosted 私有依赖"},
-    ],
-    # ✅ 新项目规范：工具目录内 README.md
-    "docs": "README.md",
-}
-
-
 # =======================
 # Helpers
 # =======================
@@ -137,14 +105,6 @@ def git_commit_and_push(branch: str, commit_message: str, summary_lines: list[st
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:[+-].*)?$")
 
 
-def _parse_core_version(v: str) -> tuple[int, int, int] | None:
-    v = (v or "").strip()
-    m = _VERSION_RE.match(v)
-    if not m:
-        return None
-    return int(m.group(1)), int(m.group(2)), int(m.group(3))
-
-
 def _strip_meta(v: str) -> str:
     # ^1.2.3 / 1.2.3+build / 1.2.3-pre -> 1.2.3
     v = (v or "").strip()
@@ -155,9 +115,17 @@ def _strip_meta(v: str) -> str:
     return v.strip()
 
 
+def _parse_core_version(v: str) -> tuple[int, int, int] | None:
+    v = _strip_meta(v)
+    m = _VERSION_RE.match(v)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
 def _cmp_version(a: str, b: str) -> int:
-    aa = _parse_core_version(_strip_meta(a)) or (0, 0, 0)
-    bb = _parse_core_version(_strip_meta(b)) or (0, 0, 0)
+    aa = _parse_core_version(a) or (0, 0, 0)
+    bb = _parse_core_version(b) or (0, 0, 0)
     return (aa > bb) - (aa < bb)
 
 
@@ -184,8 +152,7 @@ def _calc_upper_bound(project_version: str) -> str | None:
     规则：不跨 next minor。
     项目版本 3.45.1 -> upper bound < 3.46.0
     """
-    core = _strip_meta(project_version)
-    parts = _parse_core_version(core)
+    parts = _parse_core_version(project_version)
     if not parts:
         return None
     major, minor, _patch = parts
@@ -201,9 +168,9 @@ def _find_dep_blocks(pubspec_text: str) -> dict[str, list[str]]:
     blocks: dict[str, list[str]] = {}
 
     in_deps = False
-    current_pkg = None
+    current_pkg: str | None = None
     current_block: list[str] = []
-    current_indent = None
+    current_indent: int | None = None
 
     def flush():
         nonlocal current_pkg, current_block
@@ -220,7 +187,6 @@ def _find_dep_blocks(pubspec_text: str) -> dict[str, list[str]]:
             continue
 
         if in_deps and re.match(r"^\S", line):
-            # 新顶层段落开始
             flush()
             in_deps = False
             current_indent = None
@@ -228,34 +194,25 @@ def _find_dep_blocks(pubspec_text: str) -> dict[str, list[str]]:
         if not in_deps:
             continue
 
-        # 包名行：两个空格起，形如 "  foo:"
         m = re.match(r"^(\s+)([A-Za-z0-9_]+)\s*:\s*(.*)$", line)
         if m:
-            indent, pkg, _tail = m.group(1), m.group(2), m.group(3)
-
-            # 新包出现
+            indent, pkg = m.group(1), m.group(2)
             flush()
             current_pkg = pkg
             current_block = [line]
             current_indent = len(indent)
-            # 单行依赖：  foo: ^1.2.3
-            # 多行依赖：  foo:\n    hosted:...\n
             continue
 
-        # 属于当前包块：缩进更深（或空行）
         if current_pkg is not None:
             if line.strip() == "":
                 current_block.append(line)
                 continue
-            # 只要缩进 > current_indent 就认为属于块（保守）
             indent_len = len(line) - len(line.lstrip(" "))
             if current_indent is not None and indent_len > current_indent:
                 current_block.append(line)
                 continue
 
-            # 否则块结束（但这行仍可能是另一个包名行，交给下一轮处理）
             flush()
-            # 这一行会在下一轮被匹配到包名行或忽略；为简单起见不回退
 
     flush()
     return blocks
@@ -266,14 +223,12 @@ def _private_hosted_url(block: list[str]) -> str | None:
     从 hosted 依赖块里提取 url 值（如果存在）
     """
     text = "".join(block)
-    if "hosted:" not in text or "url:" not in text:
+    if "hosted:" not in text:
         return None
-    m = re.search(r"^\s*url:\s*(.+?)\s*$", text, flags=re.MULTILINE)
+    m = re.search(r"(?m)^\s*url:\s*(.+?)\s*$", text)
     if not m:
         return None
-    url = m.group(1).strip()
-    # ✅ 兼容带引号的 YAML 写法
-    url = url.strip('"').strip("'")
+    url = m.group(1).strip().strip('"').strip("'")
     return url
 
 
@@ -292,25 +247,12 @@ def _extract_constraint(block: list[str]) -> str | None:
     - 单行：foo: ^1.2.3
     - 多行：version: ^1.2.3
     """
-    first = block[0]
-    m = re.search(r":\s*([^\s]+)\s*$", first)
-    if m and m.group(1) and m.group(1) != "":
-        tail = m.group(1).strip()
-        # 单行依赖时 tail 可能是空或像 "{...}" 之类，这里做最小过滤
-        if tail not in ("", "|", ">", ">", "{}", "[]"):
-            if tail != "":
-                # 如果是多行依赖，首行 tail 往往为空
-                if tail != "":
-                    # 多行时经常是空字符串（已被 regex 捕获为 ''），这里防御
-                    pass
-
-    # 多行：version:
     text = "".join(block)
     m2 = re.search(r"(?m)^\s*version:\s*([^\s]+)\s*$", text)
     if m2:
         return m2.group(1).strip()
 
-    # 单行：foo: ^1.2.3
+    first = block[0]
     m1 = re.search(r"^\s*[A-Za-z0-9_]+\s*:\s*([^\s]+)\s*$", first)
     if m1:
         v = m1.group(1).strip()
@@ -327,7 +269,7 @@ def _apply_prefix_like(original_spec: str, new_version: str) -> str:
     """
     s = (original_spec or "").strip()
     quote = ""
-    if (len(s) >= 2) and ((s[0] == s[-1]) and (s[0] in ("'", '"'))):
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
         quote = s[0]
         s_inner = s[1:-1].strip()
     else:
@@ -335,9 +277,7 @@ def _apply_prefix_like(original_spec: str, new_version: str) -> str:
 
     caret = "^" if s_inner.startswith("^") else ""
     out = f"{caret}{new_version}"
-    if quote:
-        return f"{quote}{out}{quote}"
-    return out
+    return f"{quote}{out}{quote}" if quote else out
 
 
 def _replace_constraint(block: list[str], new_version: str) -> tuple[list[str], bool]:
@@ -349,7 +289,6 @@ def _replace_constraint(block: list[str], new_version: str) -> tuple[list[str], 
     """
     text = "".join(block)
 
-    # 多行：version: ...
     if re.search(r"(?m)^\s*version:\s*", text):
         m0 = re.search(r"(?m)^\s*version:\s*(.+?)\s*$", text)
         if not m0:
@@ -365,15 +304,13 @@ def _replace_constraint(block: list[str], new_version: str) -> tuple[list[str], 
         )
         return new_text.splitlines(keepends=True), n > 0
 
-    # 单行：foo: ^1.2.3
     first = block[0]
     m = re.match(r"^(\s*[A-Za-z0-9_]+\s*:\s*)(.+?)\s*$", first)
     if m:
         old_spec = m.group(2).strip()
         new_spec = _apply_prefix_like(old_spec, new_version)
         new_first = f"{m.group(1)}{new_spec}\n"
-        new_block = [new_first] + block[1:]
-        return new_block, True
+        return [new_first] + block[1:], True
 
     return block, False
 
@@ -385,7 +322,7 @@ def _replace_constraint(block: list[str], new_version: str) -> tuple[list[str], 
 @dataclass(frozen=True)
 class Outdated:
     name: str
-    current: str
+    current: str | None
     upgradable: str | None
     resolvable: str | None
     latest: str | None
@@ -398,10 +335,8 @@ def flutter_pub_get():
 
 
 def _pub_outdated_json() -> dict[str, Any]:
-    # flutter pub outdated --json
     r = run_capture(["flutter", "pub", "outdated", "--json"])
     if r.returncode != 0:
-        # fallback: dart pub outdated --json
         r = run_capture(["dart", "pub", "outdated", "--json"])
     if r.returncode != 0:
         die(f"❌ pub outdated 失败：{(r.stderr or '').strip()}", 1)
@@ -412,31 +347,42 @@ def _pub_outdated_json() -> dict[str, Any]:
     return {}
 
 
+def _get_ver(obj: Any) -> str | None:
+    """
+    兼容两种结构：
+    - "latest": {"version": "1.2.3"}
+    - "latest": "1.2.3"（少见，但防御）
+    - None
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, str):
+        return obj.strip() or None
+    if isinstance(obj, dict):
+        v = obj.get("version")
+        if isinstance(v, str):
+            return v.strip() or None
+    return None
+
+
 def parse_outdated(data: dict[str, Any]) -> dict[str, Outdated]:
-    """
-    兼容 `pub outdated --json` 输出结构差异。
-    """
-    packages = (data.get("packages") or data.get("package")) or []
+    packages = data.get("packages") or []
     out: dict[str, Outdated] = {}
 
     for item in packages:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("package") or item.get("name") or "").strip()
+
+        name = str(item.get("package") or "").strip()
         if not name:
             continue
 
-        current = str(item.get("current") or "").strip()
-        upgradable = item.get("upgradable")
-        resolvable = item.get("resolvable")
-        latest = item.get("latest")
-
         out[name] = Outdated(
             name=name,
-            current=current,
-            upgradable=str(upgradable).strip() if upgradable else None,
-            resolvable=str(resolvable).strip() if resolvable else None,
-            latest=str(latest).strip() if latest else None,
+            current=_get_ver(item.get("current")),
+            upgradable=_get_ver(item.get("upgradable")),
+            resolvable=_get_ver(item.get("resolvable")),
+            latest=_get_ver(item.get("latest")),
         )
 
     return out
@@ -444,11 +390,13 @@ def parse_outdated(data: dict[str, Any]) -> dict[str, Outdated]:
 
 def choose_target_version(out: Outdated, upper_bound: str | None) -> str | None:
     """
-    选择一个目标版本：优先 latest（如果不越界），否则退到 resolvable/upgradable。
+    选择一个目标版本：
+    - 优先 latest（如果不越界）
+    - 否则 resolvable
+    - 否则 upgradable
     规则：如果给定 upper_bound，则要求 target < upper_bound。
     """
-    candidates = [out.latest, out.resolvable, out.upgradable]
-    for v in candidates:
+    for v in (out.latest, out.resolvable, out.upgradable):
         if not v:
             continue
         if upper_bound and not _lt_version(v, upper_bound):
@@ -466,7 +414,7 @@ def print_plan(plan_lines: list[str]):
     if not plan_lines:
         print("ℹ️ 没有可升级的私有依赖。")
         return
-    print("发现以下可升级依赖（latest 表示选定目标版本）：")
+    print("发现以下可升级依赖：")
     for line in plan_lines:
         print("  - " + line)
 
@@ -478,12 +426,11 @@ def print_plan(plan_lines: list[str]):
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="box_pub_upgrade",
-        description="升级 Flutter 私有 hosted/url 依赖版本（比对清单 + 确认；依赖升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）",
+        description="升级 Flutter 私有 hosted/url 依赖版本（保留 ^/引号写法；不跨 next minor）",
     )
     p.add_argument("--yes", action="store_true", help="跳过确认，直接执行升级")
     p.add_argument("commit_message", nargs="?", default="up deps", help="Git 提交信息（默认 up deps）")
 
-    # ✅ 统一参数命名：--no-git 为主，--no-commit 兼容旧用法
     p.add_argument("--no-git", dest="no_git", action="store_true", help="只更新依赖与 lock，不执行 git pull/commit/push")
     p.add_argument("--no-commit", dest="no_git", action="store_true", help="兼容旧参数：等同 --no-git")
 
@@ -511,12 +458,9 @@ def main(argv: list[str] | None = None) -> int:
         print("❌ 当前目录未找到 pubspec.yaml，请在项目根目录运行。")
         return 1
 
-    # 默认不过滤域名：只要 hosted + url 就算私有组件
     private_host_keywords = tuple(args.private_host) if args.private_host else tuple()
-    # ✅ 修复：默认不跳过任何包（避免 ap_recaptcha 永久被漏掉）
     skip_packages = set(args.skip) if args.skip else set()
 
-    # ✅ git 自动降级：非 git 仓库 / 无 git 命令时，视为 --no-git
     git_enabled = (not args.no_git) and is_git_repo(Path.cwd())
     branch = None
     if git_enabled:
@@ -543,9 +487,9 @@ def main(argv: list[str] | None = None) -> int:
     outdated_raw = _pub_outdated_json()
     outdated = parse_outdated(outdated_raw)
 
-    plan: list[tuple[str, str, str]] = []  # (pkg, old_constraint, new_version)
-    plan_lines: list[str] = []             # for display
-    summary_lines: list[str] = []          # for commit body
+    plan: list[tuple[str, str, str]] = []
+    plan_lines: list[str] = []
+    summary_lines: list[str] = []
 
     for pkg, block in dep_blocks.items():
         if pkg in skip_packages:
@@ -565,7 +509,7 @@ def main(argv: list[str] | None = None) -> int:
         if not target:
             continue
 
-        # 如果目标不比当前高（数字层面），跳过
+        # 只要 target 的数值版本比当前高就算升级（忽略 ^/引号/metadata）
         if not _lt_version(cur_constraint, target):
             continue
 
@@ -579,33 +523,32 @@ def main(argv: list[str] | None = None) -> int:
     if not plan:
         return 0
 
-    if not args.yes:
-        if not prompt_yes_no():
-            print("已取消。")
-            return 0
+    if not args.yes and not prompt_yes_no():
+        print("已取消。")
+        return 0
 
-    # 写回 pubspec.yaml（逐包替换对应块）
     changed = False
     new_pubspec_text = pubspec_text
-    for pkg, _old_constraint, target in plan:
-        block = dep_blocks[pkg]
-        new_block, ch = _replace_constraint(block, target)  # ✅ 修复：保留 ^/引号写法
+
+    for pkg, _old, target in plan:
+        old_block = dep_blocks[pkg]
+        new_block, ch = _replace_constraint(old_block, target)
         if not ch:
             continue
 
-        # 用原块文本替换为新块文本（保守：以完整块字符串替换）
-        old_block_text = "".join(block)
+        old_block_text = "".join(old_block)
         new_block_text = "".join(new_block)
+
         if old_block_text != new_block_text:
             new_pubspec_text = new_pubspec_text.replace(old_block_text, new_block_text, 1)
             changed = True
 
-    if changed:
-        pubspec.write_text(new_pubspec_text, encoding="utf-8")
-        print("✅ pubspec.yaml 已更新。")
-    else:
-        print("ℹ️ 没有发生实际修改（可能 pubspec 中版本写法不匹配或无需更新）。")
+    if not changed:
+        print("ℹ️ 没有发生实际修改（可能 pubspec 写法未被匹配到）。")
         return 0
+
+    pubspec.write_text(new_pubspec_text, encoding="utf-8")
+    print("✅ pubspec.yaml 已更新。")
 
     flutter_pub_get()
 
@@ -623,4 +566,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         print("\n已取消。")
-        raise SystemExit(130)  # 130 = SIGINT 的惯例退出码
+        raise SystemExit(130)
