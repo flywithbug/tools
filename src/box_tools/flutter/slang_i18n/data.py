@@ -669,18 +669,6 @@ def run_sort(cfg: I18nConfig) -> None:
     print(f"✅ sort 完成：扫描 {len(files)} 个文件，改动 {changed} 个")
 
 
-def run_check(cfg: I18nConfig) -> int:
-    # 最小骨架：保证 JSON 可读且 flat（含 @@* 宽松规则）
-    for fp in list_locale_files(cfg.i18n_dir):
-        read_json(fp)
-    print("✅ check（当前为最小骨架）通过")
-    return 0
-
-
-def run_clean(cfg: I18nConfig) -> None:
-    # 最小骨架
-    print("✅ clean（当前为最小骨架）完成")
-
 
 def delete_bad_name_files(cfg: I18nConfig) -> int:
     """
