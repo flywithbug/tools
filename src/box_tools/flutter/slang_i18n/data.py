@@ -565,7 +565,6 @@ def check_redundant_keys(cfg: I18nConfig) -> List[RedundantKeyIssue]:
     for md in list_module_dirs(cfg.i18n_dir):
         src_file = _source_file_for_module(cfg, md)
         if not src_file.exists():
-            # 缺失由命名/存在性检查处理，这里不重复报
             continue
 
         src_obj = read_json(src_file)
@@ -585,7 +584,7 @@ def check_redundant_keys(cfg: I18nConfig) -> List[RedundantKeyIssue]:
 
 def delete_redundant_keys(redundant: List[RedundantKeyIssue]) -> int:
     """
-    删除冗余字段（删除前备份 .bak）
+    删除冗余字段（不备份）
     返回影响文件数
     """
     affected = 0
@@ -594,18 +593,14 @@ def delete_redundant_keys(redundant: List[RedundantKeyIssue]) -> int:
         if not fp.exists():
             continue
 
-        backup_file(fp)
-
         obj = read_json(fp)
         for k in it.keys:
             obj.pop(k, None)
 
-        # 删除后顺便排序一下 key（保证 @@locale 第一）
         obj = sort_json_keys(obj)
         fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
         affected += 1
-        print(f"✅ 清理冗余字段：{fp} -> {len(it.keys)} 个")
     return affected
 
 
@@ -640,12 +635,6 @@ def run_sort(cfg: I18nConfig) -> None:
     print(f"✅ sort 完成：扫描 {len(files)} 个文件，改动 {changed} 个")
 
 
-def backup_file(path: Path) -> Path:
-    bak = path.with_suffix(path.suffix + ".bak")
-    shutil.copy2(path, bak)
-    return bak
-
-
 def run_check(cfg: I18nConfig) -> int:
     # 最小骨架：保证 JSON 可读且 flat（含 @@* 宽松规则）
     for fp in list_locale_files(cfg.i18n_dir):
@@ -661,7 +650,7 @@ def run_clean(cfg: I18nConfig) -> None:
 
 def delete_bad_name_files(cfg: I18nConfig) -> int:
     """
-    删除命名不规范的 *.i18n.json 文件（安全删除：先生成 .bak 再删除）。
+    删除命名不规范的 *.i18n.json 文件（不备份）
     返回删除的文件数量。
     """
     deleted = 0
@@ -679,14 +668,24 @@ def delete_bad_name_files(cfg: I18nConfig) -> int:
             continue
 
         try:
-            backup_file(src)
             src.unlink()
-            print(f"✅ 删除（已备份 .bak）：{src}")
+            print(f"✅ 删除：{src}")
             deleted += 1
         except Exception as e:
             print(f"⚠️ 删除失败：{src}，原因：{e}")
 
     return deleted
+
+
+def _print_redundant_table(issues: List[RedundantKeyIssue]) -> None:
+    """
+    精简输出：文件名 + 冗余字段列表（逗号分隔）
+    """
+    print("\n❌ 检测到冗余字段（source_locale 中不存在）：")
+    for it in issues:
+        # 只显示文件名（不打很长的路径），需要路径就改为 str(it.file)
+        keys_joined = ", ".join(it.keys)
+        print(f"- {it.file.name}: {keys_joined}")
 
 
 def run_doctor(cfg: I18nConfig) -> int:
@@ -716,26 +715,20 @@ def run_doctor(cfg: I18nConfig) -> int:
         issues2 = check_i18n_naming_and_existence(cfg)
         if any(it.kind == "bad_name" for it in issues2):
             try:
-                ans = input(
-                    "\n检测到不符合规范命名的语言文件，是否删除？（将先生成 .bak 备份）(y/N) "
-                ).strip().lower()
+                ans = input("\n检测到不符合规范命名的语言文件，是否删除？(y/N) ").strip().lower()
             except EOFError:
                 ans = ""
             if ans in ("y", "yes"):
                 deleted = delete_bad_name_files(cfg)
-                print(f"✅ delete 完成：删除 {deleted} 个文件（均已备份）\n")
+                print(f"✅ delete 完成：删除 {deleted} 个文件\n")
 
     # 2) 冗余字段检查（source_locale 没有，其他语言有）
     redundant = check_redundant_keys(cfg)
     if redundant:
-        print("\n❌ 检测到冗余字段（source_locale 中不存在）：")
-        for it in redundant:
-            print(f"  - {it.file}:")
-            for k in it.keys:
-                print(f"      • {k}")
+        _print_redundant_table(redundant)
 
         try:
-            ans = input("\n是否删除这些冗余字段？（将先生成 .bak 备份）(y/N) ").strip().lower()
+            ans = input("\n是否删除这些冗余字段？(y/N) ").strip().lower()
         except EOFError:
             ans = ""
 
@@ -759,6 +752,6 @@ def run_doctor(cfg: I18nConfig) -> int:
     if final_redundant:
         print("\n❌ 仍存在冗余字段：")
         for it in final_redundant:
-            print(f"  - {it.file}: {len(it.keys)} 个")
+            print(f"- {it.file.name}: {len(it.keys)} 个")
 
     return 1
