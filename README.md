@@ -58,7 +58,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter/pub_upgrade
 
-- **[`box_pub_upgrade`](#box_tools-flutter-pub_upgrade-tool)**：升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）（[README.md](src/box_tools/flutter/pub_upgrade/README.md)）
+- **[`box_pub_upgrade`](#box_tools-flutter-pub_upgrade-tool)**：Flutter/Dart 依赖升级工具（优先私有依赖）：scan/apply/verify（[README.md](src/box_tools/flutter/pub_upgrade/README.md)）
 
 ### flutter/pub_version
 
@@ -290,7 +290,7 @@ box_pub_publish --msg release notes --yes-warnings
 
 ### box_pub_upgrade
 
-**简介**：升级 pubspec.yaml 中的私有 hosted/url 依赖（比对清单 + 确认；升级不跨 next minor，例如 3.45.* 只能升级到 < 3.46.0）
+**简介**：Flutter/Dart 依赖升级工具（优先私有依赖）：scan/apply/verify
 
 **命令**：`box_pub_upgrade`
 
@@ -298,25 +298,27 @@ box_pub_publish --msg release notes --yes-warnings
 
 ```bash
 box_pub_upgrade
-box_pub_upgrade --yes
-box_pub_upgrade --no-git
-box_pub_upgrade --private-host dart.cloudsmith.io
-box_pub_upgrade --private-host dart.cloudsmith.io --private-host my.private.repo
-box_pub_upgrade --skip ap_recaptcha --skip some_pkg
+box_pub_upgrade --action scan
+box_pub_upgrade --action scan --private
+box_pub_upgrade --action scan --private --public
+box_pub_upgrade --root ./my_app --action scan
+box_pub_upgrade --format json --action scan
+box_pub_upgrade --dry-run --action apply
+box_pub_upgrade --config ./pub_upgrade.yaml --action scan
 ```
 
 **参数说明**
 
-- `--yes`：跳过确认，直接执行升级
-- `--no-git`：只更新依赖与 lock，不执行 git pull/commit/push（兼容 --no-commit）
-- `--private-host`：私服 hosted url 关键字（可多次指定）。默认不过滤：任何 hosted/url 都算私有依赖
-- `--skip`：跳过某些包名（可多次指定）
-
-**示例**
-
-- `box_pub_upgrade`：默认交互：比对 -> 展示清单 -> 确认升级
-- `box_pub_upgrade --yes --no-git`：直接升级（不提交/不拉取）
-- `box_pub_upgrade --private-host my.private.repo`：仅升级 url 含关键词的 hosted 私有依赖
+- `--action`：直接执行动作：scan/apply/verify（不传则进入交互菜单）
+- `--config`：指定配置文件路径（默认 ./pub_upgrade.yaml，可选）
+- `--root`：项目根目录（默认当前目录）
+- `--dry-run`：演练模式：不写文件（scan 默认不写）
+- `--private`：只输出私有依赖的升级列表（scan）
+- `--public`：只输出公开依赖的升级列表（scan）
+- `--include-dev`：包含 dev_dependencies（默认开启）
+- `--use-resolvable`：目标版本用 resolvable（默认，更安全）
+- `--use-latest`：目标版本用 latest（更激进）
+- `--format`：输出格式：text/json（默认 text）
 
 **文档**
 
