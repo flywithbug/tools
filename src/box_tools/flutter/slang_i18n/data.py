@@ -5,7 +5,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Tuple, Optional
 
 import yaml
 
@@ -338,17 +338,83 @@ def read_json(path: Path) -> Dict:
 def write_json(path: Path, data_obj: Dict) -> None:
     path.write_text(json.dumps(data_obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+def ensure_flat_json(obj: Any, file_path: Path) -> Dict[str, Any]:
+    """
+    确保 JSON 顶层是 object，且 value 只能是 string（或 @@locale 也是 string）。
+    遇到嵌套 object/array 直接失败。
+    """
+    if not isinstance(obj, dict):
+        raise ValueError(f"JSON 顶层必须是 object: {file_path}")
+
+    for k, v in obj.items():
+        if isinstance(v, (dict, list)):
+            raise ValueError(f"检测到嵌套 JSON（不允许）：{file_path} key={k}")
+        if v is not None and not isinstance(v, str):
+            raise ValueError(f"value 必须是 string：{file_path} key={k} type={type(v).__name__}")
+
+    return obj
+
+
+def sort_json_keys(data_obj: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    - @@locale 永远第一（如果存在）
+    - 其它 key 按字典序
+    """
+    if LOCALE_META_KEY in data_obj:
+        meta_val = data_obj[LOCALE_META_KEY]
+        rest_items: List[Tuple[str, Any]] = sorted(
+            ((k, v) for k, v in data_obj.items() if k != LOCALE_META_KEY),
+            key=lambda kv: kv[0],
+        )
+        out: Dict[str, Any] = {LOCALE_META_KEY: meta_val}
+        out.update(dict(rest_items))
+        return out
+
+    # 没有 @@locale 就纯字典序（不强行补）
+    return dict(sorted(data_obj.items(), key=lambda kv: kv[0]))
+
+
+def read_json(path: Path) -> Dict[str, Any]:
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    return ensure_flat_json(obj, path)
+
+
+def write_json(path: Path, data_obj: Dict[str, Any]) -> None:
+    # 写入前也做一次 flat 校验
+    ensure_flat_json(data_obj, path)
+    path.write_text(json.dumps(data_obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def run_sort(cfg: I18nConfig) -> None:
+    """
+    给 i18nDir 下所有 *.json 执行 key 排序（递归子目录）
+    """
+    files = list_locale_files(cfg.i18n_dir)
+    if not files:
+        print(f"⚠️ 未找到任何 JSON 文件：{cfg.i18n_dir}")
+        return
+
+    changed = 0
+    for fp in files:
+        if fp.suffix.lower() != ".json":
+            continue
+
+        original = fp.read_text(encoding="utf-8")
+        data_obj = read_json(fp)
+        sorted_obj = sort_json_keys(data_obj)
+
+        new_text = json.dumps(sorted_obj, ensure_ascii=False, indent=2) + "\n"
+        if new_text != original:
+            fp.write_text(new_text, encoding="utf-8")
+            changed += 1
+
+    print(f"✅ sort 完成：扫描 {len(files)} 个文件，改动 {changed} 个")
+
 
 def backup_file(path: Path) -> Path:
     bak = path.with_suffix(path.suffix + ".bak")
     shutil.copy2(path, bak)
     return bak
-
-
-def run_sort(cfg: I18nConfig) -> None:
-    for fp in list_locale_files(cfg.i18n_dir):
-        read_json(fp)
-    print("✅ sort（当前为最小骨架）完成")
 
 
 def run_check(cfg: I18nConfig) -> int:
