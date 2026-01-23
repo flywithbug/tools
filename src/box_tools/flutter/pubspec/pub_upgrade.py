@@ -110,6 +110,17 @@ def git_add_commit(ctx: Context, summary_lines: list[str]) -> None:
     if r.code != 0:
         raise RuntimeError(f"git commit 失败：{(r.err or r.out).strip()}")
 
+    # --- 新增：自动 push ---
+    branch = _git_current_branch(ctx)
+
+    # 没有远程分支：按你 pull 的逻辑，直接跳过 push（不算失败）
+    if not _git_has_remote_branch(ctx, branch):
+        ctx.echo("⚠️ 当前分支没有远程分支，跳过 git push。")
+        return
+
+    r = run_cmd(["git", "push"], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(f"git push 失败：{(r.err or r.out).strip()}")
 
 # =======================
 # Version utils
