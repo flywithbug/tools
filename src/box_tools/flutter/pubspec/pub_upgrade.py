@@ -753,80 +753,86 @@ def run(ctx: Context) -> int:
     private_host_keywords: tuple[str, ...] = tuple()
     skip_packages: set[str] = {"ap_recaptcha"}
 
-    with step_scope(ctx, 0, "环境检查（git 仓库）", "检查 git 仓库..."):
-        _git_check_repo(ctx)
+    total_t0 = time.perf_counter()
+    try:
+        with step_scope(ctx, 0, "环境检查（git 仓库）", "检查 git 仓库..."):
+            _git_check_repo(ctx)
 
-    with step_scope(ctx, 1, "检查是否有未提交变更", "检查工作区状态..."):
-        if _git_is_dirty(ctx):
-            ctx.echo("⚠️ 检测到未提交变更（working tree dirty）。")
-            if _ask_continue(ctx, "是否中断本次升级？"):
-                ctx.echo("已中断。")
-                return 0
-            ctx.echo("继续执行（注意：可能把无关变更一起 commit，建议先处理干净）。")
-        else:
-            ctx.echo("✅ 工作区干净")
+        with step_scope(ctx, 1, "检查是否有未提交变更", "检查工作区状态..."):
+            if _git_is_dirty(ctx):
+                ctx.echo("⚠️ 检测到未提交变更（working tree dirty）。")
+                if _ask_continue(ctx, "是否中断本次升级？"):
+                    ctx.echo("已中断。")
+                    return 0
+                ctx.echo("继续执行（注意：可能把无关变更一起 commit，建议先处理干净）。")
+            else:
+                ctx.echo("✅ 工作区干净")
 
-    with step_scope(ctx, 2, "拉取最新代码（git pull --ff-only）", "拉取远程更新..."):
-        _git_pull_ff_only(ctx)
+        with step_scope(ctx, 2, "拉取最新代码（git pull --ff-only）", "拉取远程更新..."):
+            _git_pull_ff_only(ctx)
 
-    with step_scope(ctx, 3, "执行 flutter pub get（预检查）", "正在执行 pub get..."):
-        try:
-            flutter_pub_get(ctx, with_loading=False)
-            ctx.echo("✅ pub get 通过")
-        except Exception as e:
-            ctx.echo(f"❌ pub get 失败：{e}")
-            if _ask_continue(ctx, "是否中断本次升级？"):
-                return 1
-            ctx.echo("选择继续执行（不推荐）。")
+        with step_scope(ctx, 3, "执行 flutter pub get（预检查）", "正在执行 pub get..."):
+            try:
+                flutter_pub_get(ctx, with_loading=False)
+                ctx.echo("✅ pub get 通过")
+            except Exception as e:
+                ctx.echo(f"❌ pub get 失败：{e}")
+                if _ask_continue(ctx, "是否中断本次升级？"):
+                    return 1
+                ctx.echo("选择继续执行（不推荐）。")
 
-    with step_scope(
-            ctx,
-            4,
-            f"分析待升级私有依赖（优先 latest.version；dev={UPGRADE_DEV_DEPENDENCIES}, overrides={UPGRADE_DEPENDENCY_OVERRIDES})",
-            "分析待升级依赖...",
-    ):
-        plan = build_private_upgrade_plan(
-            ctx=ctx,
-            private_host_keywords=private_host_keywords,
-            skip_packages=skip_packages,
-        )
+        with step_scope(
+                ctx,
+                4,
+                f"分析待升级私有依赖（优先 latest.version；dev={UPGRADE_DEV_DEPENDENCIES}, overrides={UPGRADE_DEPENDENCY_OVERRIDES})",
+                "分析待升级依赖...",
+        ):
+            plan = build_private_upgrade_plan(
+                ctx=ctx,
+                private_host_keywords=private_host_keywords,
+                skip_packages=skip_packages,
+            )
 
-    if not plan:
-        ctx.echo("ℹ️ 未发现需要升级的私有依赖。")
-        return 0
-
-    ctx.echo("将升级以下私有依赖：")
-    for u in plan:
-        ctx.echo(f"  - {u.name}: {u.current} -> {u.target}")
-
-    with step_scope(ctx, 5, "执行依赖升级（写入 pubspec.yaml，保留注释与结构）", "写入 pubspec.yaml..."):
-        changed, summary, errors = apply_upgrades_to_pubspec(ctx, plan)
-
-        if errors:
-            raise RuntimeError("升级过程中出现不可处理项：\n" + "\n".join(errors))
-
-        if not changed:
-            ctx.echo("ℹ️ 没有发生实际修改。")
+        if not plan:
+            ctx.echo("ℹ️ 未发现需要升级的私有依赖。")
             return 0
 
-        ctx.echo("✅ pubspec.yaml 已更新：")
-        for s in summary:
-            ctx.echo(f"  {s}")
+        ctx.echo("将升级以下私有依赖：")
+        for u in plan:
+            ctx.echo(f"  - {u.name}: {u.current} -> {u.target}")
 
-    if ctx.dry_run:
-        ctx.echo("（dry-run）不执行后续 pub get / analyze / git commit。")
+        with step_scope(ctx, 5, "执行依赖升级（写入 pubspec.yaml，保留注释与结构）", "写入 pubspec.yaml..."):
+            changed, summary, errors = apply_upgrades_to_pubspec(ctx, plan)
+
+            if errors:
+                raise RuntimeError("升级过程中出现不可处理项：\n" + "\n".join(errors))
+
+            if not changed:
+                ctx.echo("ℹ️ 没有发生实际修改。")
+                return 0
+
+            ctx.echo("✅ pubspec.yaml 已更新：")
+            for s in summary:
+                ctx.echo(f"  {s}")
+
+        if ctx.dry_run:
+            ctx.echo("（dry-run）不执行后续 pub get / analyze / git commit。")
+            return 0
+
+        with step_scope(ctx, 6, "执行 flutter pub get（升级后）", "正在执行 pub get..."):
+            flutter_pub_get(ctx, with_loading=False)
+            ctx.echo("✅ pub get 完成")
+
+        with step_scope(ctx, 7, "执行 flutter analyze", "正在执行 flutter analyze..."):
+            flutter_analyze(ctx)
+            ctx.echo("✅ flutter analyze 完成（info/warning 可继续，error 会中断）")
+
+        with step_scope(ctx, 8, "自动提交（git add + git commit）", "正在提交代码..."):
+            git_add_commit(ctx, summary)
+            ctx.echo("✅ 已自动提交完成")
+
         return 0
 
-    with step_scope(ctx, 6, "执行 flutter pub get（升级后）", "正在执行 pub get..."):
-        flutter_pub_get(ctx, with_loading=False)
-        ctx.echo("✅ pub get 完成")
-
-    with step_scope(ctx, 7, "执行 flutter analyze", "正在执行 flutter analyze..."):
-        flutter_analyze(ctx)
-        ctx.echo("✅ flutter analyze 完成（info/warning 可继续，error 会中断）")
-
-    with step_scope(ctx, 8, "自动提交（git add + git commit）", "正在提交代码..."):
-        git_add_commit(ctx, summary)
-        ctx.echo("✅ 已自动提交完成")
-
-    return 0
+    finally:
+        total_cost = time.perf_counter() - total_t0
+        ctx.echo(f"\n✅ upgrade done. total cost: {_format_duration(total_cost)}")
