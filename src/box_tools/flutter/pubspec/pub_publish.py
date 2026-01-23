@@ -45,8 +45,7 @@ def _loading_animation(stop_event: threading.Event, label: str, t0: float) -> No
     spinner = cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
     while not stop_event.is_set():
         elapsed = time.perf_counter() - t0
-        print(f"
-        {next(spinner)} {label}  (elapsed: {elapsed:6.1f}s) ", end="", flush=True)
+        print(f"{next(spinner)} {label}  (elapsed: {elapsed:6.1f}s) ", end="", flush=True)
         time.sleep(0.1)
         _clear_line()
 
@@ -61,18 +60,18 @@ def _run_or_die(ctx: Context, cmd: list[str], *, title: str, cwd: Optional[str] 
         _load_t0 = time.perf_counter()
     t = threading.Thread(target=_loading_animation, args=(stop_event, title, _load_t0))
     t.start()
-try:
-    r = run_cmd(cmd, cwd=cwd or ctx.project_root, capture=True)
-finally:
-    if stop_event:
-        stop_event.set()
-    if t:
-        t.join()
-        _clear_line()
+    try:
+        r = run_cmd(cmd, cwd=cwd or ctx.project_root, capture=True)
+    finally:
+        if stop_event:
+            stop_event.set()
+        if t:
+            t.join()
+            _clear_line()
 
-if r.code != 0:
-    msg = (r.err or r.out).strip()
-    raise RuntimeError(f"{title} 失败：{msg or 'unknown error'}")
+    if r.code != 0:
+        msg = (r.err or r.out).strip()
+        raise RuntimeError(f"{title} 失败：{msg or 'unknown error'}")
 
 
 def _step_begin(ctx: Context, n: int, title: str) -> float:
