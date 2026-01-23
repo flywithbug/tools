@@ -40,12 +40,16 @@ def _clear_line() -> None:
     print("\r\033[2K", end="", flush=True)
 
 
-def _loading_animation(stop_event: threading.Event, label: str) -> None:
+def _loading_animation(stop_event: threading.Event, label: str, t0: float) -> None:
+    """loading 动画 + 实时耗时（秒）"""
     spinner = cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
     while not stop_event.is_set():
-        print(f"\r{next(spinner)} {label} ", end="", flush=True)
+        elapsed = time.perf_counter() - t0
+        print(f"
+        {next(spinner)} {label}  (elapsed: {elapsed:6.1f}s) ", end="", flush=True)
         time.sleep(0.1)
-    _clear_line()
+        _clear_line()
+
 
 
 def _run_or_die(ctx: Context, cmd: list[str], *, title: str, cwd: Optional[str] = None, loading: bool = False) -> None:
@@ -54,20 +58,21 @@ def _run_or_die(ctx: Context, cmd: list[str], *, title: str, cwd: Optional[str] 
     t: Optional[threading.Thread] = None
     if loading:
         stop_event = threading.Event()
-        t = threading.Thread(target=_loading_animation, args=(stop_event, title))
-        t.start()
-    try:
-        r = run_cmd(cmd, cwd=cwd or ctx.project_root, capture=True)
-    finally:
-        if stop_event:
-            stop_event.set()
-        if t:
-            t.join()
-            _clear_line()
+        _load_t0 = time.perf_counter()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, title, _load_t0))
+    t.start()
+try:
+    r = run_cmd(cmd, cwd=cwd or ctx.project_root, capture=True)
+finally:
+    if stop_event:
+        stop_event.set()
+    if t:
+        t.join()
+        _clear_line()
 
-    if r.code != 0:
-        msg = (r.err or r.out).strip()
-        raise RuntimeError(f"{title} 失败：{msg or 'unknown error'}")
+if r.code != 0:
+    msg = (r.err or r.out).strip()
+    raise RuntimeError(f"{title} 失败：{msg or 'unknown error'}")
 
 
 def _step_begin(ctx: Context, n: int, title: str) -> float:
@@ -141,7 +146,8 @@ def _git_pull_ff_only(ctx: Context) -> None:
         return
     ctx.echo(f"⬇️ 拉取远程分支 {branch}（ff-only）...")
     stop_event = threading.Event()
-    t = threading.Thread(target=_loading_animation, args=(stop_event, "git pull --ff-only"))
+    _load_t0 = time.perf_counter()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, "git pull --ff-only", _load_t0))
     t.start()
     try:
         r = run_cmd(["git", "pull", "--ff-only"], cwd=ctx.project_root, capture=True)
@@ -180,7 +186,8 @@ def _git_add_commit_push(ctx: Context, *, new_version: str, old_version: str, no
         return
 
     stop_event = threading.Event()
-    t = threading.Thread(target=_loading_animation, args=(stop_event, "git push"))
+    _load_t0 = time.perf_counter()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, "git push", _load_t0))
     t.start()
     try:
         r = run_cmd(["git", "push"], cwd=ctx.project_root, capture=True)
@@ -331,7 +338,8 @@ def _parse_analyze_issues(output: str) -> list[AnalyzeIssue]:
 
 def flutter_analyze_gate(ctx: Context) -> None:
     stop_event = threading.Event()
-    t = threading.Thread(target=_loading_animation, args=(stop_event, "flutter analyze"))
+    _load_t0 = time.perf_counter()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, "flutter analyze", _load_t0))
     t.start()
     try:
         r = run_cmd(["flutter", "analyze"], cwd=ctx.project_root, capture=True)
@@ -384,7 +392,8 @@ def flutter_pub_publish(ctx: Context, *, dry_run: bool) -> None:
         cmd.append("--force")
 
     stop_event = threading.Event()
-    t = threading.Thread(target=_loading_animation, args=(stop_event, "flutter pub publish" if not dry_run else "flutter pub publish --dry-run"))
+    _load_t0 = time.perf_counter()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, "flutter pub publish" if not dry_run else "flutter pub publish --dry-run", _load_t0))
     t.start()
     try:
         r = run_cmd(cmd, cwd=ctx.project_root, capture=True)
