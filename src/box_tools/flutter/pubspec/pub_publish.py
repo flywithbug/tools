@@ -642,6 +642,11 @@ def run_menu(ctx: Context) -> int:
         if choice == "0":
             return 0
         if choice == "1":
+            # 先执行 check：通过才能继续 publish
+            rc = check(ctx)
+            if rc != 0:
+                ctx.echo("❌ check 未通过，已中断发布。")
+                return rc
             return publish(ctx)
         if choice == "2":
             return dry_run(ctx)
