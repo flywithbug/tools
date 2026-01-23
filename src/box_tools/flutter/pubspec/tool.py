@@ -54,8 +54,6 @@ BOX_TOOL = {
         {"cmd": "pubspec version --mode patch --yes", "desc": "补丁版本自增并直接写入（只改 version 行）"},
     ],
     "dependencies": [
-        "Flutter SDK（flutter 可执行）",
-        "git（用于 pull/commit）",
     ],
     "docs": "README.md",
 }
