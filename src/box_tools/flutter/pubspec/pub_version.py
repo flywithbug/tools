@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 from .tool import Context, read_text, write_text_atomic
 
@@ -64,6 +66,62 @@ def apply_version_minimal(raw: str, new_version: str) -> str:
     return "\n".join(lines) + suffix_newline
 
 
+# ----------------------------
+# Git helpers
+# ----------------------------
+def _find_git_root(start: Path) -> Path | None:
+    cur = start.resolve()
+    if cur.is_file():
+        cur = cur.parent
+    for p in [cur, *cur.parents]:
+        if (p / ".git").exists():
+            return p
+    return None
+
+
+def _git(ctx: Context, cwd: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    # NOTE: 不捕获输出时，git 的交互提示（如 credential helper）仍能正常工作
+    cmd = ["git", *args]
+    ctx.echo(f"$ {' '.join(cmd)}")
+    return subprocess.run(cmd, cwd=str(cwd), text=True, check=check)
+
+
+def _commit_and_push_pubspec(ctx: Context, pubspec_path: Path, old: str, new: str, mode: str) -> None:
+    git_root = _find_git_root(pubspec_path)
+    if not git_root:
+        ctx.echo("⚠️ 未检测到 git 仓库（找不到 .git），跳过提交/推送")
+        return
+
+    rel_pubspec = pubspec_path.resolve().relative_to(git_root)
+
+    # 只 stage pubspec.yaml（避免把其它未预期改动一起提交）
+    _git(ctx, git_root, ["add", "--", str(rel_pubspec)])
+
+    # 没有变更则不提交
+    r = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--", str(rel_pubspec)],
+        cwd=str(git_root),
+        text=True,
+        capture_output=True,
+    )
+    if r.returncode != 0:
+        ctx.echo("⚠️ 无法检查 git 暂存区状态，跳过提交/推送")
+        return
+    if not r.stdout.strip():
+        ctx.echo("ℹ️ 暂存区没有 pubspec.yaml 变更，跳过提交/推送")
+        return
+
+    # commit note：你说我来决定，那就用稳定、可检索的格式
+    # 例：chore(release): bump pubspec 1.2.3 -> 1.2.4 (patch)
+    note = f"chore(release): bump pubspec {old} -> {new} ({mode})"
+
+    _git(ctx, git_root, ["commit", "-m", note])
+
+    # 推送到当前分支的默认远端（一般是 origin）
+    # 不强行 -u，避免改变用户已有的 upstream 规则
+    _git(ctx, git_root, ["push"])
+
+
 def run(ctx: Context, mode: str) -> int:
     raw = read_text(ctx.pubspec_path)
     v = parse_version(raw)
@@ -82,17 +140,33 @@ def run(ctx: Context, mode: str) -> int:
     ctx.echo(f"版本变更：{v.format()} -> {nv.format()}")
 
     if ctx.dry_run:
-        ctx.echo("（dry-run）不写入 pubspec.yaml")
+        ctx.echo("（dry-run）不写入 pubspec.yaml；也不会 git 提交/推送")
         return 0
 
     if ctx.interactive and (not ctx.yes):
-        if not ctx.confirm("确认写入 pubspec.yaml？"):
+        if not ctx.confirm("确认写入 pubspec.yaml，并立即提交推送到远端？"):
             ctx.echo("已取消")
             return 1
 
     new_raw = apply_version_minimal(raw, nv.format())
     write_text_atomic(ctx.pubspec_path, new_raw)
     ctx.echo("✅ version 升级完成（仅修改 version 行，未改动其它结构/注释）")
+
+    # 立即 git commit + push（只提交 pubspec.yaml）
+    try:
+        _commit_and_push_pubspec(
+            ctx=ctx,
+            pubspec_path=Path(ctx.pubspec_path),
+            old=v.format(),
+            new=nv.format(),
+            mode=mode,
+        )
+    except FileNotFoundError:
+        ctx.echo("⚠️ 未找到 git 命令（请先安装 git），跳过提交/推送")
+    except subprocess.CalledProcessError as e:
+        ctx.echo(f"⚠️ git 命令执行失败（returncode={e.returncode}），已停止后续推送")
+        return 1
+
     return 0
 
 
