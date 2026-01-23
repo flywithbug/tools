@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+from itertools import cycle
+import threading
+import time
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,6 +32,55 @@ def _step(ctx: Context, n: int, title: str) -> None:
     ctx.echo(f"\n[{n}] {title}")
 
 
+def _now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _clear_line() -> None:
+    print("\r\033[2K", end="", flush=True)
+
+
+def _loading_animation(stop_event: threading.Event, label: str) -> None:
+    spinner = cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+    while not stop_event.is_set():
+        print(f"\r{next(spinner)} {label} ", end="", flush=True)
+        time.sleep(0.1)
+    _clear_line()
+
+
+def _run_or_die(ctx: Context, cmd: list[str], *, title: str, cwd: Optional[str] = None, loading: bool = False) -> None:
+    """执行命令；可选 loading 动画，避免长时间无输出像卡死。"""
+    stop_event: Optional[threading.Event] = None
+    t: Optional[threading.Thread] = None
+    if loading:
+        stop_event = threading.Event()
+        t = threading.Thread(target=_loading_animation, args=(stop_event, title))
+        t.start()
+    try:
+        r = run_cmd(cmd, cwd=cwd or ctx.project_root, capture=True)
+    finally:
+        if stop_event:
+            stop_event.set()
+        if t:
+            t.join()
+            _clear_line()
+
+    if r.code != 0:
+        msg = (r.err or r.out).strip()
+        raise RuntimeError(f"{title} 失败：{msg or 'unknown error'}")
+
+
+def _step_begin(ctx: Context, n: int, title: str) -> float:
+    ctx.echo(f"\n[{n}] {title}  (start: {_now_str()})")
+    return time.perf_counter()
+
+
+def _step_end(ctx: Context, n: int, t0: float) -> None:
+    cost = time.perf_counter() - t0
+    ctx.echo(f"[{n}] done  (cost: {cost:.2f}s)")
+
+
+
 def _confirm_or_abort(ctx: Context, prompt: str) -> None:
     """
     需要用户确认才能继续；否则直接中断。
@@ -50,13 +102,6 @@ def _ask_continue(ctx: Context, prompt: str) -> bool:
     if not getattr(ctx, "interactive", True):
         return True
     return ctx.confirm(prompt)
-
-
-def _run_or_die(ctx: Context, cmd: list[str], *, title: str, cwd: Optional[str] = None) -> None:
-    r = run_cmd(cmd, cwd=cwd or ctx.project_root, capture=True)
-    if r.code != 0:
-        msg = (r.err or r.out).strip()
-        raise RuntimeError(f"{title} 失败：{msg or 'unknown error'}")
 
 
 # =======================
@@ -95,7 +140,15 @@ def _git_pull_ff_only(ctx: Context) -> None:
         ctx.echo("⚠️ 当前分支没有远程分支，跳过 git pull。")
         return
     ctx.echo(f"⬇️ 拉取远程分支 {branch}（ff-only）...")
-    r = run_cmd(["git", "pull", "--ff-only"], cwd=ctx.project_root, capture=True)
+    stop_event = threading.Event()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, "git pull --ff-only"))
+    t.start()
+    try:
+        r = run_cmd(["git", "pull", "--ff-only"], cwd=ctx.project_root, capture=True)
+    finally:
+        stop_event.set()
+        t.join()
+        _clear_line()
     if r.code != 0:
         raise RuntimeError(
             "git pull 失败（可能存在分叉，需要手动 rebase/merge）：\n" + (r.err or r.out).strip()
@@ -126,7 +179,15 @@ def _git_add_commit_push(ctx: Context, *, new_version: str, old_version: str, no
         ctx.echo("⚠️ 当前分支没有远程分支，跳过 git push。")
         return
 
-    r = run_cmd(["git", "push"], cwd=ctx.project_root, capture=True)
+    stop_event = threading.Event()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, "git push"))
+    t.start()
+    try:
+        r = run_cmd(["git", "push"], cwd=ctx.project_root, capture=True)
+    finally:
+        stop_event.set()
+        t.join()
+        _clear_line()
     if r.code != 0:
         raise RuntimeError(f"git push 失败：{(r.err or r.out).strip()}")
 
@@ -241,7 +302,7 @@ def flutter_pub_get(ctx: Context) -> None:
     cmd = ["flutter", "pub", "get"] if shutil.which("flutter") else (["dart", "pub", "get"] if shutil.which("dart") else None)
     if not cmd:
         raise RuntimeError("未找到 flutter/dart 命令，无法执行 pub get")
-    _run_or_die(ctx, cmd, title="pub get")
+    _run_or_die(ctx, cmd, title="pub get", loading=True)
 
 
 @dataclass(frozen=True)
@@ -269,7 +330,15 @@ def _parse_analyze_issues(output: str) -> list[AnalyzeIssue]:
 
 
 def flutter_analyze_gate(ctx: Context) -> None:
-    r = run_cmd(["flutter", "analyze"], cwd=ctx.project_root, capture=True)
+    stop_event = threading.Event()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, "flutter analyze"))
+    t.start()
+    try:
+        r = run_cmd(["flutter", "analyze"], cwd=ctx.project_root, capture=True)
+    finally:
+        stop_event.set()
+        t.join()
+        _clear_line()
     out = (r.out or "") + ("\n" + r.err if (r.err or "").strip() else "")
     issues = _parse_analyze_issues(out)
 
@@ -311,12 +380,18 @@ def flutter_pub_publish(ctx: Context, *, dry_run: bool) -> None:
     cmd = ["flutter", "pub", "publish"]
     if dry_run:
         cmd.append("--dry-run")
-
-    # 非交互或 --yes：避免 flutter 自己的确认卡住
-    if ctx.yes or not getattr(ctx, "interactive", True):
+    else:
         cmd.append("--force")
 
-    r = run_cmd(cmd, cwd=ctx.project_root, capture=True)
+    stop_event = threading.Event()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, "flutter pub publish" if not dry_run else "flutter pub publish --dry-run"))
+    t.start()
+    try:
+        r = run_cmd(cmd, cwd=ctx.project_root, capture=True)
+    finally:
+        stop_event.set()
+        t.join()
+        _clear_line()
     if r.code != 0:
         raise RuntimeError((r.err or r.out).strip() or "flutter pub publish 失败")
 
@@ -362,6 +437,9 @@ def _ask_note(ctx: Context) -> str:
 # Flows
 # =======================
 def publish(ctx: Context) -> int:
+    _total_start_dt = datetime.now()
+    _total_t0 = time.perf_counter()
+    ctx.echo(f"⏱️ publish start: {_total_start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
     _step(ctx, 1, "检查是否有未提交变更")
     _git_check_repo(ctx)
     if _git_is_dirty(ctx):
@@ -373,8 +451,9 @@ def publish(ctx: Context) -> int:
     else:
         ctx.echo("✅ 工作区干净")
 
-    _step(ctx, 2, "拉取最新代码（git pull --ff-only）")
+    _t2 = _step_begin(ctx, 2, "拉取最新代码（git pull --ff-only）")
     _git_pull_ff_only(ctx)
+    _step_end(ctx, 2, _t2)
 
     _step(ctx, 3, "检查必要文件（pubspec.yaml / CHANGELOG.md）")
     _ensure_required_files(ctx)
@@ -449,43 +528,56 @@ def publish(ctx: Context) -> int:
         write_text_atomic(changelog_path, new_changelog_text)
         ctx.echo("✅ CHANGELOG 已更新")
 
-    _step(ctx, 7, "执行 flutter pub get")
+    _t7 = _step_begin(ctx, 7, "执行 flutter pub get")
     flutter_pub_get(ctx)
     ctx.echo("✅ pub get 通过")
+    _step_end(ctx, 7, _t7)
 
-    _step(ctx, 8, "执行 flutter analyze（质量闸门）")
+    _t8 = _step_begin(ctx, 8, "执行 flutter analyze（质量闸门）")
     flutter_analyze_gate(ctx)
     ctx.echo("✅ flutter analyze 通过（或已确认继续）")
+    _step_end(ctx, 8, _t8)
 
     if ctx.dry_run:
         ctx.echo("（dry-run）跳过 git commit/push 与 publish。")
         return 0
 
-    _step(ctx, 9, "提交代码（git add/commit/push）")
+    _t9 = _step_begin(ctx, 9, "提交代码（git add/commit/push）")
     _git_add_commit_push(ctx, new_version=new_version, old_version=old_version2, note=note)
     ctx.echo("✅ 已提交并推送（如有远程分支）")
+    _step_end(ctx, 9, _t9)
 
     _step(ctx, 10, "执行 flutter pub publish")
     flutter_pub_publish(ctx, dry_run=False)
     ctx.echo("✅ 发布完成")
+    _total_cost = time.perf_counter() - _total_t0
+    _total_end_dt = datetime.now()
+    ctx.echo(f"⏱️ end: {_total_end_dt.strftime('%Y-%m-%d %H:%M:%S')}  total: {_total_cost:.2f}s")
+
     return 0
 
 
 def dry_run(ctx: Context) -> int:
+    _total_start_dt = datetime.now()
+    _total_t0 = time.perf_counter()
+    ctx.echo(f"⏱️ dry_run start: {_total_start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
     _step(ctx, 1, "检查必要文件（pubspec.yaml / CHANGELOG.md）")
     _ensure_required_files(ctx)
 
-    _step(ctx, 2, "执行 flutter pub get")
+    _t2 = _step_begin(ctx, 2, "执行 flutter pub get")
     flutter_pub_get(ctx)
     ctx.echo("✅ pub get 通过")
+    _step_end(ctx, 2, _t2)
 
-    _step(ctx, 3, "执行 flutter analyze（质量闸门）")
+    _t3 = _step_begin(ctx, 3, "执行 flutter analyze（质量闸门）")
     flutter_analyze_gate(ctx)
     ctx.echo("✅ flutter analyze 通过（或已确认继续）")
+    _step_end(ctx, 3, _t3)
 
-    _step(ctx, 4, "执行 flutter pub publish --dry-run")
+    _t4 = _step_begin(ctx, 4, "执行 flutter pub publish --dry-run")
     flutter_pub_publish(ctx, dry_run=True)
     ctx.echo("✅ dry-run 完成")
+    _step_end(ctx, 4, _t4)
     return 0
 
 def check(ctx: Context) -> int:
