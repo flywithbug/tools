@@ -448,7 +448,13 @@ def publish(ctx: Context) -> int:
     _total_start_dt = datetime.now()
     _total_t0 = time.perf_counter()
     ctx.echo(f"⏱️ publish start: {_total_start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
-    _step(ctx, 1, "检查是否有未提交变更")
+
+    # ✅ [1] 先输入 note，免去用户等待
+    _step(ctx, 1, "输入发布说明 note")
+    note = _ask_note(ctx)
+
+    # [2] 检查 git 状态
+    _step(ctx, 2, "检查是否有未提交变更")
     _git_check_repo(ctx)
     if _git_is_dirty(ctx):
         ctx.echo("⚠️ 检测到未提交变更（working tree dirty）。")
@@ -459,11 +465,13 @@ def publish(ctx: Context) -> int:
     else:
         ctx.echo("✅ 工作区干净")
 
-    _t2 = _step_begin(ctx, 2, "拉取最新代码（git pull --ff-only）")
+    # [3] 拉取最新代码
+    _t3 = _step_begin(ctx, 3, "拉取最新代码（git pull --ff-only）")
     _git_pull_ff_only(ctx)
-    _step_end(ctx, 2, _t2)
+    _step_end(ctx, 3, _t3)
 
-    _step(ctx, 3, "检查必要文件（pubspec.yaml / CHANGELOG.md）")
+    # [4] 必要文件检查
+    _step(ctx, 4, "检查必要文件（pubspec.yaml / CHANGELOG.md）")
     _ensure_required_files(ctx)
 
     pubspec_text = read_text(ctx.pubspec_path)
@@ -471,8 +479,8 @@ def publish(ctx: Context) -> int:
     if not old_version:
         raise RuntimeError("pubspec.yaml 未找到 version: 行，无法发布")
 
-    _step(ctx, 4, "版本自增")
-    # release 分支自动适配：release-x.y.z
+    # [5] 版本自增
+    _step(ctx, 5, "版本自增")
     branch = _git_current_branch(ctx)
     mrel = re.match(r"^release-(\d+)\.(\d+)\.(\d+)$", branch)
     new_version: str
@@ -481,7 +489,6 @@ def publish(ctx: Context) -> int:
         rel_minor = int(mrel.group(2))
         rel_patch = int(mrel.group(3))
 
-        # 解析当前 version 的 core（忽略 -pre / +build）
         mcore = _SEMVER_CORE_RE.match(old_version.strip())
         if not mcore:
             raise RuntimeError(f"无法解析 version：{old_version}")
@@ -492,13 +499,10 @@ def publish(ctx: Context) -> int:
         cur_major, cur_minor, cur_patch = nums[0], nums[1], nums[2]
 
         if (cur_major, cur_minor) < (rel_major, rel_minor):
-            # 比 release 大版本低：强制对齐到 release 起点 x.y.z
             new_version = f"{rel_major}.{rel_minor}.{rel_patch}"
         elif (cur_major, cur_minor) == (rel_major, rel_minor):
-            # 同一大版本：patch 自增（保留原 meta 逻辑）
             new_version = _bump_semver(old_version, "patch")
         else:
-            # 其它情况：回退原逻辑
             mode = _ask_bump_mode(ctx)
             if mode == "custom":
                 new_version = _ask_custom_version(ctx)
@@ -521,9 +525,7 @@ def publish(ctx: Context) -> int:
         write_text_atomic(ctx.pubspec_path, new_pubspec_text)
         ctx.echo(f"✅ pubspec version: {old_version2} -> {new_version}")
 
-    _step(ctx, 5, "输入发布说明 note")
-    note = _ask_note(ctx)
-
+    # [6] 更新 changelog（这里直接使用前面拿到的 note）
     _step(ctx, 6, "更新 CHANGELOG.md（按模板插入顶部）")
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     changelog_path = ctx.project_root / CHANGELOG_NAME
@@ -536,11 +538,13 @@ def publish(ctx: Context) -> int:
         write_text_atomic(changelog_path, new_changelog_text)
         ctx.echo("✅ CHANGELOG 已更新")
 
+    # [7] pub get
     _t7 = _step_begin(ctx, 7, "执行 flutter pub get")
     flutter_pub_get(ctx)
     ctx.echo("✅ pub get 通过")
     _step_end(ctx, 7, _t7)
 
+    # [8] analyze gate
     _t8 = _step_begin(ctx, 8, "执行 flutter analyze（质量闸门）")
     flutter_analyze_gate(ctx)
     ctx.echo("✅ flutter analyze 通过（或已确认继续）")
@@ -550,19 +554,22 @@ def publish(ctx: Context) -> int:
         ctx.echo("（dry-run）跳过 git commit/push 与 publish。")
         return 0
 
+    # [9] commit/push（仍用同一个 note）
     _t9 = _step_begin(ctx, 9, "提交代码（git add/commit/push）")
     _git_add_commit_push(ctx, new_version=new_version, old_version=old_version2, note=note)
     ctx.echo("✅ 已提交并推送（如有远程分支）")
     _step_end(ctx, 9, _t9)
 
+    # [10] publish
     _step(ctx, 10, "执行 flutter pub publish")
     flutter_pub_publish(ctx, dry_run=False)
     ctx.echo("✅ 发布完成")
+
     _total_cost = time.perf_counter() - _total_t0
     _total_end_dt = datetime.now()
     ctx.echo(f"⏱️ end: {_total_end_dt.strftime('%Y-%m-%d %H:%M:%S')}  total: {_total_cost:.2f}s")
-
     return 0
+
 
 
 def dry_run(ctx: Context) -> int:
