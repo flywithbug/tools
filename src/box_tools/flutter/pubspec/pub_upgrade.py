@@ -5,6 +5,7 @@ import re
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import cycle
 from typing import Optional
@@ -41,6 +42,42 @@ class AnalyzeReport:
 # =======================
 def _step(ctx: Context, n: int, title: str) -> None:
     ctx.echo(f"\n[{n}] {title}")
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 1:
+        return f"{seconds*1000:.0f}ms"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m = int(seconds // 60)
+    s = seconds - m * 60
+    return f"{m}m{s:.0f}s"
+
+
+@contextmanager
+def step_scope(ctx: Context, n: int, title: str, loading_label: str | None = None):
+    """
+    每个步骤统一：
+    - 打印步骤标题
+    - 每一步前面显示 loading（带实时计时器）
+    - 步骤结束输出：done + cost
+    """
+    _step(ctx, n, title)
+    label = loading_label or title
+
+    t0 = time.perf_counter()
+    stop_event = threading.Event()
+    th = threading.Thread(target=_loading_animation, args=(stop_event, label, t0))
+    th.daemon = True
+    th.start()
+
+    try:
+        yield
+    finally:
+        stop_event.set()
+        th.join()
+        _clear_line()
+        cost = time.perf_counter() - t0
+        ctx.echo(f"[{n}] done  (cost: {cost:.2f}s)")
 
 
 def _ask_continue(ctx: Context, prompt: str) -> bool:
@@ -584,15 +621,17 @@ def _clear_line():
     print("\r\033[2K", end="", flush=True)
 
 
-def _loading_animation(stop_event: threading.Event, label: str):
+def _loading_animation(stop_event: threading.Event, label: str, t0: float) -> None:
+    """loading 动画 + 实时耗时（秒）"""
     spinner = cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
     while not stop_event.is_set():
-        print(f"\r{next(spinner)} {label} ", end="", flush=True)
+        elapsed = time.perf_counter() - t0
+        print(f"{next(spinner)} {label}  (elapsed: {elapsed:6.1f}s) ", end="", flush=True)
         time.sleep(0.1)
-    _clear_line()
+        _clear_line()
 
 
-def flutter_pub_get(ctx: Context) -> None:
+def flutter_pub_get(ctx: Context, with_loading: bool = False) -> None:
     cmd = None
     if shutil.which("flutter"):
         cmd = ["flutter", "pub", "get"]
@@ -601,17 +640,24 @@ def flutter_pub_get(ctx: Context) -> None:
     else:
         raise RuntimeError("未找到 flutter/dart 命令，无法执行 pub get")
 
-    stop_event = threading.Event()
-    t = threading.Thread(target=_loading_animation, args=(stop_event, "正在执行 pub get..."))
-    t.start()
+
+    stop_event: threading.Event | None = None
+    th: threading.Thread | None = None
+    if with_loading:
+        t0 = time.perf_counter()
+        stop_event = threading.Event()
+        th = threading.Thread(target=_loading_animation, args=(stop_event, "正在执行 pub get...", t0))
+        th.daemon = True
+        th.start()
     try:
         r = run_cmd(cmd, cwd=ctx.project_root, capture=True)
         if r.code != 0:
             raise RuntimeError((r.err or r.out).strip() or "pub get 失败")
     finally:
-        stop_event.set()
-        t.join()
-        _clear_line()
+        if stop_event is not None and th is not None:
+            stop_event.set()
+            th.join()
+            _clear_line()
 
 
 # =======================
@@ -699,11 +745,6 @@ def flutter_analyze(ctx: Context) -> AnalyzeReport:
     # 既没有 issue，也当通过
     return rep
 
-
-# =======================
-# Entry:
-
-
 # =======================
 # Entry: default APPLY with full steps
 # =======================
@@ -712,86 +753,80 @@ def run(ctx: Context) -> int:
     private_host_keywords: tuple[str, ...] = tuple()
     skip_packages: set[str] = {"ap_recaptcha"}
 
-    _step(ctx, 0, "环境检查（git 仓库）")
-    _git_check_repo(ctx)
+    with step_scope(ctx, 0, "环境检查（git 仓库）", "检查 git 仓库..."):
+        _git_check_repo(ctx)
 
-    _step(ctx, 1, "检查是否有未提交变更")
-    if _git_is_dirty(ctx):
-        ctx.echo("⚠️ 检测到未提交变更（working tree dirty）。")
-        # 这里按你说的“提示是否中断”：是 => 中断
-        if _ask_continue(ctx, "是否中断本次升级？"):
-            ctx.echo("已中断。")
-            return 0
-        ctx.echo("继续执行（注意：可能把无关变更一起 commit，建议先处理干净）。")
-    else:
-        ctx.echo("✅ 工作区干净")
+    with step_scope(ctx, 1, "检查是否有未提交变更", "检查工作区状态..."):
+        if _git_is_dirty(ctx):
+            ctx.echo("⚠️ 检测到未提交变更（working tree dirty）。")
+            if _ask_continue(ctx, "是否中断本次升级？"):
+                ctx.echo("已中断。")
+                return 0
+            ctx.echo("继续执行（注意：可能把无关变更一起 commit，建议先处理干净）。")
+        else:
+            ctx.echo("✅ 工作区干净")
 
-    _step(ctx, 2, "拉取最新代码（git pull --ff-only）")
-    _git_pull_ff_only(ctx)
+    with step_scope(ctx, 2, "拉取最新代码（git pull --ff-only）", "拉取远程更新..."):
+        _git_pull_ff_only(ctx)
 
-    _step(ctx, 3, "执行 flutter pub get（预检查）")
-    try:
-        flutter_pub_get(ctx)
-        ctx.echo("✅ pub get 通过")
-    except Exception as e:
-        ctx.echo(f"❌ pub get 失败：{e}")
-        if _ask_continue(ctx, "是否中断本次升级？"):
-            return 1
-        ctx.echo("选择继续执行（不推荐）。")
+    with step_scope(ctx, 3, "执行 flutter pub get（预检查）", "正在执行 pub get..."):
+        try:
+            flutter_pub_get(ctx, with_loading=False)
+            ctx.echo("✅ pub get 通过")
+        except Exception as e:
+            ctx.echo(f"❌ pub get 失败：{e}")
+            if _ask_continue(ctx, "是否中断本次升级？"):
+                return 1
+            ctx.echo("选择继续执行（不推荐）。")
 
-    _step(
-        ctx,
-        4,
-        f"分析待升级私有依赖（优先 latest.version；dev={UPGRADE_DEV_DEPENDENCIES}, overrides={UPGRADE_DEPENDENCY_OVERRIDES})",
-    )
-
-    plan = build_private_upgrade_plan(
-        ctx=ctx,
-        private_host_keywords=private_host_keywords,
-        skip_packages=skip_packages,
-    )
+    with step_scope(
+            ctx,
+            4,
+            f"分析待升级私有依赖（优先 latest.version；dev={UPGRADE_DEV_DEPENDENCIES}, overrides={UPGRADE_DEPENDENCY_OVERRIDES})",
+            "分析待升级依赖...",
+    ):
+        plan = build_private_upgrade_plan(
+            ctx=ctx,
+            private_host_keywords=private_host_keywords,
+            skip_packages=skip_packages,
+        )
 
     if not plan:
         ctx.echo("ℹ️ 未发现需要升级的私有依赖。")
         return 0
 
-    # 只列出要修改的部分
     ctx.echo("将升级以下私有依赖：")
     for u in plan:
         ctx.echo(f"  - {u.name}: {u.current} -> {u.target}")
 
-    # if not ctx.yes:
-    #     if not ctx.confirm("是否继续执行升级，并在 pub get / analyze 通过后自动提交？"):
-    #         ctx.echo("ℹ️ 已取消。")
-    #         return 0
+    with step_scope(ctx, 5, "执行依赖升级（写入 pubspec.yaml，保留注释与结构）", "写入 pubspec.yaml..."):
+        changed, summary, errors = apply_upgrades_to_pubspec(ctx, plan)
 
-    _step(ctx, 5, "执行依赖升级（写入 pubspec.yaml，保留注释与结构）")
-    changed, summary, errors = apply_upgrades_to_pubspec(ctx, plan)
-    if errors:
-        raise RuntimeError("升级过程中出现不可处理项：\n" + "\n".join(errors))
+        if errors:
+            raise RuntimeError("升级过程中出现不可处理项：\n" + "\n".join(errors))
 
-    if not changed:
-        ctx.echo("ℹ️ 没有发生实际修改。")
-        return 0
+        if not changed:
+            ctx.echo("ℹ️ 没有发生实际修改。")
+            return 0
 
-    ctx.echo("✅ pubspec.yaml 已更新：")
-    for s in summary:
-        ctx.echo(f"  {s}")
+        ctx.echo("✅ pubspec.yaml 已更新：")
+        for s in summary:
+            ctx.echo(f"  {s}")
 
     if ctx.dry_run:
         ctx.echo("（dry-run）不执行后续 pub get / analyze / git commit。")
         return 0
 
-    _step(ctx, 6, "执行 flutter pub get（升级后）")
-    flutter_pub_get(ctx)
-    ctx.echo("✅ pub get 完成")
+    with step_scope(ctx, 6, "执行 flutter pub get（升级后）", "正在执行 pub get..."):
+        flutter_pub_get(ctx, with_loading=False)
+        ctx.echo("✅ pub get 完成")
 
-    _step(ctx, 7, "执行 flutter analyze")
-    flutter_analyze(ctx)
-    ctx.echo("✅ flutter analyze 完成（info/warning 可继续，error 会中断）")
+    with step_scope(ctx, 7, "执行 flutter analyze", "正在执行 flutter analyze..."):
+        flutter_analyze(ctx)
+        ctx.echo("✅ flutter analyze 完成（info/warning 可继续，error 会中断）")
 
-    _step(ctx, 8, "自动提交（git add + git commit）")
-    git_add_commit(ctx, summary)
-    ctx.echo("✅ 已自动提交完成")
+    with step_scope(ctx, 8, "自动提交（git add + git commit）", "正在提交代码..."):
+        git_add_commit(ctx, summary)
+        ctx.echo("✅ 已自动提交完成")
 
     return 0
