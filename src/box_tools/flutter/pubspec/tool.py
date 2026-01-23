@@ -19,10 +19,10 @@ BOX_TOOL = {
     "name": "box_pubspec",
     "category": "flutter",
     "summary": (
-        "Flutter box_pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、"
+        "Flutter pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、"
         "依赖升级（基于 flutter pub outdated --json 的计划/执行）、"
         "依赖发布（flutter pub publish / dry-run），以及 doctor 本地检查。"
-        "修改 box_pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。"
+        "修改 pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。"
         "启动时会自动执行 doctor：无问题静默，有问题中断并输出错误。"
     ),
     "usage": [
@@ -34,12 +34,12 @@ BOX_TOOL = {
         "box_pubspec upgrade --yes",
         "box_pubspec upgrade --outdated-json outdated.json",
         "box_pubspec --project-root path/to/project",
-        "box_pubspec --box_pubspec path/to/box_pubspec.yaml doctor",
+        "box_pubspec --box_pubspec path/to/pubspec.yaml doctor",
     ],
     "options": [
         {"flag": "command", "desc": "子命令：menu/upgrade/publish/version/doctor（默认 menu）"},
         {"flag": "--project-root", "desc": "项目根目录（默认当前目录）"},
-        {"flag": "--box_pubspec", "desc": "box_pubspec.yaml 路径（默认 project-root/box_pubspec.yaml）"},
+        {"flag": "--box_pubspec", "desc": "pubspec.yaml 路径（默认 project-root/pubspec.yaml）"},
         {"flag": "--outdated-json", "desc": "指定 flutter pub outdated --json 的输出文件（可选，用于离线/复用）"},
         {"flag": "--dry-run", "desc": "只打印计划/预览，不写入文件，不执行危险操作"},
         {"flag": "--yes", "desc": "跳过所有确认（适合 CI/脚本）"},
@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="子命令",
     )
     p.add_argument("--project-root", default=".", help="项目根目录（默认当前目录）")
-    p.add_argument("--box_pubspec", default=None, help="box_pubspec.yaml 路径（默认 project-root/box_pubspec.yaml）")
+    p.add_argument("--box_pubspec", default=None, help="pubspec.yaml 路径（默认 project-root/pubspec.yaml）")
     p.add_argument("--outdated-json", default=None, help="outdated json 文件路径（可选）")
 
     p.add_argument("--dry-run", action="store_true", help="只预览，不写入/不发布")
@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _mk_ctx(args) -> Context:
     project_root = Path(args.project_root).resolve()
-    pubspec_path = Path(args.box_pubspec).resolve() if args.box_pubspec else (project_root / "box_pubspec.yaml").resolve()
+    pubspec_path = Path(args.box_pubspec).resolve() if args.box_pubspec else (project_root / "pubspec.yaml").resolve()
     outdated_json_path = Path(args.outdated_json).resolve() if args.outdated_json else None
 
     def echo(msg: str) -> None:
@@ -211,7 +211,7 @@ def run_menu(ctx: Context) -> int:
 
 def ensure_pubspec_exists(ctx: Context) -> None:
     if not ctx.pubspec_path.exists():
-        raise FileNotFoundError(f"box_pubspec.yaml 不存在：{ctx.pubspec_path}")
+        raise FileNotFoundError(f"pubspec.yaml 不存在：{ctx.pubspec_path}")
 
 
 def run_startup_doctor_or_die(ctx: Context) -> None:
