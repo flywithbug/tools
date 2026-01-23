@@ -248,6 +248,19 @@ def _bump_semver(version: str, mode: str) -> str:
     return f"{major}.{minor}.{patch}{meta}"
 
 
+def _parse_semver_3(version: str) -> tuple[tuple[int, int, int], str]:
+    """解析 version 的前三段 core（x.y.z）并返回 (core_tuple, meta)。"""
+    m = _SEMVER_CORE_RE.match(version.strip())
+    if not m:
+        raise RuntimeError(f"无法解析 version：{version}")
+    core = m.group("core")
+    meta = m.group("meta") or ""
+    nums = [int(x) for x in core.split(".")]
+    while len(nums) < 3:
+        nums.append(0)
+    return (nums[0], nums[1], nums[2]), meta
+
+
 def _apply_pubspec_version(pubspec_text: str, new_version: str) -> tuple[str, str]:
     """
     只替换 version 行，不改其它内容/注释/结构。
@@ -407,33 +420,6 @@ def flutter_pub_publish(ctx: Context, *, dry_run: bool) -> None:
 # =======================
 # User interaction
 # =======================
-def _ask_bump_mode(ctx: Context) -> str:
-    if ctx.yes or not getattr(ctx, "interactive", True):
-        return "patch"
-
-    ctx.echo("版本升级方式：")
-    ctx.echo("  1) patch（默认，x.y.z -> x.y.(z+1)）")
-    ctx.echo("  2) minor（x.y.z -> x.(y+1).0）")
-    ctx.echo("  3) custom（手动输入目标版本）")
-    s = input("> ").strip().lower()
-    if s in ("", "1", "p", "patch"):
-        return "patch"
-    if s in ("2", "m", "minor"):
-        return "minor"
-    if s in ("3", "c", "custom"):
-        return "custom"
-    ctx.echo("无效输入，使用默认 patch")
-    return "patch"
-
-
-def _ask_custom_version(ctx: Context) -> str:
-    ctx.echo("请输入目标 version（例如 3.45.13 或 3.45.13+2026012301）：")
-    v = input("> ").strip()
-    if not v:
-        raise RuntimeError("目标 version 不能为空")
-    return v
-
-
 def _ask_note(ctx: Context) -> str:
     if ctx.yes or not getattr(ctx, "interactive", True):
         return DEFAULT_NOTE
@@ -485,35 +471,20 @@ def publish(ctx: Context) -> int:
     mrel = re.match(r"^release-(\d+)\.(\d+)\.(\d+)$", branch)
     new_version: str
     if mrel:
-        rel_major = int(mrel.group(1))
-        rel_minor = int(mrel.group(2))
-        rel_patch = int(mrel.group(3))
+        # release 分支：优先使用分支名中的版本号。
+        # 例如：release-4.45.0
+        rel_core = (int(mrel.group(1)), int(mrel.group(2)), int(mrel.group(3)))
+        cur_core, meta = _parse_semver_3(old_version)
 
-        mcore = _SEMVER_CORE_RE.match(old_version.strip())
-        if not mcore:
-            raise RuntimeError(f"无法解析 version：{old_version}")
-        core = mcore.group("core")
-        nums = [int(x) for x in core.split(".")]
-        while len(nums) < 3:
-            nums.append(0)
-        cur_major, cur_minor, cur_patch = nums[0], nums[1], nums[2]
-
-        if (cur_major, cur_minor) < (rel_major, rel_minor):
-            new_version = f"{rel_major}.{rel_minor}.{rel_patch}"
-        elif (cur_major, cur_minor) == (rel_major, rel_minor):
+        # 若 release 版本号高于 pubspec.yaml 中的版本号，则直接更新到 release 版本。
+        # 否则（相等或更低）一律走补丁版本自增。
+        if rel_core > cur_core:
+            new_version = f"{rel_core[0]}.{rel_core[1]}.{rel_core[2]}{meta}"
+        else:
             new_version = _bump_semver(old_version, "patch")
-        else:
-            mode = _ask_bump_mode(ctx)
-            if mode == "custom":
-                new_version = _ask_custom_version(ctx)
-            else:
-                new_version = _bump_semver(old_version, mode)
     else:
-        mode = _ask_bump_mode(ctx)
-        if mode == "custom":
-            new_version = _ask_custom_version(ctx)
-        else:
-            new_version = _bump_semver(old_version, mode)
+        # 非 release 分支：一律补丁版本自增（x.y.z -> x.y.(z+1)）。
+        new_version = _bump_semver(old_version, "patch")
 
     if new_version == old_version:
         raise RuntimeError(f"版本未变化：{old_version}")
