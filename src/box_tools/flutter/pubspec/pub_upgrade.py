@@ -24,6 +24,89 @@ class UpgradeItem:
 
 
 # =======================
+# Step helpers
+# =======================
+def _step(ctx: Context, n: int, title: str) -> None:
+    ctx.echo(f"\n[{n}] {title}")
+
+
+def _ask_continue(ctx: Context, prompt: str) -> bool:
+    """
+    返回 True 表示“中断”，False 表示“继续”
+    - ctx.yes：默认不询问，继续（不中断）
+    """
+    if ctx.yes:
+        return False
+    return ctx.confirm(prompt)
+
+
+# =======================
+# Git helpers
+# =======================
+def _git_check_repo(ctx: Context) -> None:
+    r = run_cmd(["git", "rev-parse", "--is-inside-work-tree"], cwd=ctx.project_root, capture=True)
+    if r.code != 0 or (r.out or "").strip() != "true":
+        raise RuntimeError("当前目录不是 git 仓库，无法执行拉取与自动提交。")
+
+
+def _git_is_dirty(ctx: Context) -> bool:
+    r = run_cmd(["git", "status", "--porcelain"], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(f"git status 失败：{(r.err or r.out).strip()}")
+    return bool((r.out or "").strip())
+
+
+def _git_current_branch(ctx: Context) -> str:
+    r = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(f"获取当前分支失败：{(r.err or r.out).strip()}")
+    return (r.out or "").strip()
+
+
+def _git_has_remote_branch(ctx: Context, branch: str) -> bool:
+    r = run_cmd(["git", "ls-remote", "--heads", "origin", branch], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        return False
+    return bool((r.out or "").strip())
+
+
+def _git_pull_ff_only(ctx: Context) -> None:
+    branch = _git_current_branch(ctx)
+    if not _git_has_remote_branch(ctx, branch):
+        ctx.echo("⚠️ 当前分支没有远程分支，跳过 git pull。")
+        return
+
+    ctx.echo(f"⬇️ 拉取远程分支 {branch}（ff-only）...")
+    r = run_cmd(["git", "pull", "--ff-only"], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(
+            "git pull 失败（可能存在分叉，需要手动 rebase/merge）：\n" + (r.err or r.out).strip()
+        )
+    ctx.echo("✅ git pull 完成")
+
+
+def git_add_commit(ctx: Context, summary_lines: list[str]) -> None:
+    if not summary_lines:
+        return
+
+    subject = "up deps"
+    body = "\n".join(summary_lines)
+    msg = subject + "\n\n" + body
+
+    paths = ["pubspec.yaml"]
+    if (ctx.project_root / "pubspec.lock").exists():
+        paths.append("pubspec.lock")
+
+    r = run_cmd(["git", "add", *paths], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(f"git add 失败：{(r.err or r.out).strip()}")
+
+    r = run_cmd(["git", "commit", "-m", msg], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(f"git commit 失败：{(r.err or r.out).strip()}")
+
+
+# =======================
 # Version utils
 # =======================
 def is_valid_version(version) -> bool:
@@ -31,7 +114,9 @@ def is_valid_version(version) -> bool:
         return False
     v = version.strip()
     # 允许：^1.2.3、1.2.3、1.2.3+build、1.2.3-pre、1.2.3-pre+build
-    return bool(re.fullmatch(r"^\^?[0-9]+(?:\.[0-9]+)*(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$", v))
+    return bool(
+        re.fullmatch(r"^\^?[0-9]+(?:\.[0-9]+)*(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$", v)
+    )
 
 
 def _strip_meta(v: str) -> str:
@@ -222,7 +307,7 @@ def _is_private_hosted_dep(block: list[str], private_host_keywords: tuple[str, .
 
 
 # =======================
-# Target selection (PRD rules: prefer latest)
+# Target selection (prefer latest)
 # =======================
 def _pick_target_with_upper(info: dict[str, str], upper: str) -> tuple[Optional[str], str]:
     """
@@ -320,9 +405,7 @@ def build_private_upgrade_plan(
 # =======================
 # Apply (text-level minimal replacement)
 # =======================
-# 单行依赖：  "  pkg: ^1.2.3   # comment"
 _INLINE_DEP_RE = re.compile(r"^(?P<prefix>\s{2}\S+:\s*)(?P<ver>\S+)(?P<suffix>.*)$")
-# 多行块 version： "  version: 1.2.3  # comment"（缩进不固定）
 _VERSION_LINE_RE = re.compile(r"^(?P<prefix>\s*version:\s*)(?P<ver>\S+)(?P<suffix>.*)$")
 
 
@@ -393,6 +476,8 @@ def apply_upgrades_to_pubspec(ctx: Context, upgrades: list[UpgradeItem]) -> tupl
         dep = current_dep
         if dep and dep in upgrade_map:
             u = upgrade_map[dep]
+            ctx.echo(f"  • 处理 {dep} ...")
+
             target_core = _strip_meta(u.target)  # 写入时去掉 + / - 元信息
 
             b2, oldv, written, mode = _apply_version_in_block(current_block, target_core)
@@ -404,6 +489,7 @@ def apply_upgrades_to_pubspec(ctx: Context, upgrades: list[UpgradeItem]) -> tupl
                 if compare_versions(_strip_meta(oldv), _strip_meta(written)) < 0:
                     changed = True
                     summary_lines.append(f"🔄 {dep}: {oldv} → {written}")
+                    ctx.echo(f"    ✅ {dep} 已写入")
         else:
             new_lines.extend(current_block)
 
@@ -449,7 +535,6 @@ def apply_upgrades_to_pubspec(ctx: Context, upgrades: list[UpgradeItem]) -> tupl
         return False, summary_lines, []
 
     if ctx.dry_run:
-        # dry-run：不写入，但认为“有变更可做”
         return True, summary_lines, []
 
     write_text_atomic(ctx.pubspec_path, "".join(new_lines))
@@ -457,7 +542,7 @@ def apply_upgrades_to_pubspec(ctx: Context, upgrades: list[UpgradeItem]) -> tupl
 
 
 # =======================
-# pub get / analyze / git commit
+# pub get / analyze
 # =======================
 def _clear_line():
     print("\r\033[2K", end="", flush=True)
@@ -502,46 +587,53 @@ def flutter_analyze(ctx: Context) -> None:
         raise RuntimeError((r.err or r.out).strip() or "flutter analyze 失败")
 
 
-def git_add_commit(ctx: Context, summary_lines: list[str]) -> None:
-    if not summary_lines:
-        return
-
-    subject = "up deps"
-    body = "\n".join(summary_lines)
-    msg = subject + "\n\n" + body
-
-    paths = ["pubspec.yaml"]
-    if (ctx.project_root / "pubspec.lock").exists():
-        paths.append("pubspec.lock")
-
-    r = run_cmd(["git", "add", *paths], cwd=ctx.project_root, capture=True)
-    if r.code != 0:
-        raise RuntimeError(f"git add 失败：{(r.err or r.out).strip()}")
-
-    r = run_cmd(["git", "commit", "-m", msg], cwd=ctx.project_root, capture=True)
-    if r.code != 0:
-        raise RuntimeError(f"git commit 失败：{(r.err or r.out).strip()}")
-
-
 # =======================
-# Entry: default APPLY
+# Entry: default APPLY with full steps
 # =======================
 def run(ctx: Context) -> int:
     # 默认：不过滤域名（任何 hosted+url 都算私有），默认 skip
     private_host_keywords: tuple[str, ...] = tuple()
     skip_packages: set[str] = {"ap_recaptcha"}
 
+    _step(ctx, 0, "环境检查（git 仓库）")
+    _git_check_repo(ctx)
+
+    _step(ctx, 1, "检查是否有未提交变更")
+    if _git_is_dirty(ctx):
+        ctx.echo("⚠️ 检测到未提交变更（working tree dirty）。")
+        # 这里按你说的“提示是否中断”：是 => 中断
+        if _ask_continue(ctx, "是否中断本次升级？"):
+            ctx.echo("已中断。")
+            return 0
+        ctx.echo("继续执行（注意：可能把无关变更一起 commit，建议先处理干净）。")
+    else:
+        ctx.echo("✅ 工作区干净")
+
+    _step(ctx, 2, "拉取最新代码（git pull --ff-only）")
+    _git_pull_ff_only(ctx)
+
+    _step(ctx, 3, "执行 flutter pub get（预检查）")
+    try:
+        flutter_pub_get(ctx)
+        ctx.echo("✅ pub get 通过")
+    except Exception as e:
+        ctx.echo(f"❌ pub get 失败：{e}")
+        if _ask_continue(ctx, "是否中断本次升级？"):
+            return 1
+        ctx.echo("选择继续执行（不推荐）。")
+
+    _step(ctx, 4, "分析待升级私有依赖（优先 latest.version）")
     plan = build_private_upgrade_plan(
         ctx=ctx,
         private_host_keywords=private_host_keywords,
         skip_packages=skip_packages,
     )
 
-    # 只列出要修改的部分
     if not plan:
         ctx.echo("ℹ️ 未发现需要升级的私有依赖。")
         return 0
 
+    # 只列出要修改的部分
     ctx.echo("将升级以下私有依赖：")
     for u in plan:
         ctx.echo(f"  - {u.name}: {u.current} -> {u.target}")
@@ -551,7 +643,7 @@ def run(ctx: Context) -> int:
             ctx.echo("ℹ️ 已取消。")
             return 0
 
-    # 应用修改（严格局部替换）
+    _step(ctx, 5, "执行依赖升级（写入 pubspec.yaml，保留注释与结构）")
     changed, summary, errors = apply_upgrades_to_pubspec(ctx, plan)
     if errors:
         raise RuntimeError("升级过程中出现不可处理项：\n" + "\n".join(errors))
@@ -560,19 +652,24 @@ def run(ctx: Context) -> int:
         ctx.echo("ℹ️ 没有发生实际修改。")
         return 0
 
-    # 实际修改清单（只列出要修改的部分）
+    ctx.echo("✅ pubspec.yaml 已更新：")
     for s in summary:
-        ctx.echo(s)
+        ctx.echo(f"  {s}")
 
     if ctx.dry_run:
-        ctx.echo("（dry-run）不执行 pub get / analyze / git commit。")
+        ctx.echo("（dry-run）不执行后续 pub get / analyze / git commit。")
         return 0
 
-    # 后置检查：pub get + analyze，任何失败直接抛出（不提交）
+    _step(ctx, 6, "执行 flutter pub get（升级后）")
     flutter_pub_get(ctx)
-    flutter_analyze(ctx)
+    ctx.echo("✅ pub get 完成")
 
-    # 自动提交
+    _step(ctx, 7, "执行 flutter analyze")
+    flutter_analyze(ctx)
+    ctx.echo("✅ flutter analyze 通过")
+
+    _step(ctx, 8, "自动提交（git add + git commit）")
     git_add_commit(ctx, summary)
-    ctx.echo("✅ pub get / analyze 通过，已自动提交。")
+    ctx.echo("✅ 已自动提交完成")
+
     return 0

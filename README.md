@@ -391,9 +391,7 @@ pubspec upgrade
 pubspec publish
 pubspec version
 pubspec doctor
-pubspec version --mode patch --yes
-pubspec version --mode minor
-pubspec upgrade --dry-run
+pubspec upgrade --yes
 pubspec upgrade --outdated-json outdated.json
 pubspec --project-root path/to/project
 pubspec --pubspec path/to/pubspec.yaml doctor
@@ -414,11 +412,10 @@ pubspec --pubspec path/to/pubspec.yaml doctor
 
 - `pubspec`：进入交互菜单
 - `pubspec doctor`：本地检查：pubspec 是否存在/字段规范/环境可用
+- `pubspec upgrade`：执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）
+- `pubspec upgrade --outdated-json outdated.json`：使用已有 outdated.json
+- `pubspec upgrade --yes`：无交互执行升级
 - `pubspec version --mode patch --yes`：补丁版本自增并直接写入（只改 version 行）
-- `pubspec version --mode minor`：小版本自增（只改 version 行，默认需要确认）
-- `pubspec upgrade`：进入依赖升级子菜单（scan/apply）
-- `pubspec upgrade --outdated-json outdated.json`：使用已有 outdated.json 生成升级计划
-- `pubspec publish`：进入发布子菜单（check/dry-run/publish）
 
 **文档**
 

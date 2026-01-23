@@ -30,9 +30,7 @@ BOX_TOOL = {
         "pubspec publish",
         "pubspec version",
         "pubspec doctor",
-        "pubspec version --mode patch --yes",
-        "pubspec version --mode minor",
-        "pubspec upgrade --dry-run",
+        "pubspec upgrade --yes",
         "pubspec upgrade --outdated-json outdated.json",
         "pubspec --project-root path/to/project",
         "pubspec --pubspec path/to/pubspec.yaml doctor",
@@ -50,21 +48,21 @@ BOX_TOOL = {
     "examples": [
         {"cmd": "pubspec", "desc": "进入交互菜单"},
         {"cmd": "pubspec doctor", "desc": "本地检查：pubspec 是否存在/字段规范/环境可用"},
+        {"cmd": "pubspec upgrade", "desc": "执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）"},
+        {"cmd": "pubspec upgrade --outdated-json outdated.json", "desc": "使用已有 outdated.json"},
+        {"cmd": "pubspec upgrade --yes", "desc": "无交互执行升级"},
         {"cmd": "pubspec version --mode patch --yes", "desc": "补丁版本自增并直接写入（只改 version 行）"},
-        {"cmd": "pubspec version --mode minor", "desc": "小版本自增（只改 version 行，默认需要确认）"},
-        {"cmd": "pubspec upgrade", "desc": "进入依赖升级子菜单（scan/apply）"},
-        {"cmd": "pubspec upgrade --outdated-json outdated.json", "desc": "使用已有 outdated.json 生成升级计划"},
-        {"cmd": "pubspec publish", "desc": "进入发布子菜单（check/dry-run/publish）"},
     ],
     "dependencies": [
         "Flutter SDK（flutter 可执行）",
+        "git（用于 pull/commit）",
     ],
     "docs": "README.md",
 }
 
 
 # ----------------------------
-# Context：统一运行上下文（尽量少）
+# Context：统一运行上下文
 # ----------------------------
 @dataclass(frozen=True)
 class Context:
@@ -81,7 +79,6 @@ class Context:
 
 # ----------------------------
 # IO：读写（原子写入，无 .bak 备份）
-# 注意：调用者必须只做最小必要的文本替换，避免破坏注释/结构
 # ----------------------------
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -127,13 +124,6 @@ def flutter_pub_outdated_json(ctx: Context) -> dict:
     if r.code != 0:
         raise RuntimeError((r.err.strip() or r.out.strip() or "flutter pub outdated 执行失败"))
     return json.loads(r.out)
-
-
-def flutter_pub_publish(ctx: Context, dry_run: bool) -> CmdResult:
-    cmd = ["flutter", "pub", "publish"]
-    if dry_run:
-        cmd.append("--dry-run")
-    return run_cmd(cmd, cwd=ctx.project_root, capture=True)
 
 
 # ----------------------------
@@ -231,38 +221,41 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv[1:])
     ctx = _mk_ctx(args)
 
-    # doctor 允许在缺少 pubspec 时也能跑（会提示/报错但不直接崩）
-    if args.command != "doctor":
-        try:
+    try:
+        # doctor 允许在缺少 pubspec 时也能跑（会提示/报错但不直接崩）
+        if args.command != "doctor":
             ensure_pubspec_exists(ctx)
-        except Exception as e:
-            ctx.echo(f"❌ {e}")
-            return 2
 
-    if args.command == "menu":
-        return run_menu(ctx)
+        if args.command == "menu":
+            return run_menu(ctx)
 
-    if args.command == "doctor":
-        from .doctor import run_menu as doctor_menu
-        return doctor_menu(ctx)
+        if args.command == "doctor":
+            from .doctor import run_menu as doctor_menu
+            return doctor_menu(ctx)
 
-    if args.command == "version":
-        from .pub_version import run as version_run, run_menu as version_menu
-        if args.mode:
-            return version_run(ctx, mode=args.mode)
-        return version_menu(ctx)
+        if args.command == "version":
+            from .pub_version import run as version_run, run_menu as version_menu
+            if args.mode:
+                return version_run(ctx, mode=args.mode)
+            return version_menu(ctx)
 
-    if args.command == "upgrade":
-        from .pub_upgrade import run as upgrade_run
-        return upgrade_run(ctx)
+        if args.command == "upgrade":
+            from .pub_upgrade import run as upgrade_run
+            return upgrade_run(ctx)
 
+        if args.command == "publish":
+            from .pub_publish import run_menu as publish_menu
+            return publish_menu(ctx)
 
-    if args.command == "publish":
-        from .pub_publish import run_menu as publish_menu
-        return publish_menu(ctx)
+        ctx.echo("未知命令")
+        return 1
 
-    ctx.echo("未知命令")
-    return 1
+    except KeyboardInterrupt:
+        ctx.echo("\n已取消。")
+        return 130
+    except Exception as e:
+        ctx.echo(f"❌ {e}")
+        return 1
 
 
 if __name__ == "__main__":
