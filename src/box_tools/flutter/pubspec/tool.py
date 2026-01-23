@@ -15,30 +15,31 @@ from typing import Callable, Optional
 # BOX_TOOL（对齐示例结构）
 # ----------------------------
 BOX_TOOL = {
-    "id": "flutter.pubspec",
-    "name": "pubspec",
+    "id": "flutter.box_pubspec",
+    "name": "box_pubspec",
     "category": "flutter",
     "summary": (
-        "Flutter pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、"
+        "Flutter box_pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、"
         "依赖升级（基于 flutter pub outdated --json 的计划/执行）、"
         "依赖发布（flutter pub publish / dry-run），以及 doctor 本地检查。"
-        "修改 pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。"
+        "修改 box_pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。"
+        "启动时会自动执行 doctor：无问题静默，有问题中断并输出错误。"
     ),
     "usage": [
-        "pubspec",
-        "pubspec upgrade",
-        "pubspec publish",
-        "pubspec version",
-        "pubspec doctor",
-        "pubspec upgrade --yes",
-        "pubspec upgrade --outdated-json outdated.json",
-        "pubspec --project-root path/to/project",
-        "pubspec --pubspec path/to/pubspec.yaml doctor",
+        "box_pubspec",
+        "box_pubspec upgrade",
+        "box_pubspec publish",
+        "box_pubspec version",
+        "box_pubspec doctor",
+        "box_pubspec upgrade --yes",
+        "box_pubspec upgrade --outdated-json outdated.json",
+        "box_pubspec --project-root path/to/project",
+        "box_pubspec --box_pubspec path/to/box_pubspec.yaml doctor",
     ],
     "options": [
         {"flag": "command", "desc": "子命令：menu/upgrade/publish/version/doctor（默认 menu）"},
         {"flag": "--project-root", "desc": "项目根目录（默认当前目录）"},
-        {"flag": "--pubspec", "desc": "pubspec.yaml 路径（默认 project-root/pubspec.yaml）"},
+        {"flag": "--box_pubspec", "desc": "box_pubspec.yaml 路径（默认 project-root/box_pubspec.yaml）"},
         {"flag": "--outdated-json", "desc": "指定 flutter pub outdated --json 的输出文件（可选，用于离线/复用）"},
         {"flag": "--dry-run", "desc": "只打印计划/预览，不写入文件，不执行危险操作"},
         {"flag": "--yes", "desc": "跳过所有确认（适合 CI/脚本）"},
@@ -46,15 +47,14 @@ BOX_TOOL = {
         {"flag": "--mode", "desc": "version：show/patch/minor（脚本模式快捷入口）"},
     ],
     "examples": [
-        {"cmd": "pubspec", "desc": "进入交互菜单"},
-        {"cmd": "pubspec doctor", "desc": "本地检查：pubspec 是否存在/字段规范/环境可用"},
-        {"cmd": "pubspec upgrade", "desc": "执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）"},
-        {"cmd": "pubspec upgrade --outdated-json outdated.json", "desc": "使用已有 outdated.json"},
-        {"cmd": "pubspec upgrade --yes", "desc": "无交互执行升级"},
-        {"cmd": "pubspec version --mode patch --yes", "desc": "补丁版本自增并直接写入（只改 version 行）"},
+        {"cmd": "box_pubspec", "desc": "进入交互菜单（启动时自动 doctor；无问题不输出）"},
+        {"cmd": "box_pubspec doctor", "desc": "手动运行 doctor（会输出详细检查结果）"},
+        {"cmd": "box_pubspec upgrade", "desc": "执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）"},
+        {"cmd": "box_pubspec upgrade --outdated-json outdated.json", "desc": "使用已有 outdated.json"},
+        {"cmd": "box_pubspec upgrade --yes", "desc": "无交互执行升级"},
+        {"cmd": "box_pubspec version --mode patch --yes", "desc": "补丁版本自增并直接写入（只改 version 行）"},
     ],
-    "dependencies": [
-    ],
+    "dependencies": [],
     "docs": "README.md",
 }
 
@@ -105,7 +105,7 @@ class CmdResult:
     err: str
 
 
-def run_cmd(cmd: list[str], cwd: Path, capture: bool = True) -> CmdResult:
+def run_cmd(cmd: list[str], cwd: Path | str, capture: bool = True) -> CmdResult:
     p = subprocess.run(
         cmd,
         cwd=str(cwd),
@@ -128,7 +128,7 @@ def flutter_pub_outdated_json(ctx: Context) -> dict:
 # CLI / Menu
 # ----------------------------
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="pubspec")
+    p = argparse.ArgumentParser(prog="box_pubspec")
     p.add_argument(
         "command",
         nargs="?",
@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="子命令",
     )
     p.add_argument("--project-root", default=".", help="项目根目录（默认当前目录）")
-    p.add_argument("--pubspec", default=None, help="pubspec.yaml 路径（默认 project-root/pubspec.yaml）")
+    p.add_argument("--box_pubspec", default=None, help="box_pubspec.yaml 路径（默认 project-root/box_pubspec.yaml）")
     p.add_argument("--outdated-json", default=None, help="outdated json 文件路径（可选）")
 
     p.add_argument("--dry-run", action="store_true", help="只预览，不写入/不发布")
@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _mk_ctx(args) -> Context:
     project_root = Path(args.project_root).resolve()
-    pubspec_path = Path(args.pubspec).resolve() if args.pubspec else (project_root / "pubspec.yaml").resolve()
+    pubspec_path = Path(args.box_pubspec).resolve() if args.box_pubspec else (project_root / "box_pubspec.yaml").resolve()
     outdated_json_path = Path(args.outdated_json).resolve() if args.outdated_json else None
 
     def echo(msg: str) -> None:
@@ -184,7 +184,7 @@ def run_menu(ctx: Context) -> int:
     ]
 
     while True:
-        ctx.echo("\n=== pubspec ===")
+        ctx.echo("\n=== box_pubspec ===")
         for i, (cmd, label) in enumerate(menu, start=1):
             ctx.echo(f"{i}. {cmd:<10} {label}")
         ctx.echo("0. exit       退出")
@@ -197,7 +197,7 @@ def run_menu(ctx: Context) -> int:
             continue
 
         cmd = menu[int(choice) - 1][0]
-        argv = ["pubspec", cmd, "--project-root", str(ctx.project_root), "--pubspec", str(ctx.pubspec_path)]
+        argv = ["box_pubspec", cmd, "--project-root", str(ctx.project_root), "--box_pubspec", str(ctx.pubspec_path)]
         if ctx.outdated_json_path:
             argv += ["--outdated-json", str(ctx.outdated_json_path)]
         if ctx.dry_run:
@@ -211,7 +211,22 @@ def run_menu(ctx: Context) -> int:
 
 def ensure_pubspec_exists(ctx: Context) -> None:
     if not ctx.pubspec_path.exists():
-        raise FileNotFoundError(f"pubspec.yaml 不存在：{ctx.pubspec_path}")
+        raise FileNotFoundError(f"box_pubspec.yaml 不存在：{ctx.pubspec_path}")
+
+
+def run_startup_doctor_or_die(ctx: Context) -> None:
+    """
+    启动时自动执行 doctor：
+    - 通过：静默（不输出）
+    - 失败：抛出具体错误信息，阻断后续操作
+    """
+    from .doctor import collect
+
+    ok, _warnings, errors = collect(ctx)
+    if ok:
+        return
+    # 直接把错误清单抛给用户（main 外层会打印成 ❌ ...）
+    raise RuntimeError("\n".join(f"❌ {e}" if not e.startswith("❌") else e for e in errors))
 
 
 def main(argv=None) -> int:
@@ -220,7 +235,11 @@ def main(argv=None) -> int:
     ctx = _mk_ctx(args)
 
     try:
-        # doctor 允许在缺少 pubspec 时也能跑（会提示/报错但不直接崩）
+        # 启动即 doctor：doctor 命令本身不做静默拦截（用户就是来看的）
+        if args.command != "doctor":
+            run_startup_doctor_or_die(ctx)
+
+        # doctor 允许在缺少 box_pubspec 时也能跑（会提示/报错但不直接崩）
         if args.command != "doctor":
             ensure_pubspec_exists(ctx)
 
