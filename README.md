@@ -30,7 +30,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - [flutter/pub_version](#flutter-pub_version)
   - [`box_pub_version`](#box_tools-flutter-pub_version-tool)
 - [flutter/pubspec](#flutter-pubspec)
-  - [`pubspec`](#box_tools-flutter-pubspec-tool)
+  - [`box_pubspec`](#box_tools-flutter-pubspec-tool)
 - [flutter/riverpod_gen](#flutter-riverpod_gen)
   - [`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)
 - [flutter/slang_i18n](#flutter-slang_i18n)
@@ -68,7 +68,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter/pubspec
 
-- **[`pubspec`](#box_tools-flutter-pubspec-tool)**：Flutter pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、依赖升级（基于 flutter pub outdated --json 的计划/执行）、依赖发布（flutter pub publish / dry-run），以及 doctor 本地检查。修改 pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。（[README.md](src/box_tools/flutter/pubspec/README.md)）
+- **[`box_pubspec`](#box_tools-flutter-pubspec-tool)**：Flutter box_pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、依赖升级（基于 flutter pub outdated --json 的计划/执行）、依赖发布（flutter pub publish / dry-run），以及 doctor 本地检查。修改 box_pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。启动时会自动执行 doctor：无问题静默，有问题中断并输出错误。（[README.md](src/box_tools/flutter/pubspec/README.md)）
 
 ### flutter/riverpod_gen
 
@@ -110,7 +110,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### flutter/pubspec
 
-- **pubspec**：[README.md](src/box_tools/flutter/pubspec/README.md)
+- **box_pubspec**：[README.md](src/box_tools/flutter/pubspec/README.md)
 
 ### flutter/riverpod_gen
 
@@ -377,31 +377,31 @@ box_pub_version minor --file path/to/pubspec.yaml
 
 <a id="box_tools-flutter-pubspec-tool"></a>
 
-### pubspec
+### box_pubspec
 
-**简介**：Flutter pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、依赖升级（基于 flutter pub outdated --json 的计划/执行）、依赖发布（flutter pub publish / dry-run），以及 doctor 本地检查。修改 pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。
+**简介**：Flutter box_pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、依赖升级（基于 flutter pub outdated --json 的计划/执行）、依赖发布（flutter pub publish / dry-run），以及 doctor 本地检查。修改 box_pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。启动时会自动执行 doctor：无问题静默，有问题中断并输出错误。
 
-**命令**：`pubspec`
+**命令**：`box_pubspec`
 
 **用法**
 
 ```bash
-pubspec
-pubspec upgrade
-pubspec publish
-pubspec version
-pubspec doctor
-pubspec upgrade --yes
-pubspec upgrade --outdated-json outdated.json
-pubspec --project-root path/to/project
-pubspec --pubspec path/to/pubspec.yaml doctor
+box_pubspec
+box_pubspec upgrade
+box_pubspec publish
+box_pubspec version
+box_pubspec doctor
+box_pubspec upgrade --yes
+box_pubspec upgrade --outdated-json outdated.json
+box_pubspec --project-root path/to/project
+box_pubspec --box_pubspec path/to/box_pubspec.yaml doctor
 ```
 
 **参数说明**
 
 - `command`：子命令：menu/upgrade/publish/version/doctor（默认 menu）
 - `--project-root`：项目根目录（默认当前目录）
-- `--pubspec`：pubspec.yaml 路径（默认 project-root/pubspec.yaml）
+- `--box_pubspec`：box_pubspec.yaml 路径（默认 project-root/box_pubspec.yaml）
 - `--outdated-json`：指定 flutter pub outdated --json 的输出文件（可选，用于离线/复用）
 - `--dry-run`：只打印计划/预览，不写入文件，不执行危险操作
 - `--yes`：跳过所有确认（适合 CI/脚本）
@@ -410,12 +410,12 @@ pubspec --pubspec path/to/pubspec.yaml doctor
 
 **示例**
 
-- `pubspec`：进入交互菜单
-- `pubspec doctor`：本地检查：pubspec 是否存在/字段规范/环境可用
-- `pubspec upgrade`：执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）
-- `pubspec upgrade --outdated-json outdated.json`：使用已有 outdated.json
-- `pubspec upgrade --yes`：无交互执行升级
-- `pubspec version --mode patch --yes`：补丁版本自增并直接写入（只改 version 行）
+- `box_pubspec`：进入交互菜单（启动时自动 doctor；无问题不输出）
+- `box_pubspec doctor`：手动运行 doctor（会输出详细检查结果）
+- `box_pubspec upgrade`：执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）
+- `box_pubspec upgrade --outdated-json outdated.json`：使用已有 outdated.json
+- `box_pubspec upgrade --yes`：无交互执行升级
+- `box_pubspec version --mode patch --yes`：补丁版本自增并直接写入（只改 version 行）
 
 **文档**
 
