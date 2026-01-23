@@ -104,7 +104,8 @@ def _git_pull_ff_only(ctx: Context) -> None:
 
 
 def _git_add_commit_push(ctx: Context, *, new_version: str, old_version: str, note: str) -> None:
-    subject = f"release {new_version}"
+    pkg = _read_pubspec_name(read_text(ctx.pubspec_path)) or "(unknown)"
+    subject = f"build: {pkg} + {new_version}"
     body = f"- version: {old_version} -> {new_version}\n- note: {note}"
     msg = subject + "\n\n" + body
 
@@ -135,6 +136,15 @@ def _git_add_commit_push(ctx: Context, *, new_version: str, old_version: str, no
 # =======================
 _VERSION_LINE_RE = re.compile(r"^(?P<prefix>\s*version:\s*)(?P<ver>\S+)(?P<suffix>\s*(?:#.*)?)$")
 _SEMVER_CORE_RE = re.compile(r"^(?P<core>\d+(?:\.\d+){1,3})(?P<meta>.*)$")
+
+
+def _read_pubspec_name(pubspec_text: str) -> Optional[str]:
+    """读取 pubspec.yaml 顶层 name: 字段（容忍前导空格）"""
+    for raw in pubspec_text.splitlines():
+        m = re.match(r"^\s*name:\s*(\S+)\s*$", raw)
+        if m:
+            return m.group(1).strip()
+    return None
 
 
 def _read_pubspec_version(pubspec_text: str) -> Optional[str]:
@@ -375,11 +385,44 @@ def publish(ctx: Context) -> int:
         raise RuntimeError("pubspec.yaml 未找到 version: 行，无法发布")
 
     _step(ctx, 4, "版本自增")
-    mode = _ask_bump_mode(ctx)
-    if mode == "custom":
-        new_version = _ask_custom_version(ctx)
+    # release 分支自动适配：release-x.y.z
+    branch = _git_current_branch(ctx)
+    mrel = re.match(r"^release-(\d+)\.(\d+)\.(\d+)$", branch)
+    new_version: str
+    if mrel:
+        rel_major = int(mrel.group(1))
+        rel_minor = int(mrel.group(2))
+        rel_patch = int(mrel.group(3))
+
+        # 解析当前 version 的 core（忽略 -pre / +build）
+        mcore = _SEMVER_CORE_RE.match(old_version.strip())
+        if not mcore:
+            raise RuntimeError(f"无法解析 version：{old_version}")
+        core = mcore.group("core")
+        nums = [int(x) for x in core.split(".")]
+        while len(nums) < 3:
+            nums.append(0)
+        cur_major, cur_minor, cur_patch = nums[0], nums[1], nums[2]
+
+        if (cur_major, cur_minor) < (rel_major, rel_minor):
+            # 比 release 大版本低：强制对齐到 release 起点 x.y.z
+            new_version = f"{rel_major}.{rel_minor}.{rel_patch}"
+        elif (cur_major, cur_minor) == (rel_major, rel_minor):
+            # 同一大版本：patch 自增（保留原 meta 逻辑）
+            new_version = _bump_semver(old_version, "patch")
+        else:
+            # 其它情况：回退原逻辑
+            mode = _ask_bump_mode(ctx)
+            if mode == "custom":
+                new_version = _ask_custom_version(ctx)
+            else:
+                new_version = _bump_semver(old_version, mode)
     else:
-        new_version = _bump_semver(old_version, mode)
+        mode = _ask_bump_mode(ctx)
+        if mode == "custom":
+            new_version = _ask_custom_version(ctx)
+        else:
+            new_version = _bump_semver(old_version, mode)
 
     if new_version == old_version:
         raise RuntimeError(f"版本未变化：{old_version}")
