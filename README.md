@@ -29,6 +29,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
   - [`box_pub_upgrade`](#box_tools-flutter-pub_upgrade-tool)
 - [flutter/pub_version](#flutter-pub_version)
   - [`box_pub_version`](#box_tools-flutter-pub_version-tool)
+- [flutter/pubspec](#flutter-pubspec)
+  - [`pubspec`](#box_tools-flutter-pubspec-tool)
 - [flutter/riverpod_gen](#flutter-riverpod_gen)
   - [`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)
 - [flutter/slang_i18n](#flutter-slang_i18n)
@@ -63,6 +65,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### flutter/pub_version
 
 - **[`box_pub_version`](#box_tools-flutter-pub_version-tool)**：升级 Flutter pubspec.yaml 的 version（支持交互选择 minor/patch，可选 git 提交）（[README.md](src/box_tools/flutter/pub_version/README.md)）
+
+### flutter/pubspec
+
+- **[`pubspec`](#box_tools-flutter-pubspec-tool)**：Flutter pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、依赖升级（基于 flutter pub outdated --json 的计划/执行）、依赖发布（flutter pub publish / dry-run），以及 doctor 本地检查。修改 pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。（[README.md](src/box_tools/flutter/pubspec/README.md)）
 
 ### flutter/riverpod_gen
 
@@ -101,6 +107,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### flutter/pub_version
 
 - **box_pub_version**：[README.md](src/box_tools/flutter/pub_version/README.md)
+
+### flutter/pubspec
+
+- **pubspec**：[README.md](src/box_tools/flutter/pubspec/README.md)
 
 ### flutter/riverpod_gen
 
@@ -358,6 +368,61 @@ box_pub_version minor --file path/to/pubspec.yaml
 **文档**
 
 [README.md](src/box_tools/flutter/pub_version/README.md)
+
+---
+
+<a id="flutter-pubspec"></a>
+
+## flutter/pubspec
+
+<a id="box_tools-flutter-pubspec-tool"></a>
+
+### pubspec
+
+**简介**：Flutter pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、依赖升级（基于 flutter pub outdated --json 的计划/执行）、依赖发布（flutter pub publish / dry-run），以及 doctor 本地检查。修改 pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。
+
+**命令**：`pubspec`
+
+**用法**
+
+```bash
+pubspec
+pubspec upgrade
+pubspec publish
+pubspec version
+pubspec doctor
+pubspec version --mode patch --yes
+pubspec version --mode minor
+pubspec upgrade --dry-run
+pubspec upgrade --outdated-json outdated.json
+pubspec --project-root path/to/project
+pubspec --pubspec path/to/pubspec.yaml doctor
+```
+
+**参数说明**
+
+- `command`：子命令：menu/upgrade/publish/version/doctor（默认 menu）
+- `--project-root`：项目根目录（默认当前目录）
+- `--pubspec`：pubspec.yaml 路径（默认 project-root/pubspec.yaml）
+- `--outdated-json`：指定 flutter pub outdated --json 的输出文件（可选，用于离线/复用）
+- `--dry-run`：只打印计划/预览，不写入文件，不执行危险操作
+- `--yes`：跳过所有确认（适合 CI/脚本）
+- `--no-interactive`：关闭交互菜单（脚本模式）
+- `--mode`：version：show/patch/minor（脚本模式快捷入口）
+
+**示例**
+
+- `pubspec`：进入交互菜单
+- `pubspec doctor`：本地检查：pubspec 是否存在/字段规范/环境可用
+- `pubspec version --mode patch --yes`：补丁版本自增并直接写入（只改 version 行）
+- `pubspec version --mode minor`：小版本自增（只改 version 行，默认需要确认）
+- `pubspec upgrade`：进入依赖升级子菜单（scan/apply）
+- `pubspec upgrade --outdated-json outdated.json`：使用已有 outdated.json 生成升级计划
+- `pubspec publish`：进入发布子菜单（check/dry-run/publish）
+
+**文档**
+
+[README.md](src/box_tools/flutter/pubspec/README.md)
 
 ---
 
