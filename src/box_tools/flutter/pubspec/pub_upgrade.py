@@ -11,6 +11,11 @@ from typing import Optional
 
 from .tool import Context, read_text, write_text_atomic, run_cmd, flutter_pub_outdated_json
 
+# =======================
+# Config switches (top-level)
+# =======================
+UPGRADE_DEV_DEPENDENCIES = False        # 是否升级 dev_dependencies（默认关闭）
+UPGRADE_DEPENDENCY_OVERRIDES = True     # 是否升级 dependency_overrides（默认开启/关闭你自己定）
 
 # =======================
 # Data
@@ -225,7 +230,19 @@ def get_outdated_map(ctx: Context) -> dict[str, dict[str, str]]:
 # =======================
 # pubspec block parsing (text-level, keep structure)
 # =======================
-_SECTION_RE = re.compile(r"^(dependencies|dev_dependencies|dependency_overrides):\s*$")
+def _build_section_re() -> re.Pattern:
+    sections = ["dependencies"]
+    if UPGRADE_DEV_DEPENDENCIES:
+        sections.append("dev_dependencies")
+    if UPGRADE_DEPENDENCY_OVERRIDES:
+        sections.append("dependency_overrides")
+    # e.g. ^(dependencies|dev_dependencies|dependency_overrides):\s*$
+    return re.compile(r"^(" + "|".join(sections) + r"):\s*$")
+
+
+_SECTION_RE = _build_section_re()
+
+
 _DEP_START_RE = re.compile(r"^ {2}(\S+):")  # 2-space indent dependency start
 
 
@@ -622,7 +639,12 @@ def run(ctx: Context) -> int:
             return 1
         ctx.echo("选择继续执行（不推荐）。")
 
-    _step(ctx, 4, "分析待升级私有依赖（优先 latest.version）")
+    _step(
+        ctx,
+        4,
+        f"分析待升级私有依赖（优先 latest.version；dev={UPGRADE_DEV_DEPENDENCIES}, overrides={UPGRADE_DEPENDENCY_OVERRIDES})",
+    )
+
     plan = build_private_upgrade_plan(
         ctx=ctx,
         private_host_keywords=private_host_keywords,
@@ -638,10 +660,10 @@ def run(ctx: Context) -> int:
     for u in plan:
         ctx.echo(f"  - {u.name}: {u.current} -> {u.target}")
 
-    if not ctx.yes:
-        if not ctx.confirm("是否继续执行升级，并在 pub get / analyze 通过后自动提交？"):
-            ctx.echo("ℹ️ 已取消。")
-            return 0
+    # if not ctx.yes:
+    #     if not ctx.confirm("是否继续执行升级，并在 pub get / analyze 通过后自动提交？"):
+    #         ctx.echo("ℹ️ 已取消。")
+    #         return 0
 
     _step(ctx, 5, "执行依赖升级（写入 pubspec.yaml，保留注释与结构）")
     changed, summary, errors = apply_upgrades_to_pubspec(ctx, plan)
