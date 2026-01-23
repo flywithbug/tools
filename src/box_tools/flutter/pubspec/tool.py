@@ -253,8 +253,9 @@ def main(argv=None) -> int:
         return version_menu(ctx)
 
     if args.command == "upgrade":
-        from .pub_upgrade import run_menu as upgrade_menu
-        return upgrade_menu(ctx)
+        from .pub_upgrade import run as upgrade_run
+        return upgrade_run(ctx)
+
 
     if args.command == "publish":
         from .pub_publish import run_menu as publish_menu
