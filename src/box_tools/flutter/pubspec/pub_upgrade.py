@@ -27,6 +27,14 @@ class UpgradeItem:
     target: str
     picked_from: str  # latest/resolvable/upgradable
 
+@dataclass(frozen=True)
+class AnalyzeReport:
+    errors: list[str]
+    warnings: list[str]
+    infos: list[str]
+    raw: str
+
+
 
 # =======================
 # Step helpers
@@ -606,13 +614,94 @@ def flutter_pub_get(ctx: Context) -> None:
         _clear_line()
 
 
-def flutter_analyze(ctx: Context) -> None:
+# =======================
+# analyze parsing
+# =======================
+_ANALYZE_ISSUE_RE = re.compile(
+    r"^(?P<level>info|warning|error)\s*(?:•|\-)\s*(?P<msg>.+)$",
+    flags=re.IGNORECASE,
+)
+
+
+def _parse_flutter_analyze_output(raw: str) -> AnalyzeReport:
+    """
+    解析 flutter analyze 输出，把 issue 分为 info / warning / error。
+    常见格式示例：
+      info • Unused import • lib/a.dart:1:1 • ...
+      warning • ... • ...
+      error • ... • ...
+    也兼容 "info - xxx" 这种。
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    infos: list[str] = []
+
+    for line in (raw or "").splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        m = _ANALYZE_ISSUE_RE.match(s)
+        if not m:
+            continue
+        lvl = (m.group("level") or "").lower()
+        if lvl == "error":
+            errors.append(s)
+        elif lvl == "warning":
+            warnings.append(s)
+        elif lvl == "info":
+            infos.append(s)
+
+    return AnalyzeReport(errors=errors, warnings=warnings, infos=infos, raw=raw or "")
+
+
+def flutter_analyze(ctx: Context) -> AnalyzeReport:
+    """
+    规则（按你的需求）：
+    - 只有 info：打印总数 + 列 2~3 条示例，允许继续
+    - 有 warning：warning 全列出来，允许继续
+    - 有 error：error 列出来并中断（抛异常）
+    注意：flutter analyze 在「只有 info/warning」时也可能返回非 0，
+    所以不能仅靠返回码判断。
+    """
     if shutil.which("flutter") is None:
         raise RuntimeError("未找到 flutter 命令，无法执行 flutter analyze")
 
     r = run_cmd(["flutter", "analyze"], cwd=ctx.project_root, capture=True)
-    if r.code != 0:
-        raise RuntimeError((r.err or r.out).strip() or "flutter analyze 失败")
+    raw = (r.out or "") + ("\n" + r.err if r.err else "")
+    rep = _parse_flutter_analyze_output(raw)
+
+    # ---- 按级别输出 ----
+    if rep.errors:
+        ctx.echo(f"❌ flutter analyze: {len(rep.errors)} error(s)")
+        # 全列出来（数量太多时做保护性截断）
+        max_lines = 50
+        for i, line in enumerate(rep.errors[:max_lines], 1):
+            ctx.echo(f"  {i}. {line}")
+        if len(rep.errors) > max_lines:
+            ctx.echo(f"  ...（已截断，剩余 {len(rep.errors) - max_lines} 条）")
+        raise RuntimeError("flutter analyze 存在 error，已中断。")
+
+    if rep.warnings:
+        ctx.echo(f"⚠️ flutter analyze: {len(rep.warnings)} warning(s)")
+        max_lines = 200
+        for i, line in enumerate(rep.warnings[:max_lines], 1):
+            ctx.echo(f"  {i}. {line}")
+        if len(rep.warnings) > max_lines:
+            ctx.echo(f"  ...（已截断，剩余 {len(rep.warnings) - max_lines} 条）")
+
+    if rep.infos:
+        ctx.echo(f"ℹ️ flutter analyze: {len(rep.infos)} info(s)")
+        # 只列 2~3 条即可
+        show_n = 3 if len(rep.infos) >= 3 else len(rep.infos)
+        for i, line in enumerate(rep.infos[:show_n], 1):
+            ctx.echo(f"  {i}. {line}")
+
+    # 既没有 issue，也当通过
+    return rep
+
+
+# =======================
+# Entry:
 
 
 # =======================
@@ -699,7 +788,7 @@ def run(ctx: Context) -> int:
 
     _step(ctx, 7, "执行 flutter analyze")
     flutter_analyze(ctx)
-    ctx.echo("✅ flutter analyze 通过")
+    ctx.echo("✅ flutter analyze 完成（info/warning 可继续，error 会中断）")
 
     _step(ctx, 8, "自动提交（git add + git commit）")
     git_add_commit(ctx, summary)
