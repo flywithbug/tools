@@ -445,32 +445,42 @@ def dry_run(ctx: Context) -> int:
     ctx.echo("✅ dry-run 完成")
     return 0
 
-
 def check(ctx: Context) -> int:
     ok = True
+    messages: list[str] = []
 
     if not ctx.pubspec_path.exists():
-        ctx.echo(f"❌ 未找到 pubspec.yaml：{ctx.pubspec_path}")
+        messages.append(f"❌ 未找到 pubspec.yaml：{ctx.pubspec_path}")
         ok = False
     else:
         t = read_text(ctx.pubspec_path)
+
         if not re.search(r"^\s*name:\s*\S+", t, flags=re.MULTILINE):
-            ctx.echo("❌ pubspec.yaml 缺少 name:（package 发布必需）")
+            messages.append("❌ pubspec.yaml 缺少 name:（package 发布必需）")
             ok = False
+
         if not re.search(r"^\s*version:\s*\S+", t, flags=re.MULTILINE):
-            ctx.echo("❌ pubspec.yaml 缺少 version:")
+            messages.append("❌ pubspec.yaml 缺少 version:")
             ok = False
+
         if re.search(r"^\s*publish_to:\s*none\s*$", t, flags=re.MULTILINE):
-            ctx.echo("❌ pubspec.yaml 设置了 publish_to: none（禁止发布）")
+            messages.append("❌ pubspec.yaml 设置了 publish_to: none（禁止发布）")
             ok = False
 
     if REQUIRE_CHANGELOG:
         p = ctx.project_root / CHANGELOG_NAME
         if not p.exists():
-            ctx.echo(f"❌ 未找到 {CHANGELOG_NAME}：{p}")
+            messages.append(f"❌ 未找到 {CHANGELOG_NAME}：{p}")
             ok = False
 
-    return 0 if ok else 1
+    if ok:
+        ctx.echo("✅ check 通过：必要文件与 pubspec 基础字段已验证。")
+        return 0
+
+    for m in messages:
+        ctx.echo(m)
+    ctx.echo("❌ check 未通过。")
+    return 1
 
 
 def run_menu(ctx: Context) -> int:
