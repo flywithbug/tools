@@ -247,7 +247,7 @@ def main(argv=None) -> int:
             return run_menu(ctx)
 
         if args.command == "doctor":
-            from .doctor import run_menu as doctor_menu
+            from .doctor import run as doctor_menu
             return doctor_menu(ctx)
 
         if args.command == "version":
