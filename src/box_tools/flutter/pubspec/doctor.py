@@ -7,6 +7,7 @@ from typing import List, Tuple
 from .tool import Context, read_text, run_cmd
 
 
+WARN_AS_ERROR_PREFIX = "[WARN_AS_ERROR] "
 _VERSION_RE = re.compile(
     r"^\s*version:\s*([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+([0-9A-Za-z.\-_]+))?\s*$"
 )
@@ -100,13 +101,15 @@ _LOCAL_DEP_INLINE_RE = re.compile(
 )
 
 
-def _check_local_dependencies(ctx: Context, warnings: List[str]) -> None:
+def _check_local_dependencies(ctx: Context, warnings: List[str], errors: List[str]) -> None:
     """
     检查 pubspec.yaml 内是否存在本地 path 依赖（含 dependencies/dev_dependencies/dependency_overrides）。
     本地依赖通常会导致：
     - CI / 发布环境无法解析
     - 依赖锁定与可复现性变差
-    这里按你的要求：发现则提示（warning），不阻断。
+    这里按你的要求：
+    - doctor 输出时以 warning 形式提示
+    - 但 doctor 结果判定为“未通过”（作为 publish 前的闸门）
     """
     if not ctx.pubspec_path.exists():
         return
@@ -174,6 +177,8 @@ def _check_local_dependencies(ctx: Context, warnings: List[str]) -> None:
             f"{preview}\n"
             "建议：将其替换为 hosted/git 依赖，或在发布前移除/改为可解析的来源。"
         )
+        # 作为 publish 闸门：本地依赖会导致 doctor 未通过，但在 doctor 输出里仍显示为 warning。
+        errors.append(WARN_AS_ERROR_PREFIX + "检测到本地 path 依赖（发布/CI 可能无法解析）。")
 
 
 def _check_flutter(warnings: List[str], errors: List[str]) -> None:
@@ -201,7 +206,7 @@ def collect(ctx: Context) -> Tuple[bool, List[str], List[str]]:
     _check_pubspec_exists(ctx, errors)
     _check_pubspec_basic(ctx, warnings, errors)
     _check_changelog_if_publishable(ctx, warnings, errors)
-    _check_local_dependencies(ctx, warnings)
+    _check_local_dependencies(ctx, warnings, errors)
     _check_flutter(warnings, errors)
 
     ok = not errors
@@ -219,7 +224,12 @@ def run(ctx: Context) -> int:
         ctx.echo(f"⚠️ {w}")
     for e in errors:
         # errors 里可能包含多行提示，这里保持原样缩进打印
-        for ln in str(e).splitlines():
+        s = str(e)
+        if s.startswith(WARN_AS_ERROR_PREFIX):
+            # 仍然算未通过，但输出为 warning，避免吓到人
+            ctx.echo(f"⚠️ {s[len(WARN_AS_ERROR_PREFIX):]}")
+            continue
+        for ln in s.splitlines():
             ctx.echo(f"❌ {ln}" if ln else "❌")
 
     if not ok:

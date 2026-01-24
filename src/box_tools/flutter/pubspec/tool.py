@@ -214,20 +214,34 @@ def ensure_pubspec_exists(ctx: Context) -> None:
         raise FileNotFoundError(f"pubspec.yaml 不存在：{ctx.pubspec_path}")
 
 
-def run_startup_doctor_or_die(ctx: Context) -> None:
-    """
-    启动时自动执行 doctor：
+def run_startup_doctor(ctx: Context, *, allow_failure: bool = False) -> bool:
+    """启动时自动执行 doctor。
+
     - 通过：静默（不输出）
-    - 失败：抛出具体错误信息，阻断后续操作
+    - 不通过：
+        - allow_failure=False：抛错阻断（默认行为）
+        - allow_failure=True：打印问题但不阻断（用于 publish，让用户稍后选择是否继续）
     """
     from .doctor import collect
 
-    ok, _warnings, errors = collect(ctx)
+    ok, warnings, errors = collect(ctx)
     if ok:
-        return
-    # 直接把错误清单抛给用户（main 外层会打印成 ❌ ...）
-    raise RuntimeError("\n".join(f"❌ {e}" if not e.startswith("❌") else e for e in errors))
+        return True
 
+    # 有问题：先把清单打印出来
+    if warnings:
+        for w in warnings:
+            print(f"⚠️  {w}" if not w.startswith(("⚠️", "❌")) else w)
+    if errors:
+        for e in errors:
+            print(f"❌ {e}" if not e.startswith(("⚠️", "❌")) else e)
+
+    if allow_failure:
+        print("ℹ️  doctor 未通过：publish 时会再次进行 doctor 闸门检查，并让你选择是否继续。")
+        return False
+
+    # 非 allow_failure：直接阻断
+    raise RuntimeError("\n".join(f"❌ {e}" if not e.startswith("❌") else e for e in errors))
 
 def main(argv=None) -> int:
     argv = argv or sys.argv
@@ -235,9 +249,11 @@ def main(argv=None) -> int:
     ctx = _mk_ctx(args)
 
     try:
-        # 启动即 doctor：doctor 命令本身不做静默拦截（用户就是来看的）
+        # 启动即 doctor：
+        # - doctor 命令本身不做静默拦截（用户就是来看的）
+        # - publish 仍会提前跑 doctor，有问题先提示；真正的“是否继续发布”由 publish flow 决定
         if args.command != "doctor":
-            run_startup_doctor_or_die(ctx)
+            run_startup_doctor(ctx, allow_failure=(args.command == "publish"))
 
         # doctor 允许在缺少 box_pubspec 时也能跑（会提示/报错但不直接崩）
         if args.command != "doctor":
