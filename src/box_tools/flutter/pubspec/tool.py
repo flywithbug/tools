@@ -240,8 +240,8 @@ def run_startup_doctor(ctx: Context, *, allow_failure: bool = False) -> bool:
         print("ℹ️  doctor 未通过：publish 时会再次进行 doctor 闸门检查，并让你选择是否继续。")
         return False
 
-    # 非 allow_failure：直接阻断
-    raise RuntimeError("\n".join(f"❌ {e}" if not e.startswith("❌") else e for e in errors))
+    print("❌ doctor 未通过")
+    raise SystemExit(1)
 
 def main(argv=None) -> int:
     argv = argv or sys.argv
