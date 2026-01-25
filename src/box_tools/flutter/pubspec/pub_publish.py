@@ -605,29 +605,30 @@ def check(ctx: Context) -> int:
 
 
 def run_menu(ctx: Context) -> int:
-    menu = [
-        ("publish", "发布（版本自增 + changelog + analyze + commit/push + publish）"),
-        ("dry-run", "发布预演（analyze + pub publish --dry-run）"),
-        ("check", "检查必要文件与 pubspec 基础字段"),
-    ]
-    while True:
-        ctx.echo("\n=== pub publish ===")
-        for i, (cmd, label) in enumerate(menu, start=1):
-            ctx.echo(f"{i}. {cmd:<10} {label}")
-        ctx.echo("0. back       返回")
-
-        choice = input("> ").strip()
-        if choice == "0":
-            return 0
-        if choice == "1":
-            # 先执行 check：通过才能继续 publish
-            rc = check(ctx)
-            if rc != 0:
-                ctx.echo("❌ check 未通过，已中断发布。")
-                return rc
-            return publish(ctx)
-        if choice == "2":
-            return dry_run(ctx)
-        if choice == "3":
-            return check(ctx)
-        ctx.echo("无效选择")
+    return publish(ctx)
+    # menu = [
+    #     ("publish", "发布（版本自增 + changelog + analyze + commit/push + publish）"),
+    #     ("dry-run", "发布预演（analyze + pub publish --dry-run）"),
+    #     ("check", "检查必要文件与 pubspec 基础字段"),
+    # ]
+    # while True:
+    #     ctx.echo("\n=== pub publish ===")
+    #     for i, (cmd, label) in enumerate(menu, start=1):
+    #         ctx.echo(f"{i}. {cmd:<10} {label}")
+    #     ctx.echo("0. back       返回")
+    #
+    #     choice = input("> ").strip()
+    #     if choice == "0":
+    #         return 0
+    #     if choice == "1":
+    #         # 先执行 check：通过才能继续 publish
+    #         rc = check(ctx)
+    #         if rc != 0:
+    #             ctx.echo("❌ check 未通过，已中断发布。")
+    #             return rc
+    #         return publish(ctx)
+    #     if choice == "2":
+    #         return dry_run(ctx)
+    #     if choice == "3":
+    #         return check(ctx)
+    #     ctx.echo("无效选择")
