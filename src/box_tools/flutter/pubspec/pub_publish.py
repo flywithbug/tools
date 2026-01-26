@@ -21,8 +21,13 @@ CHANGELOG_NAME = "CHANGELOG.md"
 DEFAULT_NOTE = "publish"
 
 MAX_SHOW_ERRORS = 10
-MAX_SHOW_WARNINGS = 20
+# 你要求 warning 打印前四五条：这里取 5
+MAX_SHOW_WARNINGS = 5
+# 你要求 info 打印前两三条：这里取 3
 MAX_SHOW_INFO = 3
+
+# analyze 失败但解析不出 issue 时，兜底最多打印多少行原始输出（避免刷屏）
+MAX_SHOW_RAW_ANALYZE_LINES = 120
 
 
 # =======================
@@ -50,7 +55,6 @@ def _loading_animation(stop_event: threading.Event, label: str, t0: float) -> No
         _clear_line()
 
 
-
 def _run_or_die(ctx: Context, cmd: list[str], *, title: str, cwd: Optional[str] = None, loading: bool = False) -> None:
     """执行命令；可选 loading 动画，避免长时间无输出像卡死。"""
     stop_event: Optional[threading.Event] = None
@@ -58,8 +62,8 @@ def _run_or_die(ctx: Context, cmd: list[str], *, title: str, cwd: Optional[str] 
     if loading:
         stop_event = threading.Event()
         _load_t0 = time.perf_counter()
-    t = threading.Thread(target=_loading_animation, args=(stop_event, title, _load_t0))
-    t.start()
+        t = threading.Thread(target=_loading_animation, args=(stop_event, title, _load_t0))
+        t.start()
     try:
         r = run_cmd(cmd, cwd=cwd or ctx.project_root, capture=True)
     finally:
@@ -82,7 +86,6 @@ def _step_begin(ctx: Context, n: int, title: str) -> float:
 def _step_end(ctx: Context, n: int, t0: float) -> None:
     cost = time.perf_counter() - t0
     ctx.echo(f"[{n}] done  (cost: {cost:.2f}s)")
-
 
 
 def _confirm_or_abort(ctx: Context, prompt: str) -> None:
@@ -318,7 +321,11 @@ def _prepend_changelog_block(changelog_text: str, new_version: str, note: str, n
 # flutter pub get / analyze / publish
 # =======================
 def flutter_pub_get(ctx: Context) -> None:
-    cmd = ["flutter", "pub", "get"] if shutil.which("flutter") else (["dart", "pub", "get"] if shutil.which("dart") else None)
+    cmd = (
+        ["flutter", "pub", "get"]
+        if shutil.which("flutter")
+        else (["dart", "pub", "get"] if shutil.which("dart") else None)
+    )
     if not cmd:
         raise RuntimeError("未找到 flutter/dart 命令，无法执行 pub get")
     _run_or_die(ctx, cmd, title="pub get", loading=True)
@@ -348,6 +355,19 @@ def _parse_analyze_issues(output: str) -> list[AnalyzeIssue]:
     return issues
 
 
+def _echo_raw_analyze_output(ctx: Context, out: str) -> None:
+    """兜底输出 analyze 原始内容（截断，避免刷屏）。"""
+    lines = [x.rstrip("\n") for x in (out or "").splitlines()]
+    if not lines:
+        ctx.echo("  | （无输出）")
+        return
+    show = lines[:MAX_SHOW_RAW_ANALYZE_LINES]
+    for line in show:
+        ctx.echo(f"  | {line}")
+    if len(lines) > MAX_SHOW_RAW_ANALYZE_LINES:
+        ctx.echo(f"  | ...（已截断，剩余 {len(lines) - MAX_SHOW_RAW_ANALYZE_LINES} 行未显示）")
+
+
 def flutter_analyze_gate(ctx: Context) -> None:
     stop_event = threading.Event()
     _load_t0 = time.perf_counter()
@@ -359,6 +379,7 @@ def flutter_analyze_gate(ctx: Context) -> None:
         stop_event.set()
         t.join()
         _clear_line()
+
     out = (r.out or "") + ("\n" + r.err if (r.err or "").strip() else "")
     issues = _parse_analyze_issues(out)
 
@@ -366,31 +387,37 @@ def flutter_analyze_gate(ctx: Context) -> None:
     warnings = [x for x in issues if x.level == "warning"]
     infos = [x for x in issues if x.level == "info"]
 
-    if r.code != 0:
-        if errors:
-            ctx.echo("❌ flutter analyze 存在错误（error）：")
-            for it in errors[:MAX_SHOW_ERRORS]:
-                ctx.echo(f"  - {it.text}")
-            if len(errors) > MAX_SHOW_ERRORS:
-                ctx.echo(f"  ... 还有 {len(errors) - MAX_SHOW_ERRORS} 条 error")
-            raise RuntimeError("flutter analyze error，已中断发布。")
-        raise RuntimeError((r.err or r.out).strip() or "flutter analyze 失败")
+    # 规则 1：error 一律中断（无论 exit code）
+    if errors:
+        ctx.echo(f"❌ flutter analyze error：共 {len(errors)} 条（将中断发布）")
+        for it in errors[:MAX_SHOW_ERRORS]:
+            ctx.echo(f"  - {it.text}")
+        if len(errors) > MAX_SHOW_ERRORS:
+            ctx.echo(f"  ... 还有 {len(errors) - MAX_SHOW_ERRORS} 条 error")
+        raise RuntimeError("flutter analyze error，已中断发布。")
 
+    # 如果 analyze 本身返回失败码，但没解析到 error，兜底打印原始输出后中断
+    if r.code != 0:
+        ctx.echo("❌ flutter analyze 返回失败码，但未解析到标准 error 行；原始输出如下（用于定位真实 issue）：")
+        _echo_raw_analyze_output(ctx, out)
+        raise RuntimeError("flutter analyze failed（unparsed output），已中断发布。")
+
+    # 规则 2：warning 需要提示并询问是否继续
     if warnings:
-        ctx.echo("⚠️ flutter analyze 存在 warning：")
+        ctx.echo(f"⚠️ flutter analyze warning：共 {len(warnings)} 条")
         for it in warnings[:MAX_SHOW_WARNINGS]:
             ctx.echo(f"  - {it.text}")
         if len(warnings) > MAX_SHOW_WARNINGS:
             ctx.echo(f"  ... 还有 {len(warnings) - MAX_SHOW_WARNINGS} 条 warning")
         _confirm_or_abort(ctx, "存在 warning，是否继续发布？")
 
+    # 规则 3：info 只提示数量 + 打印前两三条，然后继续（不确认）
     if infos:
-        ctx.echo(f"ℹ️ flutter analyze 存在 info：共 {len(infos)} 条")
+        ctx.echo(f"ℹ️ flutter analyze info：共 {len(infos)} 条（仅提示，不阻断发布）")
         for it in infos[:MAX_SHOW_INFO]:
             ctx.echo(f"  - {it.text}")
         if len(infos) > MAX_SHOW_INFO:
             ctx.echo(f"  ...（仅展示前 {MAX_SHOW_INFO} 条）")
-        _confirm_or_abort(ctx, "存在 info issue，是否继续发布？")
 
 
 def flutter_pub_publish(ctx: Context, *, dry_run: bool) -> None:
@@ -405,7 +432,10 @@ def flutter_pub_publish(ctx: Context, *, dry_run: bool) -> None:
 
     stop_event = threading.Event()
     _load_t0 = time.perf_counter()
-    t = threading.Thread(target=_loading_animation, args=(stop_event, "flutter pub publish" if not dry_run else "flutter pub publish --dry-run", _load_t0))
+    t = threading.Thread(
+        target=_loading_animation,
+        args=(stop_event, "flutter pub publish" if not dry_run else "flutter pub publish --dry-run", _load_t0),
+    )
     t.start()
     try:
         r = run_cmd(cmd, cwd=ctx.project_root, capture=True)
@@ -426,6 +456,7 @@ def _ask_note(ctx: Context) -> str:
     ctx.echo(f"请输入本次发布 note（直接回车使用默认：{DEFAULT_NOTE}）：")
     s = input("> ").strip()
     return s if s else DEFAULT_NOTE
+
 
 # =======================
 # Flows
@@ -542,7 +573,6 @@ def publish(ctx: Context) -> int:
     return 0
 
 
-
 def dry_run(ctx: Context) -> int:
     _total_start_dt = datetime.now()
     _total_t0 = time.perf_counter()
@@ -565,6 +595,7 @@ def dry_run(ctx: Context) -> int:
     ctx.echo("✅ dry-run 完成")
     _step_end(ctx, 4, _t4)
     return 0
+
 
 def check(ctx: Context) -> int:
     ok = True
@@ -606,29 +637,3 @@ def check(ctx: Context) -> int:
 
 def run_menu(ctx: Context) -> int:
     return publish(ctx)
-    # menu = [
-    #     ("publish", "发布（版本自增 + changelog + analyze + commit/push + publish）"),
-    #     ("dry-run", "发布预演（analyze + pub publish --dry-run）"),
-    #     ("check", "检查必要文件与 pubspec 基础字段"),
-    # ]
-    # while True:
-    #     ctx.echo("\n=== pub publish ===")
-    #     for i, (cmd, label) in enumerate(menu, start=1):
-    #         ctx.echo(f"{i}. {cmd:<10} {label}")
-    #     ctx.echo("0. back       返回")
-    #
-    #     choice = input("> ").strip()
-    #     if choice == "0":
-    #         return 0
-    #     if choice == "1":
-    #         # 先执行 check：通过才能继续 publish
-    #         rc = check(ctx)
-    #         if rc != 0:
-    #             ctx.echo("❌ check 未通过，已中断发布。")
-    #             return rc
-    #         return publish(ctx)
-    #     if choice == "2":
-    #         return dry_run(ctx)
-    #     if choice == "3":
-    #         return check(ctx)
-    #     ctx.echo("无效选择")
