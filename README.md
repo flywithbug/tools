@@ -29,8 +29,6 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
   - [`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)
 - [flutter/slang_i18n](#flutter-slang_i18n)
   - [`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)
-- [iOS/strings_i18n](#ios-strings_i18n)
-  - [`box_strings_i18n`](#box_tools-ios-strings_i18n-tool)
 
 ---
 
@@ -62,10 +60,6 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 - **[`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)**：Flutter slang i18n 资源管理 CLI：基于默认模板生成/校验配置（保留注释），支持 sort/doctor，以及 AI 增量翻译（translate）（[README.md](src/box_tools/flutter/slang_i18n/README.md)）
 
-### iOS/strings_i18n
-
-- **[`box_strings_i18n`](#box_tools-ios-strings_i18n-tool)**：iOS .strings 多语言治理/翻译/Swift 代码生成 CLI（[README.md](src/box_tools/iOS/strings_i18n/README.md)）
-
 ---
 
 <a id="section"></a>
@@ -95,10 +89,6 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### flutter/slang_i18n
 
 - **box_slang_i18n**：[README.md](src/box_tools/flutter/slang_i18n/README.md)
-
-### iOS/strings_i18n
-
-- **box_strings_i18n**：[README.md](src/box_tools/iOS/strings_i18n/README.md)
 
 ---
 
@@ -366,37 +356,6 @@ box_slang_i18n --project-root path/to/project
 **文档**
 
 [README.md](src/box_tools/flutter/slang_i18n/README.md)
-
----
-
-<a id="ios-strings_i18n"></a>
-
-## iOS/strings_i18n
-
-<a id="box_tools-ios-strings_i18n-tool"></a>
-
-### box_strings_i18n
-
-**简介**：iOS .strings 多语言治理/翻译/Swift 代码生成 CLI
-
-**命令**：`box_strings_i18n`
-
-**用法**
-
-```bash
-box_strings_i18n
-box_strings_i18n init
-box_strings_i18n doctor
-box_strings_i18n sort
-box_strings_i18n translate
-box_strings_i18n gen-swift
-box_strings_i18n --config strings_i18n.yaml
-box_strings_i18n --project-root path/to/project
-```
-
-**文档**
-
-[README.md](src/box_tools/iOS/strings_i18n/README.md)
 
 ---
 

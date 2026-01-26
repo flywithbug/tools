@@ -18,13 +18,14 @@ try:
 except Exception:
     __version__ = "0.0.0"
 
+from _share.tool_spec import tool, opt, ex
 
-BOX_TOOL = {
-    "id": "core.box",
-    "name": "box",
-    "category": "core",
-    "summary": "工具集管理入口：诊断、更新、版本查看、卸载、工具列表",
-    "usage": [
+BOX_TOOL = tool(
+    id="core.box",
+    name="box",
+    category="core",
+    summary="工具集管理入口：诊断、更新、版本查看、卸载、工具列表",
+    usage=[
         "box --help",
         "box help",
         "box doctor",
@@ -34,18 +35,17 @@ BOX_TOOL = {
         "box tools",
         "box tools --full",
     ],
-    "options": [
-        {"flag": "--help", "desc": "显示帮助（等同 box help）"},
-        {"flag": "tools --full", "desc": "显示工具的详细信息（options/examples），并显示导入失败原因"},
+    options=[
+        opt("--help", "显示帮助（等同 box help）"),
+        opt("tools --full", "显示工具的详细信息（options/examples），并显示导入失败原因"),
     ],
-    "examples": [
-        {"cmd": "box doctor", "desc": "诊断环境（python/pipx/PATH）"},
-        {"cmd": "box update", "desc": "更新工具集"},
-        {"cmd": "box tools", "desc": "列出当前工具与简介"},
+    examples=[
+        ex("box doctor", "诊断环境（python/pipx/PATH）"),
+        ex("box update", "更新工具集"),
+        ex("box tools", "列出当前工具与简介"),
     ],
-    # ✅ 约定：所有工具 docs 都用 README.md，稳定、适合组件化
-    "docs": "README.md",
-}
+    docs="README.md",  # 也可以省略（tool() 默认就是 README.md）
+)
 
 
 # ----------------------------

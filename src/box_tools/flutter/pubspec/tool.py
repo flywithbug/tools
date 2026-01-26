@@ -10,22 +10,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from _share.tool_spec import tool, opt, ex
 
-# ----------------------------
-# BOX_TOOL（对齐示例结构）
-# ----------------------------
-BOX_TOOL = {
-    "id": "flutter.box_pubspec",
-    "name": "box_pubspec",
-    "category": "flutter",
-    "summary": (
+BOX_TOOL = tool(
+    id="flutter.box_pubspec",
+    name="box_pubspec",
+    category="flutter",
+    summary=(
         "Flutter pubspec.yaml 管理 CLI：支持 version 升级（patch/minor）、"
         "依赖升级（基于 flutter pub outdated --json 的计划/执行）、"
         "依赖发布（flutter pub publish / dry-run），以及 doctor 本地检查。"
         "修改 pubspec.yaml 时只做最小必要的文本级局部替换，保留原有注释与结构。"
         "启动时会自动执行 doctor：无问题静默，有问题中断并输出错误。"
     ),
-    "usage": [
+    usage=[
         "box_pubspec",
         "box_pubspec upgrade",
         "box_pubspec publish",
@@ -36,27 +34,28 @@ BOX_TOOL = {
         "box_pubspec --project-root path/to/project",
         "box_pubspec --box_pubspec path/to/pubspec.yaml doctor",
     ],
-    "options": [
-        {"flag": "command", "desc": "子命令：menu/upgrade/publish/version/doctor（默认 menu）"},
-        {"flag": "--project-root", "desc": "项目根目录（默认当前目录）"},
-        {"flag": "--box_pubspec", "desc": "pubspec.yaml 路径（默认 project-root/pubspec.yaml）"},
-        {"flag": "--outdated-json", "desc": "指定 flutter pub outdated --json 的输出文件（可选，用于离线/复用）"},
-        {"flag": "--dry-run", "desc": "只打印计划/预览，不写入文件，不执行危险操作"},
-        {"flag": "--yes", "desc": "跳过所有确认（适合 CI/脚本）"},
-        {"flag": "--no-interactive", "desc": "关闭交互菜单（脚本模式）"},
-        {"flag": "--mode", "desc": "version：show/patch/minor（脚本模式快捷入口）"},
+    options=[
+        opt("command", "子命令：menu/upgrade/publish/version/doctor（默认 menu）"),
+        opt("--project-root", "项目根目录（默认当前目录）"),
+        opt("--box_pubspec", "pubspec.yaml 路径（默认 project-root/pubspec.yaml）"),
+        opt("--outdated-json", "指定 flutter pub outdated --json 的输出文件（可选，用于离线/复用）"),
+        opt("--dry-run", "只打印计划/预览，不写入文件，不执行危险操作"),
+        opt("--yes", "跳过所有确认（适合 CI/脚本）"),
+        opt("--no-interactive", "关闭交互菜单（脚本模式）"),
+        opt("--mode", "version：show/patch/minor（脚本模式快捷入口）"),
     ],
-    "examples": [
-        {"cmd": "box_pubspec", "desc": "进入交互菜单（启动时自动 doctor；无问题不输出）"},
-        {"cmd": "box_pubspec doctor", "desc": "手动运行 doctor（会输出详细检查结果）"},
-        {"cmd": "box_pubspec upgrade", "desc": "执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）"},
-        {"cmd": "box_pubspec upgrade --outdated-json outdated.json", "desc": "使用已有 outdated.json"},
-        {"cmd": "box_pubspec upgrade --yes", "desc": "无交互执行升级"},
-        {"cmd": "box_pubspec version --mode patch --yes", "desc": "补丁版本自增并直接写入（只改 version 行）"},
+    examples=[
+        ex("box_pubspec", "进入交互菜单（启动时自动 doctor；无问题不输出）"),
+        ex("box_pubspec doctor", "手动运行 doctor（会输出详细检查结果）"),
+        ex("box_pubspec upgrade", "执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）"),
+        ex("box_pubspec upgrade --outdated-json outdated.json", "使用已有 outdated.json"),
+        ex("box_pubspec upgrade --yes", "无交互执行升级"),
+        ex("box_pubspec version --mode patch --yes", "补丁版本自增并直接写入（只改 version 行）"),
     ],
-    "dependencies": [],
-    "docs": "README.md",
-}
+    dependencies=[],
+    docs="README.md",  # 可省略：默认就是 README.md
+)
+
 
 
 # ----------------------------

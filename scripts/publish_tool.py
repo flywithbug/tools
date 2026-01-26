@@ -5,7 +5,7 @@
 
 功能：
 1) version patch 自增（可选）
-2) [project].dependencies 自动增减（基于工具显式依赖 + import 推断）
+2) [project].dependencies 自动a增减（基于工具显式依赖 + import 推断）
 3) [project.scripts] 自动增减：
    - box 命令永远置顶
    - 其他命令统一加 box_ 前缀
@@ -19,7 +19,7 @@
 
 硬性约定（强校验）：
 - 工具入口文件必须命名为 tool.py
-- tool.py 必须包含 BOX_TOOL（可 ast.literal_eval 的 dict）
+- tool.py 必须包含 BOX_TOOL（支持 BOX_TOOL = tool(...) 等可执行构造，将通过 import 读取）
 - 除 tool.py 之外，任何 .py 文件不得包含 BOX_TOOL（否则判定为结构违规）
 - README 汇总的文档链接统一显示为 [README.md](path)（不显示冗长路径作为文本）
 """
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib
 import re
 import sys
 import subprocess
@@ -36,12 +37,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
 
 
-REPO_ROOT = Path.cwd()
+REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
 TEMP_MD = REPO_ROOT / "temp.md"
 README_MD = REPO_ROOT / "README.md"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 TESTS_DIR = REPO_ROOT / "tests"
+
+# 让 scripts/ 下运行也能 import 到 src 里的包（box / box_tools / _share）
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from _share.tool_spec import normalize_tool, validate_tool
 
 
 # -------------------------
@@ -91,8 +98,8 @@ def iter_all_py_files() -> List[Path]:
 
 def extract_box_tool_literal(py_file: Path) -> Optional[Dict[str, Any]]:
     """
-    抽取形如 BOX_TOOL = {...} 的 dict 字面量（不 import，避免副作用）。
-    要求 BOX_TOOL 能被 ast.literal_eval 解析。
+    [旧逻辑] 抽取形如 BOX_TOOL = {...} 的 dict 字面量（不 import，避免副作用）。
+    现在保留该函数仅用于兼容/参考；主流程改为 import 模块读取 BOX_TOOL。
     """
     try:
         src = py_file.read_text(encoding="utf-8", errors="ignore")
@@ -112,23 +119,39 @@ def extract_box_tool_literal(py_file: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
+def has_box_tool_assign(py_file: Path) -> bool:
+    """仅判断是否存在 BOX_TOOL = ... 赋值，不要求是字面量。"""
+    try:
+        src = py_file.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(src)
+    except Exception:
+        return False
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "BOX_TOOL":
+                    return True
+    return False
+
+
 def validate_structure_or_exit() -> None:
     """
     强校验：
     1) 任何非 tool.py 的文件如果包含 BOX_TOOL -> 报错退出
-    2) 任何 tool.py 如果不包含 BOX_TOOL -> 报错退出
+    2) 任何 tool.py 如果不包含 BOX_TOOL -> 报错退出（不要求字面量，可为函数构造）
     """
     entry_files = set(iter_tool_entry_files())
     offenders_has_box_tool: List[Path] = []
     offenders_missing_box_tool: List[Path] = []
 
     for py in iter_all_py_files():
-        meta = extract_box_tool_literal(py)
+        has_meta = has_box_tool_assign(py)
         if py.name == "tool.py":
-            if meta is None:
+            if not has_meta:
                 offenders_missing_box_tool.append(py)
         else:
-            if meta is not None:
+            if has_meta:
                 offenders_has_box_tool.append(py)
 
     if offenders_has_box_tool or offenders_missing_box_tool:
@@ -151,6 +174,43 @@ def validate_structure_or_exit() -> None:
 def module_from_py_path(py_file: Path) -> str:
     rel = py_file.relative_to(SRC_DIR).with_suffix("")
     return ".".join(rel.parts)
+
+
+def load_box_tool_by_import(py_file: Path) -> Dict[str, Any]:
+    """通过 import 模块读取 BOX_TOOL（支持 BOX_TOOL = tool(...)）。"""
+    module = module_from_py_path(py_file)
+    try:
+        importlib.invalidate_caches()
+        mod = importlib.import_module(module)
+    except Exception as e:
+        print(f"❌ 导入失败：{module}")
+        print(f"   文件：{py_file.relative_to(REPO_ROOT).as_posix()}")
+        print(f"   原因：{e}")
+        raise SystemExit(2)
+
+    if not hasattr(mod, "BOX_TOOL"):
+        print(f"❌ 模块缺少 BOX_TOOL：{module}")
+        print(f"   文件：{py_file.relative_to(REPO_ROOT).as_posix()}")
+        raise SystemExit(2)
+
+    raw = getattr(mod, "BOX_TOOL")
+    try:
+        meta = normalize_tool(raw)
+    except Exception as e:
+        print(f"❌ BOX_TOOL 规整失败：{module}")
+        print(f"   文件：{py_file.relative_to(REPO_ROOT).as_posix()}")
+        print(f"   原因：{e}")
+        raise SystemExit(2)
+
+    errors = validate_tool(meta)
+    if errors:
+        print(f"❌ BOX_TOOL 校验失败：{module}")
+        print(f"   文件：{py_file.relative_to(REPO_ROOT).as_posix()}")
+        for err in errors:
+            print(f"   - {err}")
+        raise SystemExit(2)
+
+    return meta
 
 
 def norm_str(v: Any) -> str:
@@ -273,9 +333,7 @@ def _is_box_tool(t: Tool) -> bool:
 def collect_tools() -> List[Tool]:
     tools: List[Tool] = []
     for py in iter_tool_entry_files():
-        meta = extract_box_tool_literal(py)
-        if not meta:
-            continue
+        meta = load_box_tool_by_import(py)
         t = build_tool(py, meta)
         if t:
             tools.append(t)

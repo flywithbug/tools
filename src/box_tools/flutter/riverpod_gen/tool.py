@@ -6,12 +6,14 @@ import re
 import sys
 from pathlib import Path
 
-BOX_TOOL = {
-    "id": "flutter.riverpod_gen",
-    "name": "box_riverpod_gen",  # ✅ 命令名统一加 box_ 前缀
-    "category": "flutter",
-    "summary": "生成 Riverpod StateNotifier + State 模板文件（notifier/state）",
-    "usage": [
+from _share.tool_spec import tool, opt, ex
+
+BOX_TOOL = tool(
+    id="flutter.riverpod_gen",
+    name="box_riverpod_gen",  # ✅ 命令名统一加 box_ 前缀
+    category="flutter",
+    summary="生成 Riverpod StateNotifier + State 模板文件（notifier/state）",
+    usage=[
         "box_riverpod_gen",
         "box_riverpod_gen Product",
         "box_riverpod_gen product_item --out lib/features/product",
@@ -19,22 +21,22 @@ BOX_TOOL = {
         "box_riverpod_gen Product --no-copywith",
         "box_riverpod_gen Product --legacy",
     ],
-    "options": [
-        {"flag": "--out", "desc": "输出目录（默认当前目录）"},
-        {"flag": "--force", "desc": "覆盖已存在文件"},
-        {"flag": "--no-copywith", "desc": "不生成 copy_with_extension 注解与 part '*.g.dart'"},
-        {"flag": "--legacy", "desc": "notifier 使用 flutter_riverpod/legacy.dart（默认启用 legacy）"},
-        {"flag": "--modern", "desc": "notifier 使用 flutter_riverpod/flutter_riverpod.dart"},
+    options=[
+        opt("--out", "输出目录（默认当前目录）"),
+        opt("--force", "覆盖已存在文件"),
+        opt("--no-copywith", "不生成 copy_with_extension 注解与 part '*.g.dart'"),
+        opt("--legacy", "notifier 使用 flutter_riverpod/legacy.dart（默认启用 legacy）"),
+        opt("--modern", "notifier 使用 flutter_riverpod/flutter_riverpod.dart"),
     ],
-    "examples": [
-        {"cmd": "box_riverpod_gen", "desc": "交互输入类名与输出目录"},
-        {"cmd": "box_riverpod_gen Product", "desc": "在当前目录生成 product_notifier.dart 与 product_state.c.dart"},
-        {"cmd": "box_riverpod_gen product_item --out lib/features/product", "desc": "在指定目录生成 product_item_* 文件"},
-        {"cmd": "box_riverpod_gen Product --force", "desc": "覆盖已存在文件"},
+    examples=[
+        ex("box_riverpod_gen", "交互输入类名与输出目录"),
+        ex("box_riverpod_gen Product", "在当前目录生成 product_notifier.dart 与 product_state.c.dart"),
+        ex("box_riverpod_gen product_item --out lib/features/product", "在指定目录生成 product_item_* 文件"),
+        ex("box_riverpod_gen Product --force", "覆盖已存在文件"),
     ],
-    # ✅ 约定：docs 永远写 README.md（相对工具目录）
-    "docs": "README.md",
-}
+    docs="README.md",  # ✅ 约定：docs 永远写 README.md（相对工具目录）
+)
+
 
 _CAMEL_SPLIT_RE = re.compile(r"(?<!^)(?=[A-Z])")
 

@@ -14,42 +14,44 @@ from typing import Dict, List, Optional, Tuple
 from box_tools._share.openai_translate.models import OpenAIModel
 from box_tools._share.openai_translate.chat import OpenAIChat, ChatOptions, ChatSession
 
+from _share.tool_spec import tool, opt, ex
 
-BOX_TOOL = {
-    "id": "ai.chat",
-    "name": "box_ai_chat",
-    "category": "ai",
-    "summary": "命令行连续对话：输入问题→等待 AI 回复→继续追问（支持 /new /reset /save /load /model 等）",
-    "usage": [
+BOX_TOOL = tool(
+    id="ai.chat",
+    name="box_ai_chat",
+    category="ai",
+    summary="命令行连续对话：输入问题→等待 AI 回复→继续追问（支持 /new /reset /save /load /model 等）",
+    usage=[
         "box_ai_chat",
         "box_ai_chat --model gpt-4o-mini",
         "box_ai_chat --system \"You are a helpful assistant.\"",
         "box_ai_chat --load ~/.box_tools/ai_chat/20260121_120000.json",
     ],
-    "options": [
-        {"flag": "--model", "desc": "指定模型（默认 gpt-4o-mini，如 gpt-4o / gpt-4.1 / gpt-4.1-mini）"},
-        {"flag": "--system", "desc": "设置 system prompt（对话角色/风格）"},
-        {"flag": "--temperature", "desc": "采样温度（默认 0.2；越低越稳定）"},
-        {"flag": "--top-p", "desc": "top_p（默认 1.0）"},
-        {"flag": "--timeout", "desc": "请求超时（秒，默认 30）"},
-        {"flag": "--api-key", "desc": "显式传入 OpenAI API Key（不传则读取 OPENAI_API_KEY）"},
-        {"flag": "--load", "desc": "启动时加载会话文件（JSON）"},
-        {"flag": "--session", "desc": "指定 session id（用于固定默认保存文件名）"},
-        {"flag": "--store-dir", "desc": "会话保存目录（默认 ~/.box_tools/ai_chat）"},
+    options=[
+        opt("--model", "指定模型（默认 gpt-4o-mini，如 gpt-4o / gpt-4.1 / gpt-4.1-mini）"),
+        opt("--system", "设置 system prompt（对话角色/风格）"),
+        opt("--temperature", "采样温度（默认 0.2；越低越稳定）"),
+        opt("--top-p", "top_p（默认 1.0）"),
+        opt("--timeout", "请求超时（秒，默认 30）"),
+        opt("--api-key", "显式传入 OpenAI API Key（不传则读取 OPENAI_API_KEY）"),
+        opt("--load", "启动时加载会话文件（JSON）"),
+        opt("--session", "指定 session id（用于固定默认保存文件名）"),
+        opt("--store-dir", "会话保存目录（默认 ~/.box_tools/ai_chat）"),
     ],
-    "examples": [
-        {"cmd": "export OPENAI_API_KEY='sk-***' && box_ai_chat", "desc": "进入连续对话模式"},
-        {"cmd": "box_ai_chat --model gpt-4o-mini", "desc": "用指定模型聊天"},
-        {"cmd": "box_ai_chat --system \"You are a senior iOS engineer.\"", "desc": "用自定义 system prompt 进入对话"},
-        {"cmd": "box_ai_chat --load ~/.box_tools/ai_chat/20260121_120000.json", "desc": "加载历史会话继续聊"},
+    examples=[
+        ex("export OPENAI_API_KEY='sk-***' && box_ai_chat", "进入连续对话模式"),
+        ex("box_ai_chat --model gpt-4o-mini", "用指定模型聊天"),
+        ex("box_ai_chat --system \"You are a senior iOS engineer.\"", "用自定义 system prompt 进入对话"),
+        ex("box_ai_chat --load ~/.box_tools/ai_chat/20260121_120000.json", "加载历史会话继续聊"),
     ],
-    "dependencies": [
+    dependencies=[
         "PyYAML>=6.0",
         "openai>=1.0.0",
         "rich>=13.0.0",
     ],
-    "docs": "README.md",
-}
+    docs="README.md",  # 可省略：tool() 默认就是 README.md
+)
+
 
 
 DEFAULT_STORE_DIR = Path.home() / ".box_tools" / "ai_chat"

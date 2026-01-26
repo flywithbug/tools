@@ -7,33 +7,34 @@ from typing import Dict, List, Optional, Tuple
 from box_tools._share.openai_translate.models import OpenAIModel
 from box_tools._share.openai_translate.translate import translate_flat_dict
 
+from _share.tool_spec import tool, opt, ex
 
-BOX_TOOL = {
-    "id": "ai.translate",
-    "name": "box_ai_translate",
-    "category": "ai",
-    "summary": "交互式多语言翻译：选择源语言/目标语言后输入文本，AI 实时翻译（支持中途切换）",
-    "usage": [
+BOX_TOOL = tool(
+    id="ai.translate",
+    name="box_ai_translate",
+    category="ai",
+    summary="交互式多语言翻译：选择源语言/目标语言后输入文本，AI 实时翻译（支持中途切换）",
+    usage=[
         "box_ai_translate",
         "box_ai_translate --model gpt-4o-mini",
         "box_ai_translate --source en --target zh-Hans",
     ],
-    "options": [
-        {"flag": "--model", "desc": "指定模型（默认 gpt-4o-mini）"},
-        {"flag": "--api-key", "desc": "显式传入 OpenAI API Key（不传则读取 OPENAI_API_KEY）"},
-        {"flag": "--source", "desc": "源语言代码（如 en/zh-Hans/ja…；不传则交互选择）"},
-        {"flag": "--target", "desc": "目标语言代码（如 zh-Hant/ko/fr…；不传则交互选择）"},
+    options=[
+        opt("--model", "指定模型（默认 gpt-4o-mini）"),
+        opt("--api-key", "显式传入 OpenAI API Key（不传则读取 OPENAI_API_KEY）"),
+        opt("--source", "源语言代码（如 en/zh-Hans/ja…；不传则交互选择）"),
+        opt("--target", "目标语言代码（如 zh-Hant/ko/fr…；不传则交互选择）"),
     ],
-    "examples": [
-        {"cmd": "export OPENAI_API_KEY='sk-***' && box_ai_translate", "desc": "进入翻译模式并交互选择语言"},
-        {"cmd": "box_ai_translate --source en --target zh-Hans", "desc": "跳过选项表，直接英->简中"},
+    examples=[
+        ex("export OPENAI_API_KEY='sk-***' && box_ai_translate", "进入翻译模式并交互选择语言"),
+        ex("box_ai_translate --source en --target zh-Hans", "跳过选项表，直接英->简中"),
     ],
-    "dependencies": [
+    dependencies=[
         "PyYAML>=6.0",
         "openai>=1.0.0",
     ],
-    "docs": "README.md",
-}
+    docs="README.md",  # 可省略：默认就是 README.md
+)
 
 
 # 你要求的语言集合：英语/简中/繁中/粤语/日语/韩语/法语
