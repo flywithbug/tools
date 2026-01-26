@@ -100,9 +100,13 @@ def run_translate(cfg: data.I18nConfig, incremental: bool = True) -> None:
     # 并发数：maxWorkers==0 自适应 2~8；>0 固定上限；都不超过任务数
     max_workers_cfg = _get_max_workers(cfg)
     max_workers = _compute_workers(max_workers_cfg, total_batches)
-    print(f"- 并发: {max_workers} workers（maxWorkers={max_workers_cfg}）")
+    if max_workers_cfg == 0:
+        print(f"- 并发: {max_workers} workers（maxWorkers=0/自动）")
+    else:
+        print(f"- 并发: {max_workers} workers（maxWorkers={max_workers_cfg}）")
 
-    # ✅ 总耗时：从“翻译开始”到“全部结束”的墙钟时间
+
+# ✅ 总耗时：从“翻译开始”到“全部结束”的墙钟时间
     start_all = time.perf_counter()
 
     # ✅ 累计每条任务耗时（用于对比并发节省）
