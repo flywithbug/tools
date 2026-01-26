@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import List, Tuple
 
 from .tool import Context, read_text, run_cmd
@@ -38,6 +39,8 @@ def _check_pubspec_basic(ctx: Context, warnings: List[str], errors: List[str]) -
         return
 
     raw = read_text(ctx.pubspec_path)
+    publish_to = _parse_pubspec_publish_to(raw)
+    is_publish_to_none = bool(publish_to is not None and publish_to.strip().lower() == "none")
     lines = raw.splitlines()
 
     has_name = any(re.match(r"^\s*name:\s*\S+", ln) for ln in lines)
@@ -83,6 +86,8 @@ def _check_changelog_if_publishable(ctx: Context, warnings: List[str], errors: L
         return
     raw = read_text(ctx.pubspec_path)
     publish_to = _parse_pubspec_publish_to(raw)
+    is_publish_to_none = bool(publish_to is not None and publish_to.strip().lower() == "none")
+    publish_to = _parse_pubspec_publish_to(raw)
     if publish_to is not None and publish_to.strip().lower() == "none":
         return
 
@@ -115,6 +120,8 @@ def _check_local_dependencies(ctx: Context, warnings: List[str], errors: List[st
         return
 
     raw = read_text(ctx.pubspec_path)
+    publish_to = _parse_pubspec_publish_to(raw)
+    is_publish_to_none = bool(publish_to is not None and publish_to.strip().lower() == "none")
     lines = raw.splitlines()
 
     locals_found: List[tuple[str, str]] = []
@@ -161,6 +168,39 @@ def _check_local_dependencies(ctx: Context, warnings: List[str], errors: List[st
             current_pkg_indent = None
 
     if locals_found:
+        # publish_to: none 时：
+        # - 项目目录内的本地依赖（path 指向 project_root 内）不提示、不阻断
+        # - 只有当 path 指向 project_root 之外时，才提示并阻断
+        if is_publish_to_none:
+            project_root = Path(ctx.project_root).resolve()
+            base_dir = ctx.pubspec_path.parent.resolve()
+
+            def resolve_dep_path(p: str) -> Path:
+                p = (p or "").strip().strip("'\"")
+                pp = Path(p)
+                if pp.is_absolute():
+                    return pp.resolve()
+                return (base_dir / pp).resolve()
+
+            def is_inside_project(p: Path) -> bool:
+                try:
+                    p.relative_to(project_root)
+                    return True
+                except Exception:
+                    return False
+
+            filtered: List[tuple[str, str]] = []
+            for pkg, pth in locals_found:
+                abs_p = resolve_dep_path(pth)
+                if not is_inside_project(abs_p):
+                    filtered.append((pkg, pth))
+
+            # 全都在项目内：直接放行
+            if not filtered:
+                return
+
+            locals_found = filtered
+
         # 去重并保持顺序
         seen = set()
         uniq = []
@@ -179,6 +219,7 @@ def _check_local_dependencies(ctx: Context, warnings: List[str], errors: List[st
         )
         # 作为 publish 闸门：本地依赖会导致 doctor 未通过，但在 doctor 输出里仍显示为 warning。
         errors.append(WARN_AS_ERROR_PREFIX + "检测到本地 path 依赖（发布/CI 可能无法解析）。")
+
 
 
 def _check_flutter(warnings: List[str], errors: List[str]) -> None:
