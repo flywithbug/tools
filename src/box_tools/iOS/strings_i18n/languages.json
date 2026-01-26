@@ -1,0 +1,632 @@
+[
+    {
+        "code": "af",
+        "name_zh": "南非荷兰语",
+        "asc_code": "af",
+        "displayName": "Afrikaans",
+        "name_en": "Afrikaans"
+    },
+    {
+        "code": "am",
+        "name_zh": "阿姆哈拉语",
+        "asc_code": "am",
+        "displayName": "አማርኛ",
+        "name_en": "Amharic"
+    },
+    {
+        "code": "ar",
+        "name_zh": "阿拉伯语",
+        "asc_code": "ar-SA",
+        "displayName": "العربية",
+        "name_en": "Arabic"
+    },
+    {
+        "code": "be",
+        "name_zh": "白俄罗斯语",
+        "displayName": "Беларуская",
+        "asc_code": "be",
+        "name_en": "Belarusian"
+    },
+    {
+        "code": "bg",
+        "name_zh": "保加利亚语",
+        "displayName": "Български",
+        "asc_code": "bg",
+        "name_en": "Bulgarian"
+    },
+    {
+        "code": "bn",
+        "name_zh": "孟加拉语",
+        "displayName": "বাংলা",
+        "asc_code": "bn",
+        "name_en": "Bengali"
+    },
+    {
+        "code": "bo",
+        "name_zh": "藏语",
+        "asc_code": "bo",
+        "displayName": "བོད་སྐད་",
+        "name_en": "Tibetan"
+    },
+    {
+        "code": "bs",
+        "name_zh": "波斯尼亚语",
+        "asc_code": "bs",
+        "displayName": "Bosanski",
+        "name_en": "Bosnian"
+    },
+    {
+        "code": "ca",
+        "name_zh": "加泰罗尼亚语",
+        "asc_code": "ca",
+        "displayName": "Català",
+        "name_en": "Catalan"
+    },
+    {
+        "code": "cs",
+        "name_zh": "捷克语",
+        "asc_code": "cs",
+        "displayName": "Čeština",
+        "name_en": "Czech"
+    },
+    {
+        "code": "cy",
+        "name_zh": "威尔士语",
+        "asc_code": "cy",
+        "displayName": "Cymraeg",
+        "name_en": "Welsh"
+    },
+    {
+        "code": "da",
+        "name_zh": "丹麦语",
+        "asc_code": "da",
+        "displayName": "Dansk",
+        "name_en": "Danish"
+    },
+    {
+        "code": "de",
+        "name_zh": "德语",
+        "asc_code": "de-DE",
+        "displayName": "Deutsch",
+        "name_en": "German"
+    },
+    {
+        "code": "el",
+        "name_zh": "希腊语",
+        "asc_code": "el",
+        "displayName": "Ελληνικά",
+        "name_en": "Greek"
+    },
+    {
+        "code": "en",
+        "name_zh": "英语",
+        "asc_code": "en-US",
+        "displayName": "English",
+        "name_en": "English"
+    },
+    {
+        "code": "en-AU",
+        "name_zh": "英语（澳大利亚）",
+        "asc_code": "en-AU",
+        "displayName": "English (Australia)",
+        "name_en": "English (Australia)"
+    },
+    {
+        "code": "en-CA",
+        "name_zh": "英语（加拿大）",
+        "asc_code": "en-CA",
+        "displayName": "English (Canada)",
+        "name_en": "English (Canada)"
+    },
+    {
+        "code": "en-GB",
+        "name_zh": "英语（英国）",
+        "asc_code": "en-GB",
+        "displayName": "English (UK)",
+        "name_en": "English (United Kingdom)"
+    },
+    {
+        "code": "en-IN",
+        "name_zh": "英语（印度）",
+        "displayName": "English (India)",
+        "asc_code": "en-IN",
+        "name_en": "English (India)"
+    },
+    {
+        "code": "eo",
+        "name_zh": "世界语",
+        "asc_code": "eo",
+        "displayName": "Esperanto",
+        "name_en": "Esperanto"
+    },
+    {
+        "code": "es",
+        "name_zh": "西班牙语（西班牙）",
+        "asc_code": "es-ES",
+        "displayName": "Español (España)",
+        "name_en": "Spanish"
+    },
+    {
+        "code": "es-419",
+        "name_zh": "西班牙语（拉丁美洲）",
+        "displayName": "Español (Latinoamérica)",
+        "asc_code": "es-419",
+        "name_en": "Spanish (Latin America)"
+    },
+    {
+        "code": "es-MX",
+        "name_zh": "西班牙语（墨西哥）",
+        "asc_code": "es-MX",
+        "displayName": "Español (México)",
+        "name_en": "Spanish (Mexico)"
+    },
+    {
+        "code": "et",
+        "name_zh": "爱沙尼亚语",
+        "displayName": "Eesti",
+        "asc_code": "et",
+        "name_en": "Estonian"
+    },
+    {
+        "code": "eu",
+        "name_zh": "巴斯克语",
+        "asc_code": "eu",
+        "displayName": "Euskara",
+        "name_en": "Basque"
+    },
+    {
+        "code": "fa",
+        "name_zh": "波斯语",
+        "displayName": "فارسی",
+        "asc_code": "fa",
+        "name_en": "Persian"
+    },
+    {
+        "code": "fi",
+        "name_zh": "芬兰语",
+        "asc_code": "fi",
+        "displayName": "Suomi",
+        "name_en": "Finnish"
+    },
+    {
+        "code": "fil",
+        "name_zh": "菲律宾语",
+        "asc_code": "fil",
+        "displayName": "Filipino",
+        "name_en": "Filipino"
+    },
+    {
+        "code": "fr",
+        "name_zh": "法语",
+        "asc_code": "fr-FR",
+        "displayName": "Français",
+        "name_en": "French"
+    },
+    {
+        "code": "fr-CA",
+        "name_zh": "法语（加拿大）",
+        "asc_code": "fr-CA",
+        "displayName": "Français (Canada)",
+        "name_en": "French (Canada)"
+    },
+    {
+        "code": "ga",
+        "name_zh": "爱尔兰语",
+        "asc_code": "ga",
+        "displayName": "Gaeilge",
+        "name_en": "Irish"
+    },
+    {
+        "code": "gl",
+        "name_zh": "加利西亚语",
+        "asc_code": "gl",
+        "displayName": "Galego",
+        "name_en": "Galician"
+    },
+    {
+        "code": "gu",
+        "name_zh": "古吉拉特语",
+        "displayName": "ગુજરાતી",
+        "asc_code": "gu",
+        "name_en": "Gujarati"
+    },
+    {
+        "code": "he",
+        "name_zh": "希伯来语",
+        "asc_code": "he",
+        "displayName": "עברית",
+        "name_en": "Hebrew"
+    },
+    {
+        "code": "hi",
+        "name_zh": "印地语",
+        "asc_code": "hi",
+        "displayName": "हिन्दी",
+        "name_en": "Hindi"
+    },
+    {
+        "code": "hr",
+        "name_zh": "克罗地亚语",
+        "asc_code": "hr",
+        "displayName": "Hrvatski",
+        "name_en": "Croatian"
+    },
+    {
+        "code": "hu",
+        "name_zh": "匈牙利语",
+        "asc_code": "hu",
+        "displayName": "Magyar",
+        "name_en": "Hungarian"
+    },
+    {
+        "code": "hy",
+        "name_zh": "亚美尼亚语",
+        "asc_code": "hy",
+        "displayName": "Հայերեն",
+        "name_en": "Armenian"
+    },
+    {
+        "code": "id",
+        "name_zh": "印度尼西亚语",
+        "asc_code": "id",
+        "displayName": "Bahasa Indonesia",
+        "name_en": "Indonesian"
+    },
+    {
+        "code": "is",
+        "name_zh": "冰岛语",
+        "asc_code": "is",
+        "displayName": "Íslenska",
+        "name_en": "Icelandic"
+    },
+    {
+        "code": "it",
+        "name_zh": "意大利语",
+        "asc_code": "it",
+        "displayName": "Italiano",
+        "name_en": "Italian"
+    },
+    {
+        "code": "ja",
+        "name_zh": "日语",
+        "asc_code": "ja",
+        "displayName": "日本語",
+        "name_en": "Japanese"
+    },
+    {
+        "code": "ka",
+        "name_zh": "格鲁吉亚语",
+        "asc_code": "ka",
+        "displayName": "ქართული",
+        "name_en": "Georgian"
+    },
+    {
+        "code": "kk",
+        "name_zh": "哈萨克语",
+        "displayName": "Қазақ тілі",
+        "asc_code": "kk",
+        "name_en": "Kazakh"
+    },
+    {
+        "code": "km",
+        "name_zh": "高棉语",
+        "asc_code": "km",
+        "displayName": "ខ្មែរ",
+        "name_en": "Khmer"
+    },
+    {
+        "code": "kn",
+        "name_zh": "卡纳达语",
+        "displayName": "ಕನ್ನಡ",
+        "asc_code": "kn",
+        "name_en": "Kannada"
+    },
+    {
+        "code": "ko",
+        "name_zh": "韩语",
+        "asc_code": "ko",
+        "displayName": "한국어",
+        "name_en": "Korean"
+    },
+    {
+        "code": "lo",
+        "name_zh": "老挝语",
+        "asc_code": "lo",
+        "displayName": "ລາວ",
+        "name_en": "Lao"
+    },
+    {
+        "code": "lt",
+        "name_zh": "立陶宛语",
+        "displayName": "Lietuvių",
+        "asc_code": "lt",
+        "name_en": "Lithuanian"
+    },
+    {
+        "code": "lv",
+        "name_zh": "拉脱维亚语",
+        "displayName": "Latviešu",
+        "asc_code": "lv",
+        "name_en": "Latvian"
+    },
+    {
+        "code": "mk",
+        "name_zh": "马其顿语",
+        "asc_code": "mk",
+        "displayName": "Македонски",
+        "name_en": "Macedonian"
+    },
+    {
+        "code": "ml",
+        "name_zh": "马拉雅拉姆语",
+        "displayName": "മലയാളം",
+        "asc_code": "ml",
+        "name_en": "Malayalam"
+    },
+    {
+        "code": "mr",
+        "name_zh": "马拉地语",
+        "displayName": "मराठी",
+        "asc_code": "mr",
+        "name_en": "Marathi"
+    },
+    {
+        "code": "ms",
+        "name_zh": "马来语",
+        "asc_code": "ms",
+        "displayName": "Bahasa Melayu",
+        "name_en": "Malay"
+    },
+    {
+        "code": "mt",
+        "name_zh": "马耳他语",
+        "asc_code": "mt",
+        "displayName": "Malti",
+        "name_en": "Maltese"
+    },
+    {
+        "code": "my",
+        "name_zh": "缅甸语",
+        "asc_code": "my",
+        "displayName": "မြန်မာ",
+        "name_en": "Burmese"
+    },
+    {
+        "code": "nb",
+        "name_zh": "挪威语（书面挪威语）",
+        "asc_code": "no",
+        "displayName": "Norsk Bokmål",
+        "name_en": "Norwegian Bokmål"
+    },
+    {
+        "code": "ne",
+        "name_zh": "尼泊尔语",
+        "asc_code": "ne",
+        "displayName": "नेपाली",
+        "name_en": "Nepali"
+    },
+    {
+        "code": "nl",
+        "name_zh": "荷兰语",
+        "asc_code": "nl-NL",
+        "displayName": "Nederlands",
+        "name_en": "Dutch"
+    },
+    {
+        "code": "nl-BE",
+        "name_zh": "荷兰语（比利时）",
+        "displayName": "Nederlands (België)",
+        "asc_code": "nl-BE",
+        "name_en": "Dutch (Belgium)"
+    },
+    {
+        "code": "nn",
+        "name_zh": "挪威语（新挪威语）",
+        "asc_code": "nn",
+        "displayName": "Norsk nynorsk",
+        "name_en": "Norwegian Nynorsk"
+    },
+    {
+        "code": "pa",
+        "name_zh": "旁遮普语",
+        "displayName": "ਪੰਜਾਬੀ",
+        "asc_code": "pa",
+        "name_en": "Punjabi"
+    },
+    {
+        "code": "pl",
+        "name_zh": "波兰语",
+        "asc_code": "pl",
+        "displayName": "Polski",
+        "name_en": "Polish"
+    },
+    {
+        "code": "ps",
+        "name_zh": "普什图语",
+        "asc_code": "ps",
+        "displayName": "پښتو",
+        "name_en": "Pashto"
+    },
+    {
+        "code": "pt-BR",
+        "name_zh": "葡萄牙语（巴西）",
+        "asc_code": "pt-BR",
+        "displayName": "Português (Brasil)",
+        "name_en": "Portuguese (Brazil)"
+    },
+    {
+        "code": "pt-PT",
+        "name_zh": "葡萄牙语（葡萄牙）",
+        "asc_code": "pt-PT",
+        "displayName": "Português (Portugal)",
+        "name_en": "Portuguese (Portugal)"
+    },
+    {
+        "code": "ro",
+        "name_zh": "罗马尼亚语",
+        "asc_code": "ro",
+        "displayName": "Română",
+        "name_en": "Romanian"
+    },
+    {
+        "code": "ru",
+        "name_zh": "俄语",
+        "asc_code": "ru",
+        "displayName": "Русский",
+        "name_en": "Russian"
+    },
+    {
+        "code": "si",
+        "name_zh": "僧伽罗语",
+        "asc_code": "si",
+        "displayName": "සිංහල",
+        "name_en": "Sinhala"
+    },
+    {
+        "code": "sk",
+        "name_zh": "斯洛伐克语",
+        "asc_code": "sk",
+        "displayName": "Slovenčina",
+        "name_en": "Slovak"
+    },
+    {
+        "code": "sl",
+        "name_zh": "斯洛文尼亚语",
+        "displayName": "Slovenščina",
+        "asc_code": "sl",
+        "name_en": "Slovenian"
+    },
+    {
+        "code": "sq",
+        "name_zh": "阿尔巴尼亚语",
+        "asc_code": "sq",
+        "displayName": "Shqip",
+        "name_en": "Albanian"
+    },
+    {
+        "code": "sr",
+        "name_zh": "塞尔维亚语",
+        "asc_code": "sr",
+        "displayName": "Српски",
+        "name_en": "Serbian"
+    },
+    {
+        "code": "sr-Latn",
+        "name_zh": "塞尔维亚语（拉丁字母）",
+        "asc_code": "sr-Latn",
+        "displayName": "Srpski",
+        "name_en": "Serbian (Latin)"
+    },
+    {
+        "code": "sv",
+        "name_zh": "瑞典语",
+        "asc_code": "sv",
+        "displayName": "Svenska",
+        "name_en": "Swedish"
+    },
+    {
+        "code": "sw",
+        "name_zh": "斯瓦希里语",
+        "asc_code": "sw",
+        "displayName": "Kiswahili",
+        "name_en": "Swahili"
+    },
+    {
+        "code": "ta",
+        "name_zh": "泰米尔语",
+        "displayName": "தமிழ்",
+        "asc_code": "ta",
+        "name_en": "Tamil"
+    },
+    {
+        "code": "te",
+        "name_zh": "泰卢固语",
+        "displayName": "తెలుగు",
+        "asc_code": "te",
+        "name_en": "Telugu"
+    },
+    {
+        "code": "tg",
+        "name_zh": "塔吉克语",
+        "asc_code": "tg",
+        "displayName": "Тоҷикӣ",
+        "name_en": "Tajik"
+    },
+    {
+        "code": "th",
+        "name_zh": "泰语",
+        "asc_code": "th",
+        "displayName": "ไทย",
+        "name_en": "Thai"
+    },
+    {
+        "code": "tr",
+        "name_zh": "土耳其语",
+        "asc_code": "tr",
+        "displayName": "Türkçe",
+        "name_en": "Turkish"
+    },
+    {
+        "code": "uk",
+        "name_zh": "乌克兰语",
+        "asc_code": "uk",
+        "displayName": "Українська",
+        "name_en": "Ukrainian"
+    },
+    {
+        "code": "ur",
+        "name_zh": "乌尔都语",
+        "asc_code": "ur",
+        "displayName": "اردو",
+        "name_en": "Urdu"
+    },
+    {
+        "code": "ur-IN",
+        "name_zh": "乌尔都语（印度）",
+        "asc_code": "ur-IN",
+        "displayName": "اردو (بھارت)",
+        "name_en": "Urdu (India)"
+    },
+    {
+        "code": "uz",
+        "name_zh": "乌兹别克语",
+        "asc_code": "uz",
+        "displayName": "O‘zbek",
+        "name_en": "Uzbek"
+    },
+    {
+        "code": "vi",
+        "name_zh": "越南语",
+        "asc_code": "vi",
+        "displayName": "Tiếng Việt",
+        "name_en": "Vietnamese"
+    },
+    {
+        "code": "yue",
+        "name_zh": "粤语",
+        "asc_code": "yue",
+        "displayName": "粵語",
+        "name_en": "Cantonese"
+    },
+    {
+        "code": "zh-HK",
+        "name_zh": "中文（香港）",
+        "asc_code": "zh-Hant",
+        "displayName": "中文（香港）",
+        "name_en": "Chinese (Hong Kong)"
+    },
+    {
+        "code": "zh-Hans",
+        "name_zh": "中文（简体）",
+        "asc_code": "zh-Hans",
+        "displayName": "中文（简体）",
+        "name_en": "Chinese (Simplified)"
+    },
+    {
+        "code": "zh-Hant",
+        "name_zh": "中文（繁體）",
+        "asc_code": "zh-Hant",
+        "displayName": "中文（繁體）",
+        "name_en": "Chinese (Traditional)"
+    }
+]
