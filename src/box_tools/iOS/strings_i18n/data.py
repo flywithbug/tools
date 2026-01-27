@@ -7,7 +7,6 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
-import pprint
 
 import yaml
 
@@ -521,7 +520,8 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
 
     # ---- languages.json 内容 ----
     try:
-        languages = _load_languages(cfg.languages_path)
+        languages_list = _load_languages(cfg.languages_path)
+        languages = {d['code'] for d in languages_list if 'code' in d}
     except Exception as e:
         errors.append(f"languages.json 读取失败：{cfg.languages_path}（{e}）")
         return _doctor_print_and_write(cfg, errors, warns)
