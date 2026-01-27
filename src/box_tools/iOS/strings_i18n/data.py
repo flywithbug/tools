@@ -985,17 +985,8 @@ def _format_key_report(report: Dict[str, List[str]], *, title: str, max_keys_per
 
 
 def _write_report_file(cfg: StringsI18nConfig, content: str, *, name: str) -> Optional[Path]:
-    """把报告写到 repo 内的 .box_strings_i18n_reports/，方便复制/查看。"""
-    try:
-        out_dir = (cfg.lang_root / ".box_strings_i18n_reports").resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        out_path = out_dir / f"{name}_{ts}.txt"
-        out_path.write_text(content, encoding="utf-8")
-        return out_path
-    except Exception:
-        return None
-
+    """doctor 阶段不落盘报告：按需求禁用所有 report 文件写入。"""
+    return None
 
 
 def _resolve_placeholder_mismatch_policy(

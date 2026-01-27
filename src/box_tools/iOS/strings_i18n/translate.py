@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import sys
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -73,17 +74,36 @@ def run_translate(cfg: data.StringsI18nConfig, incremental: bool = True) -> None
     print(f"- Core:   {[x.code for x in cfg.core_locales]}")
     print(f"- Targets:{len(cfg.target_locales)}")
 
-    # Phase 1
-    translate_base_to_core(cfg, incremental=incremental)
 
-    # Phase 2
-    translate_source_to_target(cfg, incremental=incremental)
-
-    # 统一排序/清理（维持工程稳定性）
-    print("🔧 translate 后执行 sort（保证格式一致）...")
-    data.run_sort(cfg)
-
-
+    # 进入 translate 后内部二级菜单：选择执行阶段（tool 不变）
+    if sys.stdin.isatty():
+        while True:
+            print("\n=== translate phases ===")
+            print("1. base_locale -> core_locales")
+            print("2. source_locale(pivot) -> target_locales")
+            print("3. 回退")
+            print("0. 退出")
+            choice = input("> ").strip()
+            if choice == "1":
+                translate_base_to_core(cfg, incremental=incremental)
+                print("🔧 translate 后执行 sort（保证格式一致）...")
+                data.run_sort(cfg)
+            elif choice == "2":
+                translate_source_to_target(cfg, incremental=incremental)
+                print("🔧 translate 后执行 sort（保证格式一致）...")
+                data.run_sort(cfg)
+            elif choice == "3":
+                return
+            elif choice == "0":
+                raise SystemExit(0)
+            else:
+                print("请输入 1/2/3/0")
+    else:
+        # 非交互环境（CI）：默认两段都执行
+        translate_base_to_core(cfg, incremental=incremental)
+        translate_source_to_target(cfg, incremental=incremental)
+        print("🔧 translate 后执行 sort（保证格式一致）...")
+        data.run_sort(cfg)
 def translate_base_to_core(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
     """阶段 1：base_locale -> core_locales（增量翻译入口）"""
     base_dir, base_files = _load_base_files(cfg)
