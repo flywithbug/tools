@@ -3,12 +3,22 @@ from __future__ import annotations
 
 import os
 import time
+import threading
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 from box_tools._share.openai_translate.translate import translate_flat_dict
 from . import data
+
+
+_PRINT_LOCK = threading.Lock()
+
+
+def _ts_print(*args, **kwargs) -> None:
+    """Thread-safe print to avoid interleaved logs under concurrency."""
+    with _PRINT_LOCK:
+        print(*args, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -304,8 +314,68 @@ def _build_tasks(
     return tasks, total_keys, per_lang_total
 
 
+
+
+
+def _make_progress_cb(t: _Task):
+    """Build progress callback for translate_flat_dict without affecting old call sites."""
+    t_start = time.perf_counter()
+    chunk_start: Dict[Any, float] = {}
+
+    # Best-effort chunk size hint (core may not provide it)
+    try:
+        chunk_keys_hint = int(os.getenv("BOX_TRANSLATE_MAX_CHUNK", "").strip() or "0") or None
+    except Exception:
+        chunk_keys_hint = None
+
+    def cb(payload: Any) -> None:
+        try:
+            if not isinstance(payload, dict):
+                return
+            ev = payload.get("event") or payload.get("type") or payload.get("name") or ""
+            ev = str(ev)
+            now = time.perf_counter()
+            elapsed = now - t_start
+
+            if ev in ("chunking_done", "chunked", "chunking"):
+                chunks_total = payload.get("chunks_total") or payload.get("chunks") or payload.get("total_chunks") or payload.get("n")
+                chunk_keys = payload.get("chunk_keys") or payload.get("chunk_size") or payload.get("max_chunk_items") or chunk_keys_hint
+                _ts_print(
+                    f"   ⏱️ [{t.idx}/{t.total}] {t.module_name} → {t.tgt_code} 分片完成：{chunks_total} 片（chunk_keys={chunk_keys}） | {elapsed:.2f}s"
+                )
+                return
+
+            if ev in ("chunk_start", "chunk_begin", "chunk_started"):
+                i = payload.get("chunk_index") or payload.get("i") or payload.get("idx") or payload.get("chunk_i")
+                n = payload.get("chunks_total") or payload.get("n") or payload.get("total") or payload.get("chunk_n")
+                nk = payload.get("n_keys") or payload.get("keys") or payload.get("chunk_len") or payload.get("size")
+                chunk_start[i] = now
+                _ts_print(
+                    f"   ⏱️ [{t.idx}/{t.total}] {t.module_name} → {t.tgt_code} chunk {i}/{n} 开始（{nk} key） | {elapsed:.2f}s"
+                )
+                return
+
+            if ev in ("chunk_done", "chunk_end", "chunk_finished"):
+                i = payload.get("chunk_index") or payload.get("i") or payload.get("idx") or payload.get("chunk_i")
+                n = payload.get("chunks_total") or payload.get("n") or payload.get("total") or payload.get("chunk_n")
+                nk = payload.get("n_keys") or payload.get("keys") or payload.get("chunk_len") or payload.get("size")
+                sec = None
+                if i in chunk_start:
+                    sec = now - chunk_start[i]
+                sec_str = f"{sec:.2f}s" if sec is not None else "?"
+                _ts_print(
+                    f"   ⏱️ [{t.idx}/{t.total}] {t.module_name} → {t.tgt_code} chunk {i}/{n} 完成（{nk} key） | {sec_str} | {elapsed:.2f}s"
+                )
+                return
+        except Exception:
+            return
+
+    return cb
+
+
 def _translate_one(t: _Task) -> _TaskResult:
     t0 = time.perf_counter()
+    cb = _make_progress_cb(t)
     out = translate_flat_dict(
         prompt_en=t.prompt_en,
         src_dict=t.src_for_translate,
@@ -313,6 +383,7 @@ def _translate_one(t: _Task) -> _TaskResult:
         tgt_locale=t.tgt_lang_name,   # ✅ name_en
         model=t.model,
         api_key=None,                 # ✅ 不关心 OPENAI_API_KEY
+        progress_cb=cb,
     )
     t1 = time.perf_counter()
 
