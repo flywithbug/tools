@@ -600,6 +600,73 @@ def _apply_duplicate_policy(entries: List[StringsEntry], policy: str) -> List[St
     return [e for e in entries if e.key not in dups]
 
 
+
+def _base_keys_by_file(cfg: StringsI18nConfig) -> Dict[str, set]:
+    """读取 Base.lproj 下每个 *.strings 的 key 集合。key 用于判定冗余字段。"""
+    base_dir = (cfg.lang_root / cfg.base_folder).resolve()
+    if not base_dir.exists():
+        raise ConfigError(f"未找到 base_folder: {base_dir}")
+    keys_map: Dict[str, set] = {}
+    for fp in sorted(base_dir.glob("*.strings")):
+        _, entries = parse_strings_file(fp)
+        keys_map[fp.name] = set(e.key for e in entries)
+    return keys_map
+
+
+def scan_redundant_keys(cfg: StringsI18nConfig, base_keys_map: Dict[str, set]) -> Dict[str, List[str]]:
+    """冗余字段：Base 中没有，但其他语言中有的 key。返回 {locale_code: ["File.strings:key", ...]}"""
+    locales: List[Locale] = []
+    if cfg.source_locale:
+        locales.append(cfg.source_locale)
+    locales.extend(cfg.core_locales or [])
+    locales.extend(cfg.target_locales or [])
+
+    report: Dict[str, List[str]] = {}
+    for loc in locales:
+        loc_dir = (cfg.lang_root / f"{loc.code}.lproj").resolve()
+        if not loc_dir.exists():
+            continue
+        redundant: List[str] = []
+        for fp in sorted(loc_dir.glob("*.strings")):
+            base_keys = base_keys_map.get(fp.name, set())
+            _, entries = parse_strings_file(fp)
+            for e in entries:
+                if e.key not in base_keys:
+                    redundant.append(f"{fp.name}:{e.key}")
+        if redundant:
+            # 去重 + 排序（按文件名再按 key）
+            redundant = sorted(set(redundant), key=lambda s: (s.split(":",1)[0], s.split(":",1)[1]))
+            report[loc.code] = redundant
+    return report
+
+
+def _resolve_redundant_policy(cfg: StringsI18nConfig, report: Dict[str, List[str]]) -> str:
+    """返回 keep / delete / cancel"""
+    if not report:
+        return "keep"
+
+    print("⚠️ 发现冗余字段（Base 中没有，但其他语言存在）：")
+    for code, items in sorted(report.items(), key=lambda kv: kv[0]):
+        preview = items if len(items) <= 80 else items[:80] + [f"...(共 {len(items)} 个)"]
+        print(f"  - {code}: {preview}")
+
+    # 配置中可预设策略（用于 CI/非交互），否则交互询问
+    opt = (cfg.options or {}).get("redundant_key_policy")
+    if opt in {"keep", "delete"}:
+        print(f"✅ 使用配置 redundant_key_policy={opt}")
+        return opt
+
+    while True:
+        ans = input("是否删除这些冗余字段？(y=删除 / n=保留 / c=取消本次 sort) [n]: ").strip().lower()
+        if ans == "" or ans == "n":
+            return "keep"
+        if ans == "y":
+            return "delete"
+        if ans == "c":
+            return "cancel"
+        print("请输入 y / n / c")
+
+
 def scan_duplicate_keys(cfg: StringsI18nConfig) -> Dict[str, List[str]]:
     """扫描所有语言（含 Base）下的 *.strings，返回 {lang_label: [dup_keys...]}"""
     result: Dict[str, set] = {}
@@ -696,7 +763,7 @@ def sort_base_strings_files(cfg: StringsI18nConfig, *, duplicate_policy: str) ->
     return changed
 
 
-def sort_other_locale_strings_files(cfg: StringsI18nConfig, *, duplicate_policy: str) -> int:
+def sort_other_locale_strings_files(cfg: StringsI18nConfig, *, duplicate_policy: str, base_keys_map: Dict[str, set], redundant_policy: str) -> int:
     """对非 Base 语言目录下的所有 *.strings 文件排序（仅按 key 排序，不做前缀分组）。"""
     locales: List[Locale] = []
     if cfg.source_locale:
@@ -715,6 +782,12 @@ def sort_other_locale_strings_files(cfg: StringsI18nConfig, *, duplicate_policy:
             preamble, entries = parse_strings_file(fp)
 
             entries = _apply_duplicate_policy(entries, duplicate_policy)
+
+            # 冗余字段：Base 中没有的 key（可选删除）
+            if redundant_policy == "delete":
+                base_keys = base_keys_map.get(fp.name, set())
+                entries = [e for e in entries if e.key in base_keys]
+
             entries_sorted = sorted(entries, key=lambda e: e.key)
 
             old_text = fp.read_text(encoding="utf-8") if fp.exists() else ""
@@ -754,6 +827,19 @@ def run_sort(cfg: StringsI18nConfig) -> None:
         print("❌ sort 已取消（未做任何修改）")
         return
 
+    # 冗余字段检查（Base 中没有，但其他语言有）
+    try:
+        base_keys_map = _base_keys_by_file(cfg)
+    except ConfigError as e:
+        print(f"❌ sort 中止：{e}")
+        return
+
+    redundant_report = scan_redundant_keys(cfg, base_keys_map)
+    redundant_policy = _resolve_redundant_policy(cfg, redundant_report)
+    if redundant_policy == "cancel":
+        print("❌ sort 已取消（未做任何修改）")
+        return
+
     # 1) Base.lproj：保留注释；注释在字段上方；按 key 排序并按前缀分组
     try:
         base_changed = sort_base_strings_files(cfg, duplicate_policy=policy)
@@ -763,7 +849,7 @@ def run_sort(cfg: StringsI18nConfig) -> None:
 
     # 2) 其他语言：仅按 key 排序（不做前缀分组）
     try:
-        other_changed = sort_other_locale_strings_files(cfg, duplicate_policy=policy)
+        other_changed = sort_other_locale_strings_files(cfg, duplicate_policy=policy, base_keys_map=base_keys_map, redundant_policy=redundant_policy)
     except ConfigError as e:
         print(f"❌ sort 中止：{e}")
         return
