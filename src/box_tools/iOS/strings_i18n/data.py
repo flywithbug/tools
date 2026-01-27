@@ -94,6 +94,78 @@ def _load_languages(languages_path: Path) -> List[Dict[str, str]]:
     return out
 
 
+
+
+def _all_locale_codes(cfg: StringsI18nConfig) -> List[str]:
+    codes: List[str] = []
+    for loc in [cfg.base_locale, cfg.source_locale] + cfg.core_locales + cfg.target_locales:
+        if loc and loc.code not in codes:
+            codes.append(loc.code)
+    return codes
+
+
+def _dedup_locales_preserve_order(locales: List[Locale]) -> List[Locale]:
+    seen: set[str] = set()
+    out: List[Locale] = []
+    for l in locales:
+        if l.code in seen:
+            continue
+        seen.add(l.code)
+        out.append(l)
+    return out
+
+
+_PRINTF_RE = re.compile(r'%(?:\d+\$)?(?:@|d|i|u|f|s|ld|lld|lu|llu|lf)', re.IGNORECASE)
+
+def _extract_printf_placeholders(value: str) -> List[str]:
+    # 忽略转义的 %%（它不是占位符）
+    if not value:
+        return []
+    # 临时替换 %% 防止被正则误伤
+    tmp = value.replace("%%", "")
+    return _PRINTF_RE.findall(tmp)
+
+
+def _doctor_print_and_write(
+    cfg: StringsI18nConfig,
+    errors: List[str],
+    warns: List[str],
+    extra_sections: Optional[Dict[str, Any]] = None,
+) -> int:
+    # 控制台摘要
+    print("\n=== doctor summary ===")
+    print(f"- project_root: {cfg.project_root}")
+    print(f"- lang_root:    {cfg.lang_root}")
+    print(f"- base_folder:  {cfg.base_folder}")
+    print(f"- base_locale:  {cfg.base_locale.code}")
+    print(f"- source_locale:{cfg.source_locale.code}")
+    print(f"- core_locales: {[l.code for l in cfg.core_locales]}")
+    print(f"- target_locales: {len(cfg.target_locales)}")
+
+    if errors:
+        print("\n[ERROR]")
+        for e in errors:
+            print(f"- {e}")
+    if warns:
+        print("\n[WARN]")
+        for w in warns:
+            print(f"- {w}")
+
+    # 写报告文件（含详细 section）
+    try:
+        report_path = _write_report_file(
+            cfg.lang_root,
+            stem="doctor",
+            header="box_strings_i18n doctor report",
+            errors=errors,
+            warns=warns,
+            sections=extra_sections or {},
+        )
+        print(f"\nReport: {report_path}")
+    except Exception as e:
+        print(f"\nReport 写入失败：{e}")
+
+    return 1 if errors else 0
 def build_target_locales_from_languages_json(
     languages_path: Path,
     *,
@@ -419,7 +491,7 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
 
     # ---- languages.json 内容 ----
     try:
-        languages = _load_languages_json(cfg.languages_path)
+        languages = _load_languages(cfg.languages_path)
     except Exception as e:
         errors.append(f"languages.json 读取失败：{cfg.languages_path}（{e}）")
         return _doctor_print_and_write(cfg, errors, warns)
