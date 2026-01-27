@@ -341,65 +341,132 @@ def _build_tasks(
 
 
 def _make_progress_cb(t: _Task):
-    """用于 translate_flat_dict 的进度回调（线程内回调，需加锁打印避免输出互相打架）。"""
+    """用于 translate_flat_dict 的进度回调（线程内回调，需加锁打印避免输出互相打架）。
+
+    规则：
+      - 只有当分片数 > 1 时，才打印 chunk_start/chunk_done/chunking_done（避免单分片噪音）
+      - 但若发生超时/重试/拆分，会打印最小必要信息，避免“无输出像卡死”
+      - 回调异常不会影响翻译
+    """
     t_start = time.perf_counter()
     # 纯 key 数量分片的默认 chunk size（可用环境变量覆盖）
-    _cfg_chunk_keys = int(os.getenv('BOX_TRANSLATE_MAX_CHUNK', '60') or '60')
+    _cfg_chunk_keys = int(os.getenv("BOX_TRANSLATE_MAX_CHUNK", "60") or "60")
     _chunk_start_ts: Dict[int, float] = {}
+    _chunk_total: Optional[int] = None  # 仅用于控制是否输出 chunk 日志（>1 才输出）
+    _printed_chunking_done = False
+
+    def _fmt_idx(ci: Any, cn: Any) -> str:
+        try:
+            ci_i = int(ci)
+            cn_i = int(cn)
+            if cn_i > 0 and ci_i > 0 and ci_i <= cn_i:
+                return f"{ci_i}/{cn_i}"
+        except Exception:
+            pass
+        return ""
+
+    def _set_total_if_any(evt: Dict[str, Any]) -> None:
+        nonlocal _chunk_total
+        if _chunk_total is not None:
+            return
+        cn = evt.get("chunk_total") or evt.get("n")
+        chunks = evt.get("chunks")
+        for v in (chunks, cn):
+            try:
+                if v is not None:
+                    _chunk_total = int(v)
+                    return
+            except Exception:
+                continue
+
+    def _should_print_chunks() -> bool:
+        return isinstance(_chunk_total, int) and _chunk_total > 1
 
     def _cb(evt: Dict[str, Any]) -> None:
+        nonlocal _printed_chunking_done
         try:
             e = evt.get("event") or evt.get("type") or evt.get("name") or "event"
             ci = evt.get("chunk_index") or evt.get("i")
             cn = evt.get("chunk_total") or evt.get("n")
             ck = evt.get("chunk_keys") or evt.get("chunk_items") or evt.get("items") or evt.get("keys")
-            sec = evt.get("sec") or evt.get("elapsed") or evt.get("chunk_sec")
+            attempt = evt.get("attempt")
+            msg = evt.get("error") or evt.get("message") or ""
             now = time.perf_counter()
             since = now - t_start
+
+            _set_total_if_any(evt)
 
             # 事件字段兼容：优先使用核心传入，否则回退到默认 chunk_keys
             if ck is None:
                 ck = _cfg_chunk_keys
+
             # 自己计算 chunk 耗时：chunk_start -> chunk_done
-            if e in {'chunk_start'} and isinstance(ci, int):
-                _chunk_start_ts[ci] = now
-            if e in {'chunk_done'} and isinstance(ci, int):
-                st = _chunk_start_ts.pop(ci, None)
-                if st is not None:
-                    sec = now - st
+            if e in {"chunk_start"}:
+                try:
+                    _chunk_start_ts[int(ci)] = now
+                except Exception:
+                    pass
+            if e in {"chunk_done"}:
+                try:
+                    key = int(ci)
+                    st = _chunk_start_ts.pop(key, None)
+                    if st is not None:
+                        evt_sec = now - st
+                    else:
+                        evt_sec = None
+                except Exception:
+                    evt_sec = None
+            else:
+                evt_sec = None
 
             with _PRINT_LOCK:
                 head = f"   ⏱️ [{t.idx}/{t.total}] ({t.phase}) {t.tgt_code}"
-                if e in {"chunking_done"}:
-                    chunks = evt.get("chunks") or cn
-                    size = _cfg_chunk_keys
-                    print(f"{head} 分片完成：{chunks} 片（chunk_keys={size}） | {since:.2f}s")
-                elif e in {"chunk_start"}:
-                    if ci and cn:
-                        print(f"{head} chunk {ci}/{cn} 开始（{ck} key） | {since:.2f}s")
-                elif e in {"chunk_done"}:
-                    if ci and cn:
-                        s = f"{sec:.2f}s" if isinstance(sec, (int, float)) else "?"
-                        print(f"{head} chunk {ci}/{cn} 完成（{ck} key） | {s} | {since:.2f}s")
-                elif e in {"chunk_error", "retry"}:
-                    msg = evt.get("error") or evt.get("message") or ""
-                    attempt = evt.get("attempt")
-                    if ci and cn:
-                        print(f"{head} chunk {ci}/{cn} 异常/重试 attempt={attempt} {msg} | {since:.2f}s")
+                idx = _fmt_idx(ci, cn)
+
+                # chunking_done：只有 >1 才打印
+                if e == "chunking_done":
+                    if _should_print_chunks() and not _printed_chunking_done:
+                        print(f"{head} 分片完成：{_chunk_total} 片（chunk_keys={_cfg_chunk_keys}） | {since:.2f}s")
+                        _printed_chunking_done = True
+                    return
+
+                # chunk start/done：只有 >1 才打印
+                if e == "chunk_start":
+                    if _should_print_chunks() and idx:
+                        print(f"{head} chunk {idx} 开始（{ck} key） | {since:.2f}s")
+                    return
+
+                if e == "chunk_done":
+                    if _should_print_chunks() and idx:
+                        s = f"{evt_sec:.2f}s" if isinstance(evt_sec, (int, float)) else "?"
+                        print(f"{head} chunk {idx} 完成（{ck} key） | {s} | {since:.2f}s")
+                    return
+
+                # retry / error / split：无论是否单分片，都打印“最小必要信息”
+                if e in {"chunk_error", "retry"}:
+                    if idx and _should_print_chunks():
+                        print(f"{head} chunk {idx} 异常/重试 attempt={attempt} {msg} | {since:.2f}s")
                     else:
+                        # 单分片或 idx 不可信时：不输出 idx，避免乱
                         print(f"{head} 异常/重试 attempt={attempt} {msg} | {since:.2f}s")
-                elif e in {"chunk_split"}:
+                    return
+
+                if e == "chunk_split":
                     print(f"{head} chunk 拆分重试（减小批次） | {since:.2f}s")
-                elif e in {"all_done"}:
-                    print(f"{head} 翻译完成（核心回调） | {since:.2f}s")
-                else:
+                    return
+
+                if e == "all_done":
+                    # 核心级完成回调通常不必输出；保留 debug 开关
                     if os.environ.get("BOX_STRINGS_I18N_PROGRESS_DEBUG", ""):
-                        print(f"{head} {e}: {evt} | {since:.2f}s")
+                        print(f"{head} 翻译完成（核心回调） | {since:.2f}s")
+                    return
+
+                if os.environ.get("BOX_STRINGS_I18N_PROGRESS_DEBUG", ""):
+                    print(f"{head} {e}: {evt} | {since:.2f}s")
         except Exception:
             return
 
     return _cb
-
 def _translate_text_map(*, t: _Task) -> Dict[str, Any]:
     # 与 slang_i18n 完全一致的调用方式
     cb = _make_progress_cb(t)
