@@ -153,48 +153,7 @@ def _doctor_print_and_write(
         for w in warns:
             print(f"- {w}")
 
-    # 写报告文件（含详细 section）
-    try:
-        lines: List[str] = []
-        lines.append("box_strings_i18n doctor report")
-        lines.append("")
-        lines.append("=== summary ===")
-        lines.append(f"project_root: {cfg.project_root}")
-        lines.append(f"lang_root:    {cfg.lang_root}")
-        lines.append(f"base_folder:  {cfg.base_folder}")
-        lines.append(f"base_locale:  {cfg.base_locale.code}")
-        lines.append(f"source_locale:{cfg.source_locale.code}")
-        lines.append(f"core_locales: {[l.code for l in cfg.core_locales]}")
-        lines.append(f"target_locales: {len(cfg.target_locales)}")
-
-        if errors:
-            lines.append("")
-            lines.append("[ERROR]")
-            for e in errors:
-                lines.append(f"- {e}")
-        if warns:
-            lines.append("")
-            lines.append("[WARN]")
-            for w in warns:
-                lines.append(f"- {w}")
-
-        if extra_sections:
-            lines.append("")
-            lines.append("=== details ===")
-            for k, v in (extra_sections or {}).items():
-                lines.append("")
-                lines.append(f"## {k}")
-                if isinstance(v, str):
-                    lines.append(v.rstrip())
-                else:
-                    lines.append(pprint.pformat(v, width=120))
-
-        content = "\n".join(lines).rstrip() + "\n"
-        report_path = _write_report_file(cfg, content, name="doctor")
-        if report_path is not None:
-            print(f"\nReport: {report_path}")
-    except Exception as e:
-        print(f"\nReport 写入失败：{e}")
+    # doctor 默认不写入 reports 文件（避免工作区噪音）
 
     return 1 if errors else 0
 def build_target_locales_from_languages_json(
@@ -685,15 +644,14 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
                         if not fp.exists():
                             continue
                         try:
-                            preamble, entries = parse_strings_file(fp)
+                            _, entries = parse_strings_file(fp)
                         except Exception:
                             continue
                         bad = set(keys)
                         new_entries = [e for e in entries if e.key not in bad]
                         if len(new_entries) != len(entries):
                             deleted += (len(entries) - len(new_entries))
-                            # 其它语言：仅按 key 排序，不分组；同时保留文件前导注释/空行（preamble）
-                            write_strings_file(fp, preamble, new_entries, group_by_prefix=False)
+                            write_strings_file(fp, new_entries, group_by_prefix=False)
                 warns.append(f"已删除冗余 key：{deleted} 条")
 
     # strict 模式：把 warns 当 errors
@@ -1035,9 +993,10 @@ def _resolve_placeholder_mismatch_policy(
     lines.append("  - 或者：人工修正目标语言 value 的占位符，使其与 Base 完全一致")
     content = "\n".join(lines) + "\n"
     print(content)
-    p = _write_report_file(cfg, content, name="placeholder_mismatch_preview")
-    if p is not None:
-        print(f"📄 已输出报告文件：{p}")
+    if (cfg.options or {}).get("doctor_write_reports"):
+        p = _write_report_file(cfg, content, name="placeholder_mismatch_preview")
+        if p is not None:
+            print(f"📄 已输出报告文件：{p}")
 
     opt = (cfg.options or {}).get("placeholder_mismatch_policy")
     if opt in {"keep", "delete"}:
@@ -1072,7 +1031,7 @@ def _apply_placeholder_mismatch_delete(
             if not fp.exists():
                 continue
             try:
-                preamble, entries = parse_strings_file(fp)
+                _, entries = parse_strings_file(fp)
             except Exception:
                 continue
             bad_keys = {k for (k, _, _) in items}
@@ -1082,8 +1041,7 @@ def _apply_placeholder_mismatch_delete(
             if len(new_entries) != len(entries):
                 deleted += (len(entries) - len(new_entries))
                 # 其它语言：仅按 key 排序，不分组
-                # 同时保留文件前导注释/空行（preamble）
-                write_strings_file(fp, preamble, new_entries, group_by_prefix=False)
+                write_strings_file(fp, new_entries, group_by_prefix=False)
     return deleted
 
 def _resolve_redundant_policy(cfg: StringsI18nConfig, report: Dict[str, List[str]]) -> str:
