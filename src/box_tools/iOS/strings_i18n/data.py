@@ -525,26 +525,24 @@ def write_strings_file(path: Path, preamble: List[str], entries: List[StringsEnt
 
     # 写 header/preamble（原样）
     if preamble:
-        pre = list(preamble)
         # 去掉末尾多余空行（避免文件头太松）
-        while pre and pre[-1].strip() == "":
-            pre.pop()
-        out_lines.extend(pre)
+        while preamble and preamble[-1].strip() == "":
+            preamble.pop()
+        out_lines.extend(preamble)
         out_lines.append("")  # header 与正文之间留一空行
 
     # entries 已经排序/分组完成；写回时保证：注释紧贴在字段上方
     prev_group: Optional[str] = None
     for e in entries:
-        if group_by_prefix:
-            grp = _group_prefix(e.key)
-            if prev_group is not None and grp != prev_group:
-                out_lines.append("")  # 组之间空一行
-            prev_group = grp
+        grp = _group_prefix(e.key)
+        if prev_group is not None and grp != prev_group:
+            out_lines.append("")  # 组之间空一行
+        prev_group = grp
 
         # 写注释
         if e.comments:
-            comments = list(e.comments)
             # 去掉注释块首尾多余空行
+            comments = list(e.comments)
             while comments and comments[0].strip() == "":
                 comments.pop(0)
             while comments and comments[-1].strip() == "":
@@ -557,25 +555,118 @@ def write_strings_file(path: Path, preamble: List[str], entries: List[StringsEnt
     path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
 
 
-def sort_strings_entries(entries: List[StringsEntry], *, group_by_prefix: bool) -> List[StringsEntry]:
-    if group_by_prefix:
-        return sorted(entries, key=lambda e: (_group_prefix(e.key), e.key))
-    return sorted(entries, key=lambda e: e.key)
+def sort_strings_entries(preamble: List[str], entries: List[StringsEntry]) -> Tuple[List[str], List[StringsEntry]]:
+    # 根据前缀分组 + key 排序
+    entries_sorted = sorted(entries, key=lambda e: (_group_prefix(e.key), e.key))
+    return preamble, entries_sorted
 
 
-def _collect_base_keys_map(cfg: StringsI18nConfig) -> Dict[str, set]:
-    """按文件维度收集 Base.lproj 的 key 集合：{ 'Localizable.strings': {k1,k2} }"""
+
+def _collect_duplicates(entries: List[StringsEntry]) -> List[str]:
+    seen = set()
+    dups = set()
+    for e in entries:
+        if e.key in seen:
+            dups.add(e.key)
+        else:
+            seen.add(e.key)
+    return sorted(dups)
+
+
+def _apply_duplicate_policy(entries: List[StringsEntry], policy: str) -> List[StringsEntry]:
+    """处理重复 key。policy:
+    - keep_first: 只保留第一次出现的 key
+    - delete_all: 重复 key（出现>=2）全部删除
+    """
+    if policy not in {"keep_first", "delete_all"}:
+        return entries
+
+    dups = set(_collect_duplicates(entries))
+    if not dups:
+        return entries
+
+    if policy == "keep_first":
+        kept = []
+        seen = set()
+        for e in entries:
+            if e.key in dups:
+                if e.key in seen:
+                    continue
+                seen.add(e.key)
+            kept.append(e)
+        return kept
+
+    # delete_all
+    return [e for e in entries if e.key not in dups]
+
+
+def scan_duplicate_keys(cfg: StringsI18nConfig) -> Dict[str, List[str]]:
+    """扫描所有语言（含 Base）下的 *.strings，返回 {lang_label: [dup_keys...]}"""
+    result: Dict[str, set] = {}
+
+    def add(lang_label: str, keys: List[str]) -> None:
+        if not keys:
+            return
+        s = result.get(lang_label)
+        if s is None:
+            s = set()
+            result[lang_label] = s
+        s.update(keys)
+
+    # Base
     base_dir = (cfg.lang_root / cfg.base_folder).resolve()
-    mp: Dict[str, set] = {}
-    for fp in sorted(base_dir.glob("*.strings")):
-        _, entries = parse_strings_file(fp)
-        mp[fp.name] = set(e.key for e in entries)
-    return mp
+    if base_dir.exists():
+        for fp in sorted(base_dir.glob("*.strings")):
+            _, entries = parse_strings_file(fp)
+            add("Base", _collect_duplicates(entries))
+
+    # other locales
+    locales: List[Locale] = []
+    if cfg.source_locale:
+        locales.append(cfg.source_locale)
+    locales.extend(cfg.core_locales or [])
+    locales.extend(cfg.target_locales or [])
+
+    for loc in locales:
+        loc_dir = (cfg.lang_root / f"{loc.code}.lproj").resolve()
+        if not loc_dir.exists():
+            continue
+        for fp in sorted(loc_dir.glob("*.strings")):
+            _, entries = parse_strings_file(fp)
+            add(loc.code, _collect_duplicates(entries))
+
+    return {k: sorted(list(v)) for k, v in result.items()}
 
 
-def sort_base_strings_files(cfg: StringsI18nConfig) -> int:
-    """Base.lproj：保留注释；注释在字段上方；按 key 排序并按前缀分组。"""
-    base_dir = (cfg.lang_root / cfg.base_folder).resolve()
+def _resolve_duplicate_policy(cfg: StringsI18nConfig, dup_report: Dict[str, List[str]]) -> str:
+    """若存在重复 key，决定处理策略。优先读 cfg.options.duplicate_key_policy。"""
+    if not dup_report:
+        return "keep_first"
+
+    opt = (cfg.options or {}).get("duplicate_key_policy")
+    if isinstance(opt, str) and opt in {"keep_first", "delete_all"}:
+        return opt
+
+    # 交互式选择（让用户“最后决定”）
+    print("\n⚠️ 检测到重复 key：")
+    for lang, keys in dup_report.items():
+        print(f"- {lang}: {keys}")
+    print("\n请选择处理策略：\n  1) 只保留第一个（keep_first）\n  2) 全部删除（delete_all）\n  3) 取消本次 sort\n")
+    try:
+        choice = input("输入 1/2/3（默认 1）：").strip()
+    except EOFError:
+        choice = ""  # 非交互环境
+
+    if choice == "2":
+        return "delete_all"
+    if choice == "3":
+        return "cancel"
+    return "keep_first"
+
+
+def sort_base_strings_files(cfg: StringsI18nConfig, *, duplicate_policy: str) -> int:
+    """对 Base.lproj 下的所有 *.strings 文件排序（保留注释，注释写在字段上方）。"""
+    base_dir = cfg.lang_root / cfg.base_folder
     if not base_dir.exists():
         raise ConfigError(f"Base 目录不存在：{base_dir}")
 
@@ -587,97 +678,53 @@ def sort_base_strings_files(cfg: StringsI18nConfig) -> int:
     changed = 0
     for fp in files:
         preamble, entries = parse_strings_file(fp)
-        entries_sorted = sort_strings_entries(entries, group_by_prefix=True)
 
-        old_keys = [e.key for e in entries]
-        new_keys = [e.key for e in entries_sorted]
-        # 这里不做“注释差异”比较：只要 key 顺序一致就认为稳定
-        if old_keys != new_keys:
-            write_strings_file(fp, preamble, entries_sorted, group_by_prefix=True)
+        entries = _apply_duplicate_policy(entries, duplicate_policy)
+        _, entries_sorted = sort_strings_entries(preamble, entries)
+
+        # 更严格：比较 key 序列 + 是否分组写回会改变内容
+        old_text = fp.read_text(encoding="utf-8") if fp.exists() else ""
+        tmp_path = fp.with_suffix(fp.suffix + ".__tmp__")
+        write_strings_file(tmp_path, preamble, entries_sorted, group_by_prefix=True)
+        new_text = tmp_path.read_text(encoding="utf-8")
+        tmp_path.unlink(missing_ok=True)
+
+        if old_text != new_text:
+            fp.write_text(new_text, encoding="utf-8")
             changed += 1
 
     return changed
 
 
-def _iter_locales(cfg: StringsI18nConfig) -> List[Locale]:
+def sort_other_locale_strings_files(cfg: StringsI18nConfig, *, duplicate_policy: str) -> int:
+    """对非 Base 语言目录下的所有 *.strings 文件排序（仅按 key 排序，不做前缀分组）。"""
     locales: List[Locale] = []
     if cfg.source_locale:
         locales.append(cfg.source_locale)
     locales.extend(cfg.core_locales or [])
     locales.extend(cfg.target_locales or [])
-    return locales
 
-
-def find_redundant_entries(cfg: StringsI18nConfig) -> Dict[str, List[Tuple[str, str]]]:
-    """找出“其他语言里有，但 Base 没有”的 key。
-    返回：{ 'zh-Hans': [('Localizable.strings', 'foo.bar'), ...], ... }
-    """
-    base_map = _collect_base_keys_map(cfg)
-    out: Dict[str, List[Tuple[str, str]]] = {}
-
-    for loc in _iter_locales(cfg):
+    changed = 0
+    for loc in locales:
         loc_dir = (cfg.lang_root / f"{loc.code}.lproj").resolve()
         if not loc_dir.exists():
             continue
 
-        redundants: List[Tuple[str, str]] = []
-        for fp in sorted(loc_dir.glob("*.strings")):
-            base_keys = base_map.get(fp.name, set())
-            _, entries = parse_strings_file(fp)
-            for e in entries:
-                if e.key not in base_keys:
-                    redundants.append((fp.name, e.key))
-
-        if redundants:
-            out[loc.code] = redundants
-
-    return out
-
-
-def delete_redundant_entries(cfg: StringsI18nConfig, redundants: Dict[str, List[Tuple[str, str]]]) -> int:
-    """按 redundants 删除其他语言里的冗余 key，并写回（其他语言：仅按 key 排序，不分组）。"""
-    # 组织成：{ locale: { filename: set(keys) } }
-    locale_map: Dict[str, Dict[str, set]] = {}
-    for loc_code, items in redundants.items():
-        fm: Dict[str, set] = {}
-        for fname, key in items:
-            fm.setdefault(fname, set()).add(key)
-        locale_map[loc_code] = fm
-
-    changed = 0
-    for loc_code, files_map in locale_map.items():
-        loc_dir = (cfg.lang_root / f"{loc_code}.lproj").resolve()
-        if not loc_dir.exists():
-            continue
-
-        for fname, keys_to_remove in files_map.items():
-            fp = loc_dir / fname
+        files = sorted(loc_dir.glob("*.strings"))
+        for fp in files:
             preamble, entries = parse_strings_file(fp)
-            filtered = [e for e in entries if e.key not in keys_to_remove]
-            if len(filtered) != len(entries):
-                filtered_sorted = sort_strings_entries(filtered, group_by_prefix=False)
-                write_strings_file(fp, preamble, filtered_sorted, group_by_prefix=False)
-                changed += 1
 
-    return changed
+            entries = _apply_duplicate_policy(entries, duplicate_policy)
+            entries_sorted = sorted(entries, key=lambda e: e.key)
 
+            old_text = fp.read_text(encoding="utf-8") if fp.exists() else ""
+            tmp_path = fp.with_suffix(fp.suffix + ".__tmp__")
+            write_strings_file(tmp_path, preamble, entries_sorted, group_by_prefix=False)
+            new_text = tmp_path.read_text(encoding="utf-8")
+            tmp_path.unlink(missing_ok=True)
 
-def sort_other_locale_strings_files(cfg: StringsI18nConfig) -> int:
-    """非 Base 语言目录：仅按 key 排序，不做前缀分组。"""
-    changed = 0
-    for loc in _iter_locales(cfg):
-        loc_dir = (cfg.lang_root / f"{loc.code}.lproj").resolve()
-        if not loc_dir.exists():
-            continue
-
-        for fp in sorted(loc_dir.glob("*.strings")):
-            preamble, entries = parse_strings_file(fp)
-            entries_sorted = sort_strings_entries(entries, group_by_prefix=False)
-
-            old_keys = [e.key for e in entries]
-            new_keys = [e.key for e in entries_sorted]
-            if old_keys != new_keys:
-                write_strings_file(fp, preamble, entries_sorted, group_by_prefix=False)
+            if old_text != new_text:
+                fp.write_text(new_text, encoding="utf-8")
                 changed += 1
 
     return changed
@@ -700,16 +747,23 @@ def run_sort(cfg: StringsI18nConfig) -> None:
     else:
         print("✅ 完整性检查通过：各语言 *.strings 文件集与 Base 一致")
 
+    # 重复字段检查（语言 + list），然后让你决定策略
+    dup_report = scan_duplicate_keys(cfg)
+    policy = _resolve_duplicate_policy(cfg, dup_report)
+    if policy == "cancel":
+        print("❌ sort 已取消（未做任何修改）")
+        return
+
     # 1) Base.lproj：保留注释；注释在字段上方；按 key 排序并按前缀分组
     try:
-        base_changed = sort_base_strings_files(cfg)
+        base_changed = sort_base_strings_files(cfg, duplicate_policy=policy)
     except ConfigError as e:
         print(f"❌ sort 中止：{e}")
         return
 
     # 2) 其他语言：仅按 key 排序（不做前缀分组）
     try:
-        other_changed = sort_other_locale_strings_files(cfg)
+        other_changed = sort_other_locale_strings_files(cfg, duplicate_policy=policy)
     except ConfigError as e:
         print(f"❌ sort 中止：{e}")
         return
@@ -724,26 +778,3 @@ def run_sort(cfg: StringsI18nConfig) -> None:
     else:
         print("✅ 其他语言已是有序状态：无需改动")
 
-    # 3) 冗余字段清理：找出“其他语言中有，但 Base 中没有”的 key
-    redundants = find_redundant_entries(cfg)
-    if not redundants:
-        print("✅ 冗余字段检查：未发现其他语言中多出来的 key")
-        return
-
-    print("\n⚠️ 发现冗余 key（其他语言存在，但 Base 不存在）：")
-    for loc_code, items in redundants.items():
-        print(f"  - {loc_code}: {len(items)} 个")
-        # 逐条列出：语言 + 冗余内容（包含文件名，便于定位）
-        for fname, key in items:
-            print(f"      {fname} :: {key}")
-
-    ans = input("\n是否删除这些冗余 key？输入 y/yes 删除，其它任意键跳过： ").strip().lower()
-    if ans in ("y", "yes"):
-        try:
-            deleted = delete_redundant_entries(cfg, redundants)
-        except ConfigError as e:
-            print(f"❌ 删除冗余 key 失败：{e}")
-            return
-        print(f"✅ 已删除冗余 key：更新 {deleted} 个 .strings 文件（并保持按 key 排序）")
-    else:
-        print("ℹ️ 已跳过删除冗余 key（仅列出，不修改文件）")
