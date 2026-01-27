@@ -64,7 +64,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### iOS/strings_i18n
 
-- **[`box_strings_i18n`](#box_tools-ios-strings_i18n-tool)**：iOS/Xcode .strings 多语言：扫描/同步/排序/重复与冗余清理/增量翻译（支持交互）（[README.md](src/box_tools/iOS/strings_i18n/README.md)）
+- **[`box_strings_i18n`](#box_tools-ios-strings_i18n-tool)**：iOS/Xcode .strings 多语言：排序（幂等）/生成 L10n.swift/翻译（core & target）/环境诊断/配置初始化（支持交互菜单）（[README.md](src/box_tools/iOS/strings_i18n/README.md)）
 
 ---
 
@@ -377,7 +377,7 @@ box_slang_i18n --project-root path/to/project
 
 ### box_strings_i18n
 
-**简介**：iOS/Xcode .strings 多语言：扫描/同步/排序/重复与冗余清理/增量翻译（支持交互）
+**简介**：iOS/Xcode .strings 多语言：排序（幂等）/生成 L10n.swift/翻译（core & target）/环境诊断/配置初始化（支持交互菜单）
 
 **命令**：`box_strings_i18n`
 
@@ -387,29 +387,34 @@ box_slang_i18n --project-root path/to/project
 box_strings_i18n
 box_strings_i18n init
 box_strings_i18n sort
+box_strings_i18n gen-l10n
 box_strings_i18n doctor
-box_strings_i18n translate
-box_strings_i18n translate --no-incremental
+box_strings_i18n translate-core
+box_strings_i18n translate-target
+box_strings_i18n translate-core --no-incremental
+box_strings_i18n translate-target --no-incremental
 box_strings_i18n --config strings_i18n.yaml
 box_strings_i18n --project-root path/to/project
 ```
 
 **参数说明**
 
-- `command`：子命令：menu/init/sort/translate/doctor（默认 menu）
+- `command`：子命令：menu/init/sort/gen-l10n/translate-core/translate-target/doctor（默认 menu）
 - `--config`：配置文件路径（默认 strings_i18n.yaml，基于 project-root）
 - `--project-root`：项目根目录（默认当前目录）
-- `--i18n-dir`：覆盖配置中的 i18nDir（相对 project-root 或绝对路径）
-- `--no-incremental`：translate：关闭增量翻译，改为全量翻译
+- `--i18n-dir`：覆盖配置中的语言目录根路径（相对 project-root 或绝对路径）
+- `--no-incremental`：翻译：关闭增量翻译，改为全量覆盖（对 translate-core/translate-target 生效）
 
 **示例**
 
-- `box_strings_i18n init`：生成/校验配置文件（保留模板注释），并确保 languages.json 存在，同时创建 i18nDir
-- `box_strings_i18n`：进入交互菜单（启动会优先校验配置 + 检查 i18nDir 目录）
-- `box_strings_i18n sort`：对 i18n JSON 执行排序（按工具规则）
-- `box_strings_i18n doctor`：环境/结构诊断：配置合法、目录结构、文件命名、@@locale/flat 等
-- `box_strings_i18n translate`：AI 增量翻译：只翻译缺失 key（排除 @@locale）
-- `box_strings_i18n translate --no-incremental`：AI 全量翻译：按 source 覆盖生成 target 的翻译内容
+- `box_strings_i18n init`：生成/校验配置文件（保留模板注释）；若不存在则创建，若存在则只校验；并确保语言目录存在
+- `box_strings_i18n`：进入交互菜单（启动会优先校验配置 + 检查目录结构）
+- `box_strings_i18n sort`：对 Base 进行分组排序并对齐其它语言顺序（幂等、保留注释）
+- `box_strings_i18n gen-l10n`：从 Base.lproj/Localizable.strings 生成 L10n.swift（按点号前缀分组）
+- `box_strings_i18n doctor`：环境/结构诊断：依赖、配置合法、目录结构、Base 文件存在等
+- `box_strings_i18n translate-core`：翻译（core）：Base.lproj → core_locales（默认增量）
+- `box_strings_i18n translate-target`：翻译（target）：source_locale.lproj → target_locales（默认增量）
+- `box_strings_i18n translate-core --no-incremental`：翻译（core）：全量覆盖生成
 - `box_strings_i18n --project-root ./app --config strings_i18n.yaml init`：在指定项目根目录下初始化
 
 **文档**
