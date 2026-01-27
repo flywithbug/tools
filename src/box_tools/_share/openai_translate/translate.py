@@ -27,7 +27,7 @@ class TranslationError(RuntimeError):
 @dataclass(frozen=True)
 class _Options:
     # Context window (tokens). Maintain via config; API doesn't expose it reliably.
-    context_limit: int = 128_000
+    context_limit: int = 88_000
 
     # ✅ Input (system + user payload) must not exceed this fraction of context_limit.
     # You asked: "cannot exceed of API token limit" => 0.70
