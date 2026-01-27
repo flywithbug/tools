@@ -7,6 +7,7 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
+import pprint
 
 import yaml
 
@@ -153,15 +154,44 @@ def _doctor_print_and_write(
 
     # 写报告文件（含详细 section）
     try:
-        report_path = _write_report_file(
-            cfg.lang_root,
-            stem="doctor",
-            header="box_strings_i18n doctor report",
-            errors=errors,
-            warns=warns,
-            sections=extra_sections or {},
-        )
-        print(f"\nReport: {report_path}")
+        lines: List[str] = []
+        lines.append("box_strings_i18n doctor report")
+        lines.append("")
+        lines.append("=== summary ===")
+        lines.append(f"project_root: {cfg.project_root}")
+        lines.append(f"lang_root:    {cfg.lang_root}")
+        lines.append(f"base_folder:  {cfg.base_folder}")
+        lines.append(f"base_locale:  {cfg.base_locale.code}")
+        lines.append(f"source_locale:{cfg.source_locale.code}")
+        lines.append(f"core_locales: {[l.code for l in cfg.core_locales]}")
+        lines.append(f"target_locales: {len(cfg.target_locales)}")
+
+        if errors:
+            lines.append("")
+            lines.append("[ERROR]")
+            for e in errors:
+                lines.append(f"- {e}")
+        if warns:
+            lines.append("")
+            lines.append("[WARN]")
+            for w in warns:
+                lines.append(f"- {w}")
+
+        if extra_sections:
+            lines.append("")
+            lines.append("=== details ===")
+            for k, v in (extra_sections or {}).items():
+                lines.append("")
+                lines.append(f"## {k}")
+                if isinstance(v, str):
+                    lines.append(v.rstrip())
+                else:
+                    lines.append(pprint.pformat(v, width=120))
+
+        content = "\n".join(lines).rstrip() + "\n"
+        report_path = _write_report_file(cfg, content, name="doctor")
+        if report_path is not None:
+            print(f"\nReport: {report_path}")
     except Exception as e:
         print(f"\nReport 写入失败：{e}")
 
