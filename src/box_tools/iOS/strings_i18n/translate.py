@@ -127,11 +127,12 @@ def _translate_text_map(
     # translate_flat_dict 期望：src_map 是 flat dict[str,str]
     # 备注：这里不传 temperature 等高级参数，保持骨架稳定；需要的话可从 cfg.options 扩展
     out = translate_flat_dict(
-        src_lang_name=src_lang_name,
-        tgt_lang_name=tgt_lang_name,
-        src_kv=src_map,
-        model=model,
         prompt_en=prompt_en,
+        src_dict=src_map,
+        src_lang=src_lang_name,     # name_en
+        tgt_locale=tgt_lang_name,   # name_en
+        model=model,
+        api_key=None,
     )
     # translate_flat_dict 可能返回 Any；这里做最小保障
     if not isinstance(out, dict):
