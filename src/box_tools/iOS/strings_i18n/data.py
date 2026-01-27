@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import datetime
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
@@ -640,15 +642,66 @@ def scan_redundant_keys(cfg: StringsI18nConfig, base_keys_map: Dict[str, set]) -
     return report
 
 
+
+def _format_key_report(report: Dict[str, List[str]], *, title: str, max_keys_per_file: int = 30) -> str:
+    """
+    将 {lang: ["File.strings:key", ...]} 变成更易读的文本。
+    - 语言分块
+    - 每个语言按文件分组
+    - 每个文件最多展示 max_keys_per_file 个 key（超出会显示“还有 N 个”）
+    """
+    lines: List[str] = []
+    lines.append(title)
+    lines.append("")
+    for lang, items in sorted(report.items(), key=lambda kv: kv[0]):
+        # group by file
+        by_file: Dict[str, List[str]] = {}
+        for it in items:
+            if ":" in it:
+                fn, key = it.split(":", 1)
+            else:
+                fn, key = "(unknown)", it
+            by_file.setdefault(fn, []).append(key)
+
+        total = sum(len(v) for v in by_file.values())
+        lines.append(f"【{lang}】共 {total} 个")
+        for fn in sorted(by_file.keys()):
+            keys = sorted(set(by_file[fn]))
+            shown = keys[:max_keys_per_file]
+            remain = len(keys) - len(shown)
+            preview = ", ".join(shown)
+            if remain > 0:
+                preview = preview + f", …（还有 {remain} 个）"
+            # 控制单行宽度
+            wrapped = textwrap.fill(preview, width=100, subsequent_indent=" " * (len(fn) + 6))
+            lines.append(f"  - {fn} ({len(keys)}): {wrapped}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _write_report_file(cfg: StringsI18nConfig, content: str, *, name: str) -> Optional[Path]:
+    """把报告写到 repo 内的 .box_strings_i18n_reports/，方便复制/查看。"""
+    try:
+        out_dir = (cfg.lang_root / ".box_strings_i18n_reports").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        out_path = out_dir / f"{name}_{ts}.txt"
+        out_path.write_text(content, encoding="utf-8")
+        return out_path
+    except Exception:
+        return None
+
+
 def _resolve_redundant_policy(cfg: StringsI18nConfig, report: Dict[str, List[str]]) -> str:
     """返回 keep / delete / cancel"""
     if not report:
         return "keep"
 
-    print("⚠️ 发现冗余字段（Base 中没有，但其他语言存在）：")
-    for code, items in sorted(report.items(), key=lambda kv: kv[0]):
-        preview = items if len(items) <= 80 else items[:80] + [f"...(共 {len(items)} 个)"]
-        print(f"  - {code}: {preview}")
+    content = _format_key_report(report, title="⚠️ 发现冗余字段（Base 中没有，但其他语言存在）：")
+    print(content)
+    p = _write_report_file(cfg, content, name="redundant_keys")
+    if p is not None:
+        print(f"📄 已输出报告文件：{p}")
 
     # 配置中可预设策略（用于 CI/非交互），否则交互询问
     opt = (cfg.options or {}).get("redundant_key_policy")
