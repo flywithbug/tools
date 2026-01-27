@@ -6,7 +6,7 @@ import re
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Iterable, Union
+from typing import Dict, List, Optional, Iterable, Union, Callable, Any
 
 from .client import OpenAIClientFactory
 from .models import OpenAIModel
@@ -29,13 +29,15 @@ class _Options:
     # Context window (tokens). Maintain via config; API doesn't expose it reliably.
     context_limit: int = 88_000
 
-    # Input budget ratio (kept for backward compatibility, but not used by key-count chunking).
+    # ✅ Input (system + user payload) must not exceed this fraction of context_limit.
+    # You asked: "cannot exceed of API token limit" => 0.70
     input_budget_ratio: float = 0.70
 
     # Additional safety headroom (messages overhead, token counting drift).
     overhead_tokens: int = 64
 
-    # ✅ Chunk sizing (KEY-count based)
+    # Chunk sizing
+    # NOTE: We will chunk by key-count first, per caller requirement.
     max_chunk_items: int = 60
 
     # Request knobs
@@ -50,6 +52,34 @@ class _Options:
     prefer_response_format_json: bool = True
 
     placeholder_guard: bool = True
+
+
+ProgressCallback = Callable[[Dict[str, Any]], None]
+
+
+# =========================================================
+# Token estimation (best-effort)
+# =========================================================
+
+class _TokenEstimator:
+    def __init__(self, model: str):
+        self._enc = None
+        try:
+            import tiktoken  # type: ignore
+            try:
+                self._enc = tiktoken.encoding_for_model(model)
+            except Exception:
+                self._enc = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            pass
+
+    def count(self, s: str) -> int:
+        if not s:
+            return 0
+        if self._enc:
+            return len(self._enc.encode(s))
+        # Fallback heuristic
+        return int(len(s) / 4) + 8
 
 
 # =========================================================
@@ -113,16 +143,18 @@ def _guard_placeholders(src: Dict[str, str], out: Dict[str, str]) -> Dict[str, s
 # =========================================================
 
 def _build_system_prompt(
-    *,
-    src_lang: str,
-    tgt_locale: str,
-    prompt_en: Optional[str],
+        *,
+        src_lang: str,
+        tgt_locale: str,
+        prompt_en: Optional[str],
 ) -> str:
     base = (
         "You are a professional localization translator for apps and web. "
         f"Translate from {src_lang} to {tgt_locale}. "
+
         "Translate UI strings naturally for a mobile UI. "
         "Be concise, clear, and consistent. "
+
         "Requirements: "
         f"- Output must be written entirely in {tgt_locale}. Do not output any other language. "
         "- Do NOT mix languages in normal words or sentences. "
@@ -131,19 +163,23 @@ def _build_system_prompt(
         "- Do not keep an English title followed by a translated sentence; translate the whole string consistently. "
         "- Do NOT treat generic UI titles in Title Case as brand names; translate them "
         '(e.g., "Account Disabled", "Network Error", "Payment Failed"). '
+
         "Preserve product/brand names (proper nouns) and URLs verbatim. "
         "Only preserve brand/product names when they are explicit proper nouns (e.g., specific app/product/feature names), "
         "not generic UI messages. "
+
         f"Preserve ALL placeholders and formatting tokens EXACTLY as-is (e.g., {_PLACEHOLDER_EXAMPLES}). "
         "Keep placeholders/variables unchanged (e.g., {x}, %s, %@, ${var}). "
         "Keep formatting intact (punctuation, line breaks, spacing) while making the wording natural. "
         "A colon ':' is normal punctuation, not a placeholder—translate text on both sides if it is human-visible. "
+
         "Abbreviations: "
         "- Keep international technical/brand abbreviations that are normally written in English "
         "(e.g., Wi-Fi, GPS, API, URL, OTP, 2FA, iOS, Android, PDF, USD). "
         "- If an English abbreviation is commonly translated into normal words in the target language "
         "(based on real local usage), translate it naturally (e.g., FAQ → localized common wording). "
         "- If unsure, prefer the form native users expect in a mobile UI. "
+
         "Return ONLY a single valid JSON object. "
         "The JSON keys MUST match the input keys exactly; translate ONLY the values. "
         "No extra commentary. No markdown. No code fences. "
@@ -160,32 +196,30 @@ def _build_user_payload(_tgt_locale: str, chunk: Dict[str, str]) -> str:
 
 
 # =========================================================
-# Chunking (KEY-count based)
+# Chunking (by key-count, per product requirement)
 # =========================================================
 
 def _chunk_flat_dict(
-    src: Dict[str, str],
-    _estimator,  # kept for compatibility with older implementations
-    _system_prompt: str,
-    _tgt_locale: str,
-    opt: _Options,
+        src: Dict[str, str],
+        opt: _Options,
 ) -> List[Dict[str, str]]:
     """
-    ✅ 方案A：纯按 key 数量分片
-    - 不做 token 预算预估
-    - 顺序稳定（dict insertion order）
+    Chunk by key-count only (stable order). This is intentionally simple:
+    - It does NOT estimate tokens.
+    - It does NOT split by chars.
     """
     if not src:
         return []
 
-    n = opt.max_chunk_items if (opt.max_chunk_items and opt.max_chunk_items > 0) else len(src)
-    if len(src) <= n:
-        return [src]
-
     items = list(src.items())
+    n = len(items)
     chunks: List[Dict[str, str]] = []
-    for i in range(0, len(items), n):
-        chunks.append(dict(items[i:i + n]))
+    step = max(1, int(opt.max_chunk_items))
+
+    for i in range(0, n, step):
+        part = dict(items[i:i + step])
+        chunks.append(part)
+
     return chunks
 
 
@@ -220,12 +254,12 @@ def _validate_keys(expected: Iterable[str], got: Dict[str, str], strict: bool) -
 
 
 def _chat_completion(
-    client,
-    model: str,
-    system_prompt: str,
-    user_content: str,
-    opt: _Options,
-    use_json_format: bool,
+        client,
+        model: str,
+        system_prompt: str,
+        user_content: str,
+        opt: _Options,
+        use_json_format: bool,
 ) -> str:
     kwargs = dict(
         model=model,
@@ -243,19 +277,32 @@ def _chat_completion(
     return (resp.choices[0].message.content or "").strip()
 
 
+def _safe_cb(cb: Optional[ProgressCallback], payload: Dict[str, Any]) -> None:
+    if not cb:
+        return
+    try:
+        cb(payload)
+    except Exception:
+        # Progress callbacks must never affect translation.
+        return
+
+
 # =========================================================
 # Public API
 # =========================================================
 
 def translate_flat_dict(
-    *,
-    prompt_en: Optional[str],
-    src_dict: Dict[str, str],
-    src_lang: str,
-    tgt_locale: str,
-    model: Optional[Union[OpenAIModel, str]] = None,
-    api_key: Optional[str] = None,
-    opt: Optional[_Options] = None,
+        *,
+        prompt_en: Optional[str],
+        src_dict: Dict[str, str],
+        src_lang: str,
+        tgt_locale: str,
+        model: Optional[Union[OpenAIModel, str]] = None,
+        api_key: Optional[str] = None,
+        # Optional: allow overriding opt defaults from call sites
+        opt: Optional[_Options] = None,
+        # Optional: progress callback (MUST NOT affect translation if it fails)
+        progress_cb: Optional[ProgressCallback] = None,
 ) -> Dict[str, str]:
     """Translate a flat dict: {key: text} -> {key: translated_text}."""
     opt = opt or _Options()
@@ -264,6 +311,7 @@ def translate_flat_dict(
     if model is None:
         model_name = OpenAIModel.GPT_4O.value
     elif isinstance(model, Enum):
+        # OpenAIModel is a str Enum
         model_name = model.value  # type: ignore[assignment]
     else:
         model_name = str(model).strip() or OpenAIModel.GPT_4O.value
@@ -274,19 +322,41 @@ def translate_flat_dict(
         prompt_en=prompt_en,
     )
 
-    # ✅ 用你已经拆好的 client 工具：自动检测 OPENAI_API_KEY
+    # Keep estimator (even though key-chunking doesn't use it) for potential future usage.
+    _ = _TokenEstimator(model_name)
+
+    # ✅ 用你已经拆好的 client 工具：自动检测 OPENAI_API_KEY，没配就提示 export 方法
     client = OpenAIClientFactory(timeout=opt.timeout).create(api_key=api_key)
 
-    # ✅ Key-count chunking is decided BEFORE any API request (no token pre-check)
-    chunks = _chunk_flat_dict(src_dict, None, system_prompt, tgt_locale, opt)
+    chunks = _chunk_flat_dict(src_dict, opt)
+
+    _safe_cb(progress_cb, {
+        "event": "chunking_done",
+        "src_lang": src_lang,
+        "tgt_locale": tgt_locale,
+        "total_items": len(src_dict),
+        "chunks": len(chunks),
+        "max_chunk_items": opt.max_chunk_items,
+        "model": model_name,
+    })
 
     merged: Dict[str, str] = {}
 
-    def translate_chunk(chunk: Dict[str, str]) -> Dict[str, str]:
+    def translate_chunk(chunk: Dict[str, str], chunk_idx_1: int, chunk_total: int) -> Dict[str, str]:
         user_content = _build_user_payload(tgt_locale, chunk)
         last_err: Optional[Exception] = None
         use_json_format = True
 
+        _safe_cb(progress_cb, {
+            "event": "chunk_start",
+            "chunk_index": chunk_idx_1,
+            "chunk_total": chunk_total,
+            "items": len(chunk),
+            "src_lang": src_lang,
+            "tgt_locale": tgt_locale,
+        })
+
+        t0 = time.time()
         for attempt in range(opt.retries + 1):
             try:
                 out_text = _chat_completion(
@@ -303,11 +373,32 @@ def translate_flat_dict(
                 if opt.placeholder_guard:
                     out = _guard_placeholders(chunk, out)
 
+                _safe_cb(progress_cb, {
+                    "event": "chunk_done",
+                    "chunk_index": chunk_idx_1,
+                    "chunk_total": chunk_total,
+                    "items": len(chunk),
+                    "elapsed_s": round(time.time() - t0, 3),
+                    "src_lang": src_lang,
+                    "tgt_locale": tgt_locale,
+                })
                 return out
 
             except Exception as e:
                 last_err = e
                 msg = str(e).lower()
+
+                _safe_cb(progress_cb, {
+                    "event": "chunk_error",
+                    "chunk_index": chunk_idx_1,
+                    "chunk_total": chunk_total,
+                    "attempt": attempt,
+                    "retries": opt.retries,
+                    "items": len(chunk),
+                    "error": str(e)[:300],
+                    "src_lang": src_lang,
+                    "tgt_locale": tgt_locale,
+                })
 
                 # Some older endpoints/models may not support response_format.
                 if use_json_format and "response_format" in msg:
@@ -326,15 +417,33 @@ def translate_flat_dict(
         mid = len(items) // 2
         left = dict(items[:mid])
         right = dict(items[mid:])
-        out_left = translate_chunk(left)
-        out_right = translate_chunk(right)
+        _safe_cb(progress_cb, {
+            "event": "chunk_split",
+            "chunk_index": chunk_idx_1,
+            "chunk_total": chunk_total,
+            "left_items": len(left),
+            "right_items": len(right),
+            "src_lang": src_lang,
+            "tgt_locale": tgt_locale,
+        })
+        out_left = translate_chunk(left, chunk_idx_1, chunk_total)
+        out_right = translate_chunk(right, chunk_idx_1, chunk_total)
         out_left.update(out_right)
         return out_left
 
-    for ch in chunks:
-        merged.update(translate_chunk(ch))
+    for idx0, ch in enumerate(chunks):
+        out_part = translate_chunk(ch, idx0 + 1, len(chunks))
+        merged.update(out_part)
 
     if set(merged.keys()) != set(src_dict.keys()):
         raise TranslationError("Final key mismatch")
+
+    _safe_cb(progress_cb, {
+        "event": "all_done",
+        "src_lang": src_lang,
+        "tgt_locale": tgt_locale,
+        "total_items": len(src_dict),
+        "chunks": len(chunks),
+    })
 
     return merged

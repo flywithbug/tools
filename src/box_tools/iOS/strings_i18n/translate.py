@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 import sys
+import threading
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import data
 
 from box_tools._share.openai_translate.translate import translate_flat_dict
+
+_PRINT_LOCK = threading.Lock()
 
 # -------------------------
 # Task / Result（对齐 slang_i18n 的结构风格）
@@ -337,8 +340,55 @@ def _build_tasks(
     return tasks, total_keys
 
 
+def _make_progress_cb(t: _Task):
+    """用于 translate_flat_dict 的进度回调（线程内回调，需加锁打印避免输出互相打架）。"""
+    t_start = time.perf_counter()
+
+    def _cb(evt: Dict[str, Any]) -> None:
+        try:
+            e = evt.get("event") or evt.get("type") or evt.get("name") or "event"
+            ci = evt.get("chunk_index") or evt.get("i")
+            cn = evt.get("chunk_total") or evt.get("n")
+            ck = evt.get("chunk_keys") or evt.get("chunk_items") or evt.get("items") or evt.get("keys")
+            sec = evt.get("sec") or evt.get("elapsed") or evt.get("chunk_sec")
+            now = time.perf_counter()
+            since = now - t_start
+
+            with _PRINT_LOCK:
+                head = f"   ⏱️ [{t.idx}/{t.total}] ({t.phase}) {t.tgt_code}"
+                if e in {"chunking_done"}:
+                    chunks = evt.get("chunks") or cn
+                    size = evt.get("chunk_size") or ck
+                    print(f"{head} 分片完成：{chunks} 片（chunk_keys={size}） | {since:.2f}s")
+                elif e in {"chunk_start"}:
+                    if ci and cn:
+                        print(f"{head} chunk {ci}/{cn} 开始（{ck} key） | {since:.2f}s")
+                elif e in {"chunk_done"}:
+                    if ci and cn:
+                        s = f"{sec:.2f}s" if isinstance(sec, (int, float)) else "?"
+                        print(f"{head} chunk {ci}/{cn} 完成（{ck} key） | {s} | {since:.2f}s")
+                elif e in {"chunk_error", "retry"}:
+                    msg = evt.get("error") or evt.get("message") or ""
+                    attempt = evt.get("attempt")
+                    if ci and cn:
+                        print(f"{head} chunk {ci}/{cn} 异常/重试 attempt={attempt} {msg} | {since:.2f}s")
+                    else:
+                        print(f"{head} 异常/重试 attempt={attempt} {msg} | {since:.2f}s")
+                elif e in {"chunk_split"}:
+                    print(f"{head} chunk 拆分重试（减小批次） | {since:.2f}s")
+                elif e in {"all_done"}:
+                    print(f"{head} 翻译完成（核心回调） | {since:.2f}s")
+                else:
+                    if os.environ.get("BOX_STRINGS_I18N_PROGRESS_DEBUG", ""):
+                        print(f"{head} {e}: {evt} | {since:.2f}s")
+        except Exception:
+            return
+
+    return _cb
+
 def _translate_text_map(*, t: _Task) -> Dict[str, Any]:
     # 与 slang_i18n 完全一致的调用方式
+    cb = _make_progress_cb(t)
     return translate_flat_dict(
         prompt_en=t.prompt_en,
         src_dict=t.src_for_translate,
@@ -346,6 +396,7 @@ def _translate_text_map(*, t: _Task) -> Dict[str, Any]:
         tgt_locale=t.tgt_lang_name,   # ✅ name_en
         model=t.model,
         api_key=None,                 # ✅ 不关心 OPENAI_API_KEY
+        progress_cb=cb,
     )
 
 def _translate_one(t: _Task) -> _TaskResult:
@@ -419,6 +470,8 @@ def _run_tasks_and_write(cfg: data.StringsI18nConfig, tasks: List[_Task], total_
         print(f"- 并发: {max_workers} workers（max_workers={max_workers_cfg}）")
 
     max_print = int(os.environ.get("BOX_STRINGS_I18N_MAX_PRINT", "50") or "50")
+
+    print(f"- 总待翻译 key: {total_keys}（{total_batches} 批次）")
 
     # 提交任务时先按顺序打印 loading（对齐 slang_i18n）
     for t in tasks:
