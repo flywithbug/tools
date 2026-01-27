@@ -4,10 +4,12 @@ import json
 import re
 import datetime
 import textwrap
+import pprint
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
-import pprint
+
 import yaml
 
 # ----------------------------
@@ -643,6 +645,56 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
     if ph_count:
         warns.append(f"发现占位符不一致：共 {ph_count} 项（建议人工确认，避免运行时崩溃/格式错乱）")
 
+    # ---- 交互式预览/修复（可选）----
+    if ph_count:
+        policy = _resolve_placeholder_mismatch_policy(cfg, placeholder_mismatch, max_items=3)
+        if policy == "delete":
+            n = _apply_placeholder_mismatch_delete(cfg, placeholder_mismatch)
+            warns.append(f"已删除占位符不一致条目：{n} 条（建议再运行 translate 增量补齐）")
+
+    if red_count:
+        # 冗余 key 预览：每个文件只展示前 4 个 key（完整列表仍在 extra_sections 报告中）
+        preview_report: Dict[str, List[str]] = {}
+        shown = 0
+        for lang, by_file in sorted(redundant_keys.items(), key=lambda kv: kv[0]):
+            for fn, keys in sorted(by_file.items(), key=lambda kv: kv[0]):
+                for k in sorted(set(keys)):
+                    preview_report.setdefault(lang, []).append(f"{fn}:{k}")
+                # 这里 preview_report 交给 _format_key_report 进行截断展示
+        content = _format_key_report(preview_report, title="⚠️ 冗余 key（示例预览）：", max_keys_per_file=4)
+        print(content)
+        p = _write_report_file(cfg, content, name="redundant_keys_preview")
+        if p is not None:
+            print(f"📄 已输出报告文件：{p}")
+
+        opt = (cfg.options or {}).get("redundant_key_policy")
+        if opt in {"keep", "delete"}:
+            # doctor 阶段不自动删，交由 sort（避免误删）
+            pass
+        elif sys.stdin.isatty():
+            ans = input("是否现在就删除这些冗余 key？(y=删除 / n=保留继续) [n]: ").strip().lower()
+            if ans == "y":
+                # 复用 sort 的删除逻辑：逐语言逐文件删 key
+                deleted = 0
+                for lang, by_file in redundant_keys.items():
+                    loc_dir = (cfg.lang_root / f"{lang}.lproj").resolve()
+                    if not loc_dir.exists():
+                        continue
+                    for fn, keys in by_file.items():
+                        fp = (loc_dir / fn).resolve()
+                        if not fp.exists():
+                            continue
+                        try:
+                            _, entries = parse_strings_file(fp)
+                        except Exception:
+                            continue
+                        bad = set(keys)
+                        new_entries = [e for e in entries if e.key not in bad]
+                        if len(new_entries) != len(entries):
+                            deleted += (len(entries) - len(new_entries))
+                            write_strings_file(fp, new_entries, group_by_prefix=False)
+                warns.append(f"已删除冗余 key：{deleted} 条")
+
     # strict 模式：把 warns 当 errors
     strict = bool(cfg.options.get("doctor_strict", False))
     if strict and warns:
@@ -945,12 +997,99 @@ def _write_report_file(cfg: StringsI18nConfig, content: str, *, name: str) -> Op
         return None
 
 
+
+def _resolve_placeholder_mismatch_policy(
+    cfg: StringsI18nConfig,
+    mismatches: Dict[str, Dict[str, List[Tuple[str, List[str], List[str]]]]],
+    *,
+    max_items: int = 3,
+) -> str:
+    """
+    占位符不一致处理策略：
+    - keep: 不改文件（仅提示）
+    - delete: 删除目标语言中“占位符不一致”的条目（让后续 translate 重新生成/人工修复）
+    """
+    if not mismatches:
+        return "keep"
+
+    # 展示前 max_items 条样例
+    flat: List[Tuple[str, str, str, List[str], List[str]]] = []
+    for lang, by_file in mismatches.items():
+        for fn, items in by_file.items():
+            for (k, bph, tph) in items:
+                flat.append((lang, fn, k, bph, tph))
+    flat.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    lines: List[str] = []
+    lines.append("⚠️ 发现占位符不一致（示例）：")
+    for i, (lang, fn, k, bph, tph) in enumerate(flat[:max_items], 1):
+        lines.append(f"  {i}. {lang}/{fn}  key={k}")
+        lines.append(f"     Base: {bph}")
+        lines.append(f"     Lang: {tph}")
+    if len(flat) > max_items:
+        lines.append(f"  …（还有 {len(flat) - max_items} 条未展示）")
+    lines.append("")
+    lines.append("修复建议：")
+    lines.append("  - 推荐：删除这些条目，让 translate 按 Base 重新生成（最安全，避免运行时崩溃）")
+    lines.append("  - 或者：人工修正目标语言 value 的占位符，使其与 Base 完全一致")
+    content = "\n".join(lines) + "\n"
+    print(content)
+    p = _write_report_file(cfg, content, name="placeholder_mismatch_preview")
+    if p is not None:
+        print(f"📄 已输出报告文件：{p}")
+
+    opt = (cfg.options or {}).get("placeholder_mismatch_policy")
+    if opt in {"keep", "delete"}:
+        print(f"✅ 使用配置 placeholder_mismatch_policy={opt}")
+        return opt
+
+    # 非交互环境默认 keep
+    if not sys.stdin.isatty():
+        return "keep"
+
+    while True:
+        ans = input("如何处理占位符不一致？(d=删除这些条目 / k=保留继续) [k]: ").strip().lower()
+        if ans == "" or ans == "k":
+            return "keep"
+        if ans == "d":
+            return "delete"
+        print("请输入 d 或 k")
+
+
+def _apply_placeholder_mismatch_delete(
+    cfg: StringsI18nConfig,
+    mismatches: Dict[str, Dict[str, List[Tuple[str, List[str], List[str]]]]],
+) -> int:
+    """删除目标语言中占位符不一致的条目，返回删除数量。"""
+    deleted = 0
+    for lang, by_file in mismatches.items():
+        loc_dir = (cfg.lang_root / f"{lang}.lproj").resolve()
+        if not loc_dir.exists():
+            continue
+        for fn, items in by_file.items():
+            fp = (loc_dir / fn).resolve()
+            if not fp.exists():
+                continue
+            try:
+                _, entries = parse_strings_file(fp)
+            except Exception:
+                continue
+            bad_keys = {k for (k, _, _) in items}
+            if not bad_keys:
+                continue
+            new_entries = [e for e in entries if e.key not in bad_keys]
+            if len(new_entries) != len(entries):
+                deleted += (len(entries) - len(new_entries))
+                # 其它语言：仅按 key 排序，不分组
+                write_strings_file(fp, new_entries, group_by_prefix=False)
+    return deleted
+
 def _resolve_redundant_policy(cfg: StringsI18nConfig, report: Dict[str, List[str]]) -> str:
     """返回 keep / delete / cancel"""
     if not report:
         return "keep"
 
-    content = _format_key_report(report, title="⚠️ 发现冗余字段（Base 中没有，但其他语言存在）：")
+    content = _format_key_report(report, title="⚠️ 发现冗余字段（Base 中没有，但其他语言存在）：", max_keys_per_file=4)
     print(content)
     p = _write_report_file(cfg, content, name="redundant_keys")
     if p is not None:
