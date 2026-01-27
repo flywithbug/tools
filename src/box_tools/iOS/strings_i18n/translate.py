@@ -343,6 +343,9 @@ def _build_tasks(
 def _make_progress_cb(t: _Task):
     """用于 translate_flat_dict 的进度回调（线程内回调，需加锁打印避免输出互相打架）。"""
     t_start = time.perf_counter()
+    # 纯 key 数量分片的默认 chunk size（可用环境变量覆盖）
+    _cfg_chunk_keys = int(os.getenv('BOX_TRANSLATE_MAX_CHUNK', '60') or '60')
+    _chunk_start_ts: Dict[int, float] = {}
 
     def _cb(evt: Dict[str, Any]) -> None:
         try:
@@ -354,11 +357,22 @@ def _make_progress_cb(t: _Task):
             now = time.perf_counter()
             since = now - t_start
 
+            # 事件字段兼容：优先使用核心传入，否则回退到默认 chunk_keys
+            if ck is None:
+                ck = _cfg_chunk_keys
+            # 自己计算 chunk 耗时：chunk_start -> chunk_done
+            if e in {'chunk_start'} and isinstance(ci, int):
+                _chunk_start_ts[ci] = now
+            if e in {'chunk_done'} and isinstance(ci, int):
+                st = _chunk_start_ts.pop(ci, None)
+                if st is not None:
+                    sec = now - st
+
             with _PRINT_LOCK:
                 head = f"   ⏱️ [{t.idx}/{t.total}] ({t.phase}) {t.tgt_code}"
                 if e in {"chunking_done"}:
                     chunks = evt.get("chunks") or cn
-                    size = evt.get("chunk_size") or ck
+                    size = _cfg_chunk_keys
                     print(f"{head} 分片完成：{chunks} 片（chunk_keys={size}） | {since:.2f}s")
                 elif e in {"chunk_start"}:
                     if ci and cn:
