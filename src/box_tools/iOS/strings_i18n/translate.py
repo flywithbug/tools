@@ -1,200 +1,401 @@
 from __future__ import annotations
 
-import concurrent.futures as cf
+import os
+import time
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 from . import data
 
+# 尝试复用 slang_i18n 同款翻译入口（若你的运行环境具备 box_tools._share.openai_translate）
+try:
+    from box_tools._share.openai_translate.translate import translate_flat_dict  # type: ignore
+except Exception:  # pragma: no cover
+    translate_flat_dict = None  # type: ignore
+
+
+def _is_meta_key(key: str) -> bool:
+    return key.startswith("@@")
+
+
+def _only_non_empty(src: Dict[str, str]) -> Dict[str, str]:
+    return {k: v for k, v in src.items() if isinstance(v, str) and v.strip() and not _is_meta_key(k)}
+
+
+def _compute_incremental_pairs(src_kv: Dict[str, str], tgt_kv: Dict[str, str]) -> Dict[str, str]:
+    """返回需要翻译的 key -> src_text（仅按“目标缺失/空值”判定）。"""
+    out: Dict[str, str] = {}
+    for k, v in src_kv.items():
+        if _is_meta_key(k):
+            continue
+        if not isinstance(v, str) or not v.strip():
+            continue
+        tv = tgt_kv.get(k)
+        if tv is None or (isinstance(tv, str) and not tv.strip()):
+            out[k] = v
+    return out
+
+
+def _entries_to_kv(entries: List[data.StringsEntry]) -> Dict[str, str]:
+    return {e.key: e.value for e in entries}
+
+
+def _merge_translated(
+    tgt_entries: List[data.StringsEntry],
+    translations: Dict[str, str],
+) -> List[data.StringsEntry]:
+    """把翻译结果合并进 target entries（保留已有 comment；新增 entry comment 为空）。"""
+    by_key: Dict[str, data.StringsEntry] = {e.key: e for e in tgt_entries}
+
+    for k, v in translations.items():
+        if _is_meta_key(k):
+            continue
+        if not isinstance(v, str) or not v.strip():
+            continue
+        if k in by_key:
+            e = by_key[k]
+            by_key[k] = data.StringsEntry(key=e.key, value=v, comments=e.comments)
+        else:
+            by_key[k] = data.StringsEntry(key=k, value=v, comments=[])
+
+    return list(by_key.values())
+
+
+def _get_max_workers(cfg: data.StringsI18nConfig) -> int:
+    # 兼容 options.maxWorkers / options.max_workers
+    opt = cfg.options or {}
+    v = opt.get("maxWorkers", None)
+    if v is None:
+        v = opt.get("max_workers", None)
+    try:
+        return int(v) if v is not None else 0
+    except Exception:
+        return 0
+
+
+def _compute_workers(max_workers_cfg: int, total_tasks: int) -> int:
+    if total_tasks <= 0:
+        return 1
+    if max_workers_cfg and max_workers_cfg > 0:
+        return max(1, min(max_workers_cfg, total_tasks))
+    cpu = os.cpu_count() or 4
+    guess = max(2, min(8, max(2, cpu // 2)))
+    return min(guess, total_tasks)
+
+
+def _compose_prompt(cfg: data.StringsI18nConfig, tgt_code: str) -> Optional[str]:
+    prompts = cfg.prompts or {}
+    default_en = prompts.get("default_en")
+    by_locale = (prompts.get("by_locale_en") or {})
+    extra = by_locale.get(tgt_code) or by_locale.get(tgt_code.replace("-", "_"))
+    parts = []
+    if isinstance(default_en, str) and default_en.strip():
+        parts.append(default_en.strip())
+    if isinstance(extra, str) and extra.strip():
+        parts.append(extra.strip())
+    if not parts:
+        return None
+    return "\n\n".join(parts)
+
+
+def _translate_text_map(
+    *,
+    cfg: data.StringsI18nConfig,
+    src_map: Dict[str, str],
+    src_lang_name: str,
+    tgt_code: str,
+    tgt_lang_name: str,
+    phase: str,
+) -> Dict[str, str]:
+    """翻译一批 key->src_text，返回 key->translated_text。
+
+    参考 slang_i18n：优先走 translate_flat_dict；否则用占位 stub（可运行）。
+    """
+    src_map = _only_non_empty(src_map)
+    if not src_map:
+        return {}
+
+    model = (cfg.options or {}).get("model") or (cfg.options or {}).get("openai_model") or "gpt-4.1-mini"
+    prompt_en = _compose_prompt(cfg, tgt_code)
+
+    if translate_flat_dict is None:
+        # fallback：占位翻译（便于你验证流程，不会误伤已有翻译）
+        return {k: f"[[{tgt_code}|{phase}]] {v}" for k, v in src_map.items()}
+
+    # translate_flat_dict 期望：src_map 是 flat dict[str,str]
+    # 备注：这里不传 temperature 等高级参数，保持骨架稳定；需要的话可从 cfg.options 扩展
+    out = translate_flat_dict(
+        src_lang_name=src_lang_name,
+        tgt_lang_name=tgt_lang_name,
+        src_kv=src_map,
+        model=model,
+        prompt_en=prompt_en,
+    )
+    # translate_flat_dict 可能返回 Any；这里做最小保障
+    if not isinstance(out, dict):
+        return {}
+    return {k: (v if isinstance(v, str) else str(v)) for k, v in out.items()}
+
 
 @dataclass(frozen=True)
-class TranslateTask:
-    locale: data.Locale
-    src_file: Path
-    target_file: Path
-    # 用于日志
-    phase: str  # "base->core" | "core->target"
+class _Task:
+    idx: int
+    total: int
+    phase: str
+    src_code: str
+    src_lang_name: str
+    tgt_code: str
+    tgt_lang_name: str
+    base_file: Path
+    tgt_file: Path
+    tgt_preamble: List[str]
+    tgt_entries: List[data.StringsEntry]
+    src_for_translate: Dict[str, str]  # 本次提交的 key->src_text
+
+
+@dataclass(frozen=True)
+class _TaskResult:
+    idx: int
+    total: int
+    phase: str
+    tgt_code: str
+    tgt_lang_name: str
+    tgt_file: Path
+    tgt_preamble: List[str]
+    tgt_entries: List[data.StringsEntry]
+    src_for_translate: Dict[str, str]
+    out: Dict[str, str]
+    batch_sec: float
+    success_keys: int
+
+
+def _build_tasks_phase(
+    *,
+    cfg: data.StringsI18nConfig,
+    phase: str,
+    src_locale: data.Locale,
+    tgt_locales: List[data.Locale],
+    base_files: List[Path],
+    pivot_dir: Optional[Path] = None,
+    incremental: bool = True,
+) -> Tuple[List[_Task], int, Dict[str, int]]:
+    """构建一批任务：每个 (tgt_locale, file) 一个 task。"""
+    tasks: List[_Task] = []
+    total_keys = 0
+    per_lang_total: Dict[str, int] = {t.code: 0 for t in tgt_locales}
+
+    # base_dir 永远是 src_key 的全集来源
+    base_dir = (cfg.lang_root / cfg.base_folder).resolve()
+
+    staged: List[Tuple[Path, data.Locale, Dict[str, str], List[str], List[data.StringsEntry]]] = []
+    # (tgt_file, tgt_locale, src_for_translate, tgt_preamble, tgt_entries)
+
+    for base_file in base_files:
+        base_preamble, base_entries = data.parse_strings_file(base_file)
+        base_kv = _entries_to_kv(base_entries)
+
+        # phase2: 如果给了 pivot_dir，则 src_text 取 pivot；否则取 base
+        pivot_kv: Optional[Dict[str, str]] = None
+        if pivot_dir is not None:
+            pivot_file = pivot_dir / base_file.name
+            p_pre, p_entries = data.parse_strings_file(pivot_file)
+            pivot_kv = _entries_to_kv(p_entries)
+
+        for tgt in tgt_locales:
+            tgt_dir = cfg.lang_root / f"{tgt.code}.lproj"
+            tgt_file = tgt_dir / base_file.name
+            tgt_preamble, tgt_entries = data.parse_strings_file(tgt_file)
+            tgt_kv = _entries_to_kv(tgt_entries)
+
+            if pivot_kv is not None:
+                # src 为 pivot，缺失则 fallback base
+                src_kv = dict(base_kv)
+                for k, v in (pivot_kv or {}).items():
+                    if isinstance(v, str) and v.strip():
+                        src_kv[k] = v
+            else:
+                src_kv = base_kv
+
+            if incremental:
+                need_map = _compute_incremental_pairs(src_kv, tgt_kv)
+            else:
+                need_map = {k: v for k, v in src_kv.items() if not _is_meta_key(k) and isinstance(v, str) and v.strip()}
+
+            need_map = _only_non_empty(need_map)
+            if not need_map:
+                continue
+
+            staged.append((tgt_file, tgt, need_map, tgt_preamble, tgt_entries))
+            total_keys += len(need_map)
+            per_lang_total[tgt.code] = per_lang_total.get(tgt.code, 0) + len(need_map)
+
+    total_tasks = len(staged)
+    for i, (tgt_file, tgt, src_for_translate, tgt_preamble, tgt_entries) in enumerate(staged, start=1):
+        tasks.append(
+            _Task(
+                idx=i,
+                total=total_tasks,
+                phase=phase,
+                src_code=src_locale.code,
+                src_lang_name=src_locale.name_en,
+                tgt_code=tgt.code,
+                tgt_lang_name=tgt.name_en,
+                base_file=base_dir / tgt_file.name,
+                tgt_file=tgt_file,
+                tgt_preamble=tgt_preamble,
+                tgt_entries=tgt_entries,
+                src_for_translate=src_for_translate,
+            )
+        )
+
+    return tasks, total_keys, per_lang_total
+
+
+def _translate_one(cfg: data.StringsI18nConfig, t: _Task) -> _TaskResult:
+    start = time.perf_counter()
+    out = _translate_text_map(
+        cfg=cfg,
+        src_map=t.src_for_translate,
+        src_lang_name=t.src_lang_name,
+        tgt_code=t.tgt_code,
+        tgt_lang_name=t.tgt_lang_name,
+        phase=t.phase,
+    )
+    sec = time.perf_counter() - start
+    success = sum(1 for _, v in out.items() if isinstance(v, str) and v.strip())
+    return _TaskResult(
+        idx=t.idx,
+        total=t.total,
+        phase=t.phase,
+        tgt_code=t.tgt_code,
+        tgt_lang_name=t.tgt_lang_name,
+        tgt_file=t.tgt_file,
+        tgt_preamble=t.tgt_preamble,
+        tgt_entries=t.tgt_entries,
+        src_for_translate=t.src_for_translate,
+        out=out,
+        batch_sec=sec,
+        success_keys=success,
+    )
 
 
 def run_translate(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
-    """翻译模块（增量）
-
-    需求：
-    1) 增量翻译：Base.lproj -> core_locales
-    2) 增量翻译：core(source_locale) -> target_locales
-
-    约定：
-    - Base.lproj/*.strings 为 key 的金标准
-    - core->target 的源语言使用 cfg.source_locale（它必须属于 core_locales 的范围内）
-      * 若 source_locale 某个 key 缺失/空值，则回退到 Base 对应 value
-    - 写回由主线程完成（避免并发写文件损坏）
+    """
+    两阶段增量翻译（对齐 slang_i18n 的并发/写回方式）：
+      1) Base -> Core（core_locales，排除 base_locale）
+      2) Core(pivot=source_locale) -> Target（target_locales）
+         - pivot 缺 key/空值时，fallback Base
     """
     mode = "增量" if incremental else "全量"
     print("🌍 translate")
     print(f"- 模式: {mode}")
-    print(f"- Base: {cfg.base_locale.code} (Base.lproj)")
-    print(f"- Source(core pivot): {cfg.source_locale.code} ({cfg.source_locale.name_en})")
+    print(f"- Base: {cfg.base_locale.code} ({cfg.base_locale.name_en})")
+    print(f"- Pivot(core): {cfg.source_locale.code} ({cfg.source_locale.name_en})")
     print(f"- Core: {[x.code for x in cfg.core_locales]}")
     print(f"- Targets: {len(cfg.target_locales)}")
 
-    # Base 读取
+    # 先做完整性检查（确保各语言文件集齐全）
+    data.ensure_strings_files_integrity(cfg)
+
     base_dir = (cfg.lang_root / cfg.base_folder).resolve()
     if not base_dir.exists():
         raise data.ConfigError(f"未找到 base_folder: {base_dir}")
     base_files = sorted(base_dir.glob("*.strings"))
     if not base_files:
-        print(f"⚠️ Base.lproj 下未找到任何 .strings：{base_dir}")
+        print("⚠️ Base.lproj 下未找到 *.strings，跳过")
         return
 
-    # 0) 确保目录/文件完整性（复用 sort 的完整性逻辑）
-    #    translate 前先补齐文件，避免后面反复判断
-    try:
-        data.ensure_file_integrity(cfg)
-    except Exception:
-        # 旧版本可能没有这个函数：保持兼容
-        pass
-
-    # 1) phase A：Base -> Core（排除 base 自身）
-    core_targets = [loc for loc in cfg.core_locales if loc.code != cfg.base_locale.code]
-    tasks_a: List[TranslateTask] = []
-    for loc in core_targets:
-        lproj = (cfg.lang_root / f"{loc.code}.lproj").resolve()
-        lproj.mkdir(parents=True, exist_ok=True)
-        for bf in base_files:
-            tf = lproj / bf.name
-            if not tf.exists():
-                tf.write_text("", encoding="utf-8")
-            tasks_a.append(TranslateTask(locale=loc, src_file=bf, target_file=tf, phase="base->core"))
-
-    # 2) phase B：Core(source_locale pivot) -> Target
-    pivot_dir = (cfg.lang_root / f"{cfg.source_locale.code}.lproj").resolve()
-    pivot_dir.mkdir(parents=True, exist_ok=True)
-    tasks_b: List[TranslateTask] = []
-    for loc in cfg.target_locales:
-        # 目标语言本身若等于 pivot/source，就不需要翻译
-        if loc.code == cfg.source_locale.code:
-            continue
-        lproj = (cfg.lang_root / f"{loc.code}.lproj").resolve()
-        lproj.mkdir(parents=True, exist_ok=True)
-        for bf in base_files:
-            srcf = pivot_dir / bf.name
-            # pivot 文件可能不存在：先创建空文件；缺 key 会回退到 Base value
-            if not srcf.exists():
-                srcf.write_text("", encoding="utf-8")
-            tf = lproj / bf.name
-            if not tf.exists():
-                tf.write_text("", encoding="utf-8")
-            tasks_b.append(TranslateTask(locale=loc, src_file=srcf, target_file=tf, phase="core->target"))
-
-    # 3) 并发执行两阶段任务（都走同一个 worker）
-    max_workers = int(cfg.options.get("max_workers", 8)) if isinstance(cfg.options, dict) else 8
-
-    def _run_tasks(tasks: List[TranslateTask]) -> Tuple[List[Tuple[TranslateTask, int]], int]:
-        changed: List[Tuple[TranslateTask, int]] = []
-        skipped = 0
-        with cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
-            fut_map = {ex.submit(_translate_one_file, cfg, t, incremental, base_files_map=None): t for t in tasks}
-            for fut in cf.as_completed(fut_map):
-                t = fut_map[fut]
-                try:
-                    delta = fut.result()
-                    if delta > 0:
-                        changed.append((t, delta))
-                    else:
-                        skipped += 1
-                except Exception as e:
-                    print(f"❌ translate 失败: [{t.phase}] {t.locale.code} / {t.target_file.name}: {e}")
-        return changed, skipped
-
-    # 为了减少重复解析 Base，每次 _translate_one_file 内部会读取 base 文件
-    # （实现简单可靠；后续性能需要再做 cache）
-
-    changed_a, skipped_a = _run_tasks(tasks_a)
-    changed_b, skipped_b = _run_tasks(tasks_b)
-
-    total_changed = changed_a + changed_b
-    total_added = sum(n for _, n in total_changed)
-    print(
-        f"✅ translate 任务完成：修改 {len(total_changed)} 个文件，新增/更新 {total_added} 个 key；未改动 {skipped_a + skipped_b} 个文件"
+    # phase1: Base -> Core（排除 base_locale）
+    core_targets = [l for l in cfg.core_locales if l.code != cfg.base_locale.code]
+    tasks1, total_keys1, per_lang_total1 = _build_tasks_phase(
+        cfg=cfg,
+        phase="base->core",
+        src_locale=cfg.base_locale,
+        tgt_locales=core_targets,
+        base_files=base_files,
+        pivot_dir=None,
+        incremental=incremental,
     )
-    print("🔧 translate 后执行 sort（保证格式一致）...")
-    data.run_sort(cfg)
 
+    # phase2: Pivot(core=source_locale) -> Target（pivot_dir=source_locale.lproj）
+    pivot_dir = cfg.lang_root / f"{cfg.source_locale.code}.lproj"
+    tasks2, total_keys2, per_lang_total2 = _build_tasks_phase(
+        cfg=cfg,
+        phase="core->target",
+        src_locale=cfg.source_locale,
+        tgt_locales=cfg.target_locales,
+        base_files=base_files,
+        pivot_dir=pivot_dir,
+        incremental=incremental,
+    )
 
-def _translate_one_file(
-    cfg: data.StringsI18nConfig,
-    task: TranslateTask,
-    incremental: bool,
-    base_files_map: Optional[Dict[str, Path]] = None,
-) -> int:
-    """生成并写回某个 (locale, file) 的翻译结果。返回新增/更新 key 数。"""
-    # Base 对应文件（用于 key 金标准 + 回退）
-    base_file = (cfg.lang_root / cfg.base_folder / task.target_file.name).resolve()
-    base_preamble, base_entries = data.parse_strings_file(base_file)
-    base_map: Dict[str, str] = {e.key: e.value for e in base_entries if not e.key.startswith("@@")}
+    tasks = tasks1 + tasks2
+    total_keys = total_keys1 + total_keys2
 
-    # 源文件内容（base->core 时 src_file == base_file；core->target 时 src_file == pivot 文件）
-    src_preamble, src_entries = data.parse_strings_file(task.src_file)
-    src_map: Dict[str, str] = {e.key: e.value for e in src_entries if not e.key.startswith("@@")}
+    if not tasks:
+        print("✅ 无需翻译：所有语言均已补齐（或没有可翻译条目）")
+        return
 
-    # 目标文件当前内容
-    tgt_preamble, tgt_entries = data.parse_strings_file(task.target_file)
-    tgt_map: Dict[str, data.StringsEntry] = {e.key: e for e in tgt_entries}
+    max_workers_cfg = _get_max_workers(cfg)
+    max_workers = _compute_workers(max_workers_cfg, len(tasks))
+    print(f"- 任务数: {len(tasks)}（base->core={len(tasks1)}, core->target={len(tasks2)}）")
+    print(f"- 待翻译 key: {total_keys}（base->core={total_keys1}, core->target={total_keys2}）")
+    print(f"- 并发: {max_workers} workers（maxWorkers={max_workers_cfg}）")
 
-    changed = 0
+    start_all = time.perf_counter()
+    sum_batch_sec = 0.0
 
-    for key, base_val in base_map.items():
-        if base_val is None or base_val == "":
-            continue
+    # 主线程统计
+    done_keys = 0
+    per_lang_done: Dict[str, int] = {}
 
-        existing = tgt_map.get(key)
-        need = True
-        if incremental:
-            if existing and (existing.value is not None) and (existing.value.strip() != ""):
-                need = False
-        if not need:
-            continue
-
-        # 选择源文案：优先 src_map（pivot），缺失则回退 base
-        src_val = src_map.get(key)
-        if src_val is None or str(src_val).strip() == "":
-            src_val = base_val
-
-        # 真正的翻译引擎
-        new_val = _translate_text(
-            src_text=str(src_val),
-            target_locale=task.locale,
-            source_locale=cfg.source_locale if task.phase == "core->target" else cfg.base_locale,
-            cfg=cfg,
-            key=key,
-            phase=task.phase,
+    # 提交任务时打印 loading（保证顺序）
+    for t in tasks:
+        print(
+            f"⏳ [{t.idx}/{t.total}] ({t.phase}) {t.tgt_code}  "
+            f"{t.src_lang_name} → {t.tgt_lang_name}  | {len(t.src_for_translate)} key ..."
         )
 
-        comments = existing.comments if existing else []
-        tgt_map[key] = data.StringsEntry(key=key, value=new_val, comments=comments)
-        changed += 1
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(_translate_one, cfg, t) for t in tasks]
 
-    if changed == 0:
-        return 0
+        for fut in as_completed(futures):
+            r = fut.result()
+            sum_batch_sec += r.batch_sec
 
-    new_entries_sorted = sorted(tgt_map.values(), key=lambda e: e.key)
-    data.write_strings_file(task.target_file, tgt_preamble, new_entries_sorted, group_by_prefix=False)
-    return changed
+            # 合并写回（主线程）
+            merged_entries = _merge_translated(r.tgt_entries, r.out)
+            # target 语言：按 key 排序（不分组）；Base 的分组规则由 sort 管
+            merged_entries = sorted(merged_entries, key=lambda e: e.key)
 
+            # 写回保持 preamble
+            data.write_strings_file(r.tgt_file, r.tgt_preamble, merged_entries, group_by_prefix=False)
 
-def _translate_text(
-    *,
-    src_text: str,
-    target_locale: data.Locale,
-    source_locale: data.Locale,
-    cfg: data.StringsI18nConfig,
-    key: str,
-    phase: str,
-) -> str:
-    """翻译引擎占位实现（后续替换为真实 LLM/翻译服务）。
+            done_keys += r.success_keys
+            per_lang_done[r.tgt_code] = per_lang_done.get(r.tgt_code, 0) + r.success_keys
 
-    现在的策略：输出一个明显可检索的占位结果，避免误把源文案当成翻译。
-    """
-    # 例：[[ja|core->target]] Hello
-    return f"[[{target_locale.code}|{phase}]] {src_text}"
+            elapsed_all = time.perf_counter() - start_all
+            print(
+                f"✅ [{r.idx}/{r.total}] ({r.phase}) {r.tgt_code}  "
+                f"+{r.success_keys} key  | {r.batch_sec:.2f}s  | 累计 {elapsed_all:.2f}s"
+            )
+
+    total_elapsed = time.perf_counter() - start_all
+    print("\n🎉 翻译完成汇总")
+    print(f"- 总任务: {len(tasks)}")
+    print(f"- 总翻译 key: {done_keys}/{total_keys}")
+    print(f"- 总耗时(墙钟): {total_elapsed:.2f}s")
+    print(f"- 累计翻译耗时(∑每条): {sum_batch_sec:.2f}s")
+    if total_elapsed > 0 and sum_batch_sec > 0:
+        saved = sum_batch_sec - total_elapsed
+        if saved > 0:
+            print(f"- 并发节省: {saved:.2f}s")
+        print(f"- 加速比: {sum_batch_sec / total_elapsed:.2f}x")
+        print(f"- 平均速度: {done_keys / total_elapsed:.2f} key/s")
+
+    # translate 后执行 sort（保证 Base 分组与注释规则、以及其他语言排序一致）
+    if (cfg.options or {}).get("sort_after_translate", True):
+        print("\n🔧 translate 后执行 sort（保证格式一致）...")
+        data.run_sort(cfg)
