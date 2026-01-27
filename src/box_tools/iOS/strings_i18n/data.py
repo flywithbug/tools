@@ -406,11 +406,70 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
     return 0
 
 
+# ----------------------------
+# sort 前的完整性检查：确保各语言 *.lproj 目录与 Base.lproj 的 *.strings 文件集一致
+# - 若缺失：创建目录与空文件
+# - 若多余：暂不删除（避免误删项目自定义文件）
+# ----------------------------
+def ensure_strings_files_integrity(cfg: StringsI18nConfig) -> Tuple[int, int]:
+    base_dir = (cfg.lang_root / cfg.base_folder).resolve()
+    if not base_dir.exists():
+        raise ConfigError(f"Base 目录不存在：{base_dir}")
+
+    base_strings = sorted([p for p in base_dir.glob('*.strings') if p.is_file()])
+    if not base_strings:
+        # 没有任何 .strings：这通常意味着工程结构不对或未生成本地化文件
+        raise ConfigError(
+            f"Base 目录下未发现任何 .strings 文件：{base_dir}"
+            f"解决方法：确认 Xcode 是否已生成 Localizable.strings 等文件，或检查 lang_root/base_folder 配置。"
+        )
+
+    locales: List[Locale] = []
+    # source + core + target（Base 本身不需要对齐）
+    if cfg.source_locale:
+        locales.append(cfg.source_locale)
+    locales.extend(cfg.core_locales or [])
+    locales.extend(cfg.target_locales or [])
+
+    created_dirs = 0
+    created_files = 0
+
+    for loc in locales:
+        # 约定：<code>.lproj（例如：en.lproj / zh-Hant.lproj）
+        loc_dir = (cfg.lang_root / f"{loc.code}.lproj").resolve()
+        if not loc_dir.exists():
+            loc_dir.mkdir(parents=True, exist_ok=True)
+            created_dirs += 1
+
+        existing = {p.name for p in loc_dir.glob('*.strings') if p.is_file()}
+        for base_file in base_strings:
+            if base_file.name not in existing:
+                target = loc_dir / base_file.name
+                # 创建空文件（UTF-8），后续 translate/sort 会填充/排序
+                target.write_text('', encoding='utf-8')
+                created_files += 1
+
+    return created_dirs, created_files
+
+
 def run_sort(cfg: StringsI18nConfig) -> None:
-    # TODO：实现 .strings 文件的 key 排序与写回
+    # sort 之前需要先检测文件完整性：确保每个语言目录下的 *.strings 与 Base.lproj 一致
     if run_doctor(cfg) != 0:
         print("❌ sort 中止：doctor 未通过")
         return
+
+    try:
+        created_dirs, created_files = ensure_strings_files_integrity(cfg)
+    except ConfigError as e:
+        print(f"❌ sort 中止：{e}")
+        return
+
+    if created_dirs or created_files:
+        print(f"✅ 完整性修复：创建目录 {created_dirs} 个，创建 .strings 文件 {created_files} 个")
+    else:
+        print("✅ 完整性检查通过：各语言 *.strings 文件集与 Base 一致")
+
+    # TODO：实现 .strings 文件的 key 排序与写回
     print("⚠️ sort：骨架版本尚未实现 .strings 排序逻辑（TODO）")
 
 
