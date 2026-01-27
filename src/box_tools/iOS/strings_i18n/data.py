@@ -420,7 +420,7 @@ def ensure_strings_files_integrity(cfg: StringsI18nConfig) -> Tuple[int, int]:
     if not base_strings:
         # 没有任何 .strings：这通常意味着工程结构不对或未生成本地化文件
         raise ConfigError(
-            f"Base 目录下未发现任何 .strings 文件：{base_dir}"
+            f"Base 目录下未发现任何 .strings 文件：{base_dir}\n"
             f"解决方法：确认 Xcode 是否已生成 Localizable.strings 等文件，或检查 lang_root/base_folder 配置。"
         )
 
@@ -520,7 +520,7 @@ def parse_strings_file(path: Path) -> Tuple[List[str], List[StringsEntry]]:
     return preamble, entries
 
 
-def write_strings_file(path: Path, preamble: List[str], entries: List[StringsEntry]) -> None:
+def write_strings_file(path: Path, preamble: List[str], entries: List[StringsEntry], *, group_by_prefix: bool = True) -> None:
     out_lines: List[str] = []
 
     # 写 header/preamble（原样）
@@ -567,6 +567,33 @@ def sort_base_strings_files(cfg: StringsI18nConfig) -> int:
     if not base_dir.exists():
         raise ConfigError(f"Base 目录不存在：{base_dir}")
 
+
+def sort_other_locale_strings_files(cfg: StringsI18nConfig) -> int:
+    """对非 Base 语言目录下的所有 *.strings 文件排序（仅按 key 排序，不做前缀分组）。"""
+    locales: List[Locale] = []
+    if cfg.source_locale:
+        locales.append(cfg.source_locale)
+    locales.extend(cfg.core_locales or [])
+    locales.extend(cfg.target_locales or [])
+
+    changed = 0
+    for loc in locales:
+        loc_dir = (cfg.lang_root / f"{loc.code}.lproj").resolve()
+        if not loc_dir.exists():
+            continue
+
+        files = sorted(loc_dir.glob("*.strings"))
+        for fp in files:
+            preamble, entries = parse_strings_file(fp)
+            entries_sorted = sorted(entries, key=lambda e: e.key)
+
+            old_keys = [e.key for e in entries]
+            new_keys = [e.key for e in entries_sorted]
+            if old_keys != new_keys:
+                write_strings_file(fp, preamble, entries_sorted, group_by_prefix=False)
+                changed += 1
+
+    return changed
     files = sorted(base_dir.glob("*.strings"))
     if not files:
         print(f"⚠️ Base.lproj 下未找到 *.strings：{base_dir}")
@@ -603,17 +630,26 @@ def run_sort(cfg: StringsI18nConfig) -> None:
     else:
         print("✅ 完整性检查通过：各语言 *.strings 文件集与 Base 一致")
 
-    # 排序 Base.lproj（保留注释；注释在字段上方；按 key 排序并按前缀分组）
+    # 1) Base.lproj：保留注释；注释在字段上方；按 key 排序并按前缀分组
     try:
-        changed = sort_base_strings_files(cfg)
+        base_changed = sort_base_strings_files(cfg)
     except ConfigError as e:
         print(f"❌ sort 中止：{e}")
         return
 
-    if changed:
-        print(f"✅ Base.lproj 排序完成：更新 {changed} 个 .strings 文件")
+    # 2) 其他语言：仅按 key 排序（不做前缀分组）
+    try:
+        other_changed = sort_other_locale_strings_files(cfg)
+    except ConfigError as e:
+        print(f"❌ sort 中止：{e}")
+        return
+
+    if base_changed:
+        print(f"✅ Base.lproj 排序完成：更新 {base_changed} 个 .strings 文件")
     else:
         print("✅ Base.lproj 已是有序状态：无需改动")
 
-
-
+    if other_changed:
+        print(f"✅ 其他语言排序完成：更新 {other_changed} 个 .strings 文件")
+    else:
+        print("✅ 其他语言已是有序状态：无需改动")
