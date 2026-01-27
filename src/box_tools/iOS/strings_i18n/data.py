@@ -389,23 +389,174 @@ def _first_locale(obj: Any) -> Locale:
 # commands：doctor/sort（骨架）
 # ----------------------------
 def run_doctor(cfg: StringsI18nConfig) -> int:
-    # 这里只做最小诊断：路径存在 + Base.lproj 存在
+    """
+    最佳实践的 doctor：
+    - 配置 & 目录结构校验
+    - Base.lproj/其它语言 *.strings 可解析性检查
+    - key 一致性（缺失/冗余）统计
+    - 重复 key 检测（Base 视为错误；其它语言视为警告）
+    - printf 占位符一致性（%@/%d/%1$@ ...）检查（警告）
+    输出：
+    - 控制台可读摘要
+    - 详细报告写入 <lang_root>/.box_strings_i18n_reports/doctor_YYYYMMDD-HHMMSS.txt
+    """
+    errors: List[str] = []
+    warns: List[str] = []
+
+    # ---- 路径/结构 ----
     if not cfg.lang_root.exists():
-        print(f"❌ lang_root 不存在：{cfg.lang_root}")
-        return 1
+        errors.append(f"lang_root 不存在：{cfg.lang_root}")
+        return _doctor_print_and_write(cfg, errors, warns)
 
     base_dir = (cfg.lang_root / cfg.base_folder).resolve()
     if not base_dir.exists():
-        print(f"❌ Base 目录不存在：{base_dir}")
-        return 1
+        errors.append(f"Base 目录不存在：{base_dir}")
+        return _doctor_print_and_write(cfg, errors, warns)
 
-    languages_ok = cfg.languages_path.exists()
-    if not languages_ok:
-        print(f"❌ languages.json 不存在：{cfg.languages_path}")
-        return 1
+    if not cfg.languages_path.exists():
+        errors.append(f"languages.json 不存在：{cfg.languages_path}（可先执行 init，会自动生成模板/拷贝默认 languages.json）")
+        return _doctor_print_and_write(cfg, errors, warns)
 
-    print("✅ doctor 通过（骨架：仅做路径与基础结构检查）")
-    return 0
+    # ---- languages.json 内容 ----
+    try:
+        languages = _load_languages_json(cfg.languages_path)
+    except Exception as e:
+        errors.append(f"languages.json 读取失败：{cfg.languages_path}（{e}）")
+        return _doctor_print_and_write(cfg, errors, warns)
+
+    # 配置里出现的所有 locale code 都应该在 languages.json 里（否则 init 的 target_locales 也容易失真）
+    cfg_codes = _all_locale_codes(cfg)
+    missing_in_languages = [c for c in cfg_codes if c not in languages]
+    if missing_in_languages:
+        warns.append(
+            "languages.json 缺少以下 code（建议补全，以便 init/校验一致）："
+            + ", ".join(missing_in_languages)
+        )
+
+    # ---- Base.lproj 文件集 ----
+    base_files = sorted([p for p in base_dir.glob("*.strings") if p.is_file()])
+    if not base_files:
+        errors.append(f"Base 目录下未发现任何 *.strings：{base_dir}")
+        return _doctor_print_and_write(cfg, errors, warns)
+
+    # 解析 Base 并建立“金标准 key 集合”
+    base_map: Dict[str, List[StringsEntry]] = {}
+    base_keys_by_file: Dict[str, set] = {}
+    for fp in base_files:
+        try:
+            preamble, entries = parse_strings_file(fp)
+        except Exception as e:
+            errors.append(f"Base 解析失败：{fp.name}（{e}）")
+            continue
+
+        dups = _collect_duplicates(entries)
+        if dups:
+            errors.append(f"Base 存在重复 key：{fp.name} -> {dups}")
+        base_map[fp.name] = entries
+        base_keys_by_file[fp.name] = {e.key for e in entries}
+
+    # ---- 其它语言检查 ----
+    other_locales = [cfg.source_locale] + cfg.core_locales + cfg.target_locales
+    other_locales = _dedup_locales_preserve_order(other_locales)
+
+    missing_dirs: List[str] = []
+    missing_files: List[str] = []
+    parse_fail: List[str] = []
+
+    # 缺失/冗余统计（按 语言->文件->keys）
+    missing_keys: Dict[str, Dict[str, List[str]]] = {}
+    redundant_keys: Dict[str, Dict[str, List[str]]] = {}
+
+    # 占位符不一致：按 语言->文件->[(key, base_ph, loc_ph)]
+    placeholder_mismatch: Dict[str, Dict[str, List[Tuple[str, List[str], List[str]]]]] = {}
+
+    for loc in other_locales:
+        loc_dir = (cfg.lang_root / f"{loc.code}.lproj").resolve()
+        if not loc_dir.exists():
+            missing_dirs.append(loc.code)
+            continue
+
+        for bf in base_files:
+            target_fp = (loc_dir / bf.name)
+            if not target_fp.exists():
+                missing_files.append(f"{loc.code}/{bf.name}")
+                continue
+
+            try:
+                _, loc_entries = parse_strings_file(target_fp)
+            except Exception as e:
+                parse_fail.append(f"{loc.code}/{bf.name}（{e}）")
+                continue
+
+            # 重复 key：其它语言仅警告（因为历史原因可能存在，但仍应收敛）
+            dups = _collect_duplicates(loc_entries)
+            if dups:
+                warns.append(f"重复 key（{loc.code}/{bf.name}）：{dups}")
+
+            base_keys = base_keys_by_file.get(bf.name, set())
+            loc_keys = {e.key for e in loc_entries}
+
+            mk = sorted(list(base_keys - loc_keys))
+            rk = sorted(list(loc_keys - base_keys))
+
+            if mk:
+                missing_keys.setdefault(loc.code, {}).setdefault(bf.name, []).extend(mk)
+            if rk:
+                redundant_keys.setdefault(loc.code, {}).setdefault(bf.name, []).extend(rk)
+
+            # printf 占位符一致性：只对同 key 做对比
+            base_entries_by_key = {e.key: e for e in base_map.get(bf.name, [])}
+            loc_entries_by_key = {e.key: e for e in loc_entries}
+            for k in (base_keys & loc_keys):
+                b = base_entries_by_key.get(k)
+                t = loc_entries_by_key.get(k)
+                if not b or not t:
+                    continue
+                bph = _extract_printf_placeholders(b.value)
+                tph = _extract_printf_placeholders(t.value)
+                if bph != tph:
+                    placeholder_mismatch.setdefault(loc.code, {}).setdefault(bf.name, []).append((k, bph, tph))
+
+    if missing_dirs:
+        warns.append("缺少语言目录（可通过 sort 自动补齐空文件夹/文件）："
+                     + ", ".join(sorted(set(missing_dirs))))
+    if missing_files:
+        warns.append("缺少 *.strings 文件（可通过 sort 自动创建空文件）："
+                     + ", ".join(missing_files[:30]) + (" …" if len(missing_files) > 30 else ""))
+
+    if parse_fail:
+        errors.append("以下文件解析失败（请先修复语法/引号/分号等）："
+                      + "; ".join(parse_fail[:20]) + (" …" if len(parse_fail) > 20 else ""))
+
+    # ---- 摘要性建议 ----
+    # 缺失 key（翻译未覆盖）只做提示：这是最常见的问题
+    miss_count = sum(len(keys) for m in missing_keys.values() for keys in m.values())
+    red_count = sum(len(keys) for m in redundant_keys.values() for keys in m.values())
+    ph_count = sum(len(v) for m in placeholder_mismatch.values() for v in m.values())
+
+    if miss_count:
+        warns.append(f"发现缺失 key（相对 Base）：共 {miss_count} 个（建议走 translate 增量或补齐）")
+    if red_count:
+        warns.append(f"发现冗余 key（Base 不存在）：共 {red_count} 个（建议在 sort 中选择删除）")
+    if ph_count:
+        warns.append(f"发现占位符不一致：共 {ph_count} 项（建议人工确认，避免运行时崩溃/格式错乱）")
+
+    # strict 模式：把 warns 当 errors
+    strict = bool(cfg.options.get("doctor_strict", False))
+    if strict and warns:
+        errors.extend([f"[STRICT] {w}" for w in warns])
+        warns = []
+
+    return _doctor_print_and_write(
+        cfg,
+        errors,
+        warns,
+        extra_sections={
+            "缺失 key（按语言/文件）": missing_keys,
+            "冗余 key（按语言/文件）": redundant_keys,
+            "占位符不一致（按语言/文件）": placeholder_mismatch,
+        },
+    )
 
 
 # ----------------------------
