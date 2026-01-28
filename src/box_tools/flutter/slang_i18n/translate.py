@@ -21,73 +21,171 @@ def _ts_print(*args: object) -> None:
         print(*args, flush=True)
 
 def _make_progress_cb(t: _Task):
-    """Build a progress callback for translate_flat_dict (best-effort)."""
+    """Build a progress callback for translate_flat_dict (best-effort, robust)."""
     task_start = time.perf_counter()
-    ctx = {
-        "chunk_total": None,
-        "chunk_size": None,
-        "chunk_starts": {},  # idx -> perf_counter
+    ctx: Dict[str, Any] = {
+        "chunk_total": None,   # int
+        "chunk_keys": None,    # int
+        "chunk_starts": {},    # raw_idx(int) -> perf_counter(float)
     }
+
+    def _as_int(x: Any) -> Optional[int]:
+        try:
+            if x is None:
+                return None
+            if isinstance(x, bool):
+                return None
+            return int(x)
+        except Exception:
+            return None
+
+    def _pick_total(ev: Dict[str, Any]) -> Optional[int]:
+        return (
+                _as_int(ev.get("chunks_total"))
+                or _as_int(ev.get("total_chunks"))
+                or _as_int(ev.get("chunk_total"))
+                or _as_int(ev.get("chunks"))
+                or _as_int(ev.get("n"))
+                or _as_int(ctx.get("chunk_total"))
+        )
+
+    def _pick_chunk_keys(ev: Dict[str, Any]) -> Optional[int]:
+        return (
+                _as_int(ev.get("chunk_keys"))
+                or _as_int(ev.get("chunk_size"))
+                or _as_int(ev.get("max_chunk_items"))
+                or _as_int(ev.get("max_keys"))
+                or _as_int(ev.get("items_per_chunk"))
+                or _as_int(ctx.get("chunk_keys"))
+        )
+
+    def _pick_idx(ev: Dict[str, Any]) -> Optional[int]:
+        return (
+                _as_int(ev.get("chunk_index"))
+                or _as_int(ev.get("chunk_i"))
+                or _as_int(ev.get("index"))
+                or _as_int(ev.get("idx"))
+                or _as_int(ev.get("i"))
+        )
+
+    def _pick_nkeys(ev: Dict[str, Any]) -> Optional[int]:
+        return (
+                _as_int(ev.get("n_keys"))
+                or _as_int(ev.get("keys"))
+                or _as_int(ev.get("items"))
+                or _as_int(ev.get("chunk_len"))
+                or _as_int(ev.get("size"))
+                or _pick_chunk_keys(ev)
+        )
+
+    def _normalize_display_idx(raw_i: Optional[int], total: Optional[int]) -> Optional[int]:
+        """
+        将 raw idx 规范化为 1-based 显示。
+        - 如果 total 已知且 raw_i 在 [0, total-1]，认为是 0-based，显示 raw_i+1
+        - 如果 total 未知但 raw_i == 0，也按 1 显示
+        - 否则原样显示
+        """
+        if raw_i is None:
+            return None
+        if total is not None and 0 <= raw_i < total:
+            return raw_i + 1
+        if total is None and raw_i == 0:
+            return 1
+        return raw_i
 
     def cb(ev: Dict[str, Any]) -> None:
         try:
             et = ev.get("event") or ev.get("type") or ev.get("name")
             if not et:
                 return
+            et = str(et)
 
             now = time.perf_counter()
             elapsed = now - task_start
 
-            # normalize
-            chunk_total = ev.get("chunk_total") or ev.get("total_chunks") or ev.get("chunks_total")
-            chunk_size = ev.get("chunk_size") or ev.get("chunk_keys") or ev.get("max_keys") or ev.get("items_per_chunk")
+            if et in ("chunking_done", "chunked", "chunking"):
+                total = _pick_total(ev)
+                ck = _pick_chunk_keys(ev)
+                if total is not None:
+                    ctx["chunk_total"] = total
+                if ck is not None:
+                    ctx["chunk_keys"] = ck
 
-            if et == "chunking_done":
-                if chunk_total is not None:
-                    ctx["chunk_total"] = int(chunk_total)
-                if chunk_size is not None:
-                    ctx["chunk_size"] = int(chunk_size)
+                # total<=1 时不刷屏
                 if (ctx["chunk_total"] or 0) > 1:
-                    _ts_print(f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} 分片完成：{ctx['chunk_total']} 片（chunk_keys={ctx['chunk_size']}） | {elapsed:.2f}s")
+                    _ts_print(
+                        f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} "
+                        f"分片完成：{ctx['chunk_total']} 片（chunk_keys={ctx['chunk_keys'] or '?'}） | {elapsed:.2f}s"
+                    )
                 return
 
-            # For single-chunk, suppress noisy start/done logs
-            if (ctx["chunk_total"] or 0) <= 1 and et in ("chunk_start", "chunk_done"):
+            # 单片时压制 start/done 噪声
+            if (ctx.get("chunk_total") or 0) <= 1 and et in ("chunk_start", "chunk_done"):
                 return
 
-            if et == "chunk_start":
-                i = int(ev.get("chunk_index") or ev.get("i") or ev.get("index") or 0)
-                n = int(ev.get("chunk_total") or ctx["chunk_total"] or ev.get("n") or 0)
-                k = int(ev.get("chunk_len") or ev.get("items") or ev.get("keys") or chunk_size or ctx["chunk_size"] or 0)
-                if i:
-                    ctx["chunk_starts"][i] = now
-                _ts_print(f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} chunk {i}/{n} 开始（{k} key） | {elapsed:.2f}s")
+            if et in ("chunk_start", "chunk_begin", "chunk_started"):
+                raw_i = _pick_idx(ev)
+                total = _pick_total(ev)
+                nkeys = _pick_nkeys(ev)
+
+                # 关键修复：i=0 也要记录
+                if raw_i is not None:
+                    ctx["chunk_starts"][raw_i] = now
+
+                i_show = _normalize_display_idx(raw_i, total or ctx.get("chunk_total"))
+                n_show = total or ctx.get("chunk_total")
+
+                _ts_print(
+                    f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} "
+                    f"chunk {i_show or '?'} / {n_show or '?'} 开始（{nkeys or '?'} key） | {elapsed:.2f}s"
+                )
                 return
 
-            if et == "chunk_done":
-                i = int(ev.get("chunk_index") or ev.get("i") or ev.get("index") or 0)
-                n = int(ev.get("chunk_total") or ctx["chunk_total"] or ev.get("n") or 0)
-                k = int(ev.get("chunk_len") or ev.get("items") or ev.get("keys") or chunk_size or ctx["chunk_size"] or 0)
-                started = ctx["chunk_starts"].get(i)
-                chunk_sec = (now - started) if started else None
+            if et in ("chunk_done", "chunk_end", "chunk_finished"):
+                raw_i = _pick_idx(ev)
+                total = _pick_total(ev)
+                nkeys = _pick_nkeys(ev)
+
+                started = None
+                if raw_i is not None:
+                    started = ctx["chunk_starts"].get(raw_i)
+                chunk_sec = (now - started) if started is not None else None
+
+                i_show = _normalize_display_idx(raw_i, total or ctx.get("chunk_total"))
+                n_show = total or ctx.get("chunk_total")
                 cs = f"{chunk_sec:.2f}s" if chunk_sec is not None else "?"
-                _ts_print(f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} chunk {i}/{n} 完成（{k} key） | {cs} | {elapsed:.2f}s")
+
+                _ts_print(
+                    f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} "
+                    f"chunk {i_show or '?'} / {n_show or '?'} 完成（{nkeys or '?'} key） | {cs} | {elapsed:.2f}s"
+                )
                 return
 
             if et in ("chunk_error", "chunk_retry"):
                 attempt = ev.get("attempt")
                 err = ev.get("error") or ev.get("message") or ""
-                i = ev.get("chunk_index") or ev.get("i") or ev.get("index") or ""
-                n = ev.get("chunk_total") or ctx["chunk_total"] or ev.get("n") or ""
+                raw_i = _pick_idx(ev)
+                total = _pick_total(ev) or ctx.get("chunk_total")
+                i_show = _normalize_display_idx(raw_i, total)
                 if attempt is None:
-                    _ts_print(f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} chunk {i}/{n} 异常/重试 {err} | {elapsed:.2f}s")
+                    _ts_print(
+                        f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} "
+                        f"chunk {i_show or '?'} / {total or '?'} 异常/重试 {err} | {elapsed:.2f}s"
+                    )
                 else:
-                    _ts_print(f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} chunk {i}/{n} 异常/重试 attempt={attempt} {err} | {elapsed:.2f}s")
+                    _ts_print(
+                        f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} "
+                        f"chunk {i_show or '?'} / {total or '?'} 异常/重试 attempt={attempt} {err} | {elapsed:.2f}s"
+                    )
                 return
 
             if et in ("chunk_split", "chunk_split_retry"):
-                _ts_print(f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} chunk 拆分重试（减小批次） | {elapsed:.2f}s")
+                _ts_print(
+                    f"   ⏱️ [{t.idx}/{t.total}] {t.module_name}->{t.tgt_code} "
+                    f"chunk 拆分重试（减小批次） | {elapsed:.2f}s"
+                )
                 return
+
         except Exception:
             return
 
