@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Pattern, Union
 
-from client import OpenAIClientFactory
-from models import OpenAIModel
+from .client import OpenAIClientFactory
+from .models import OpenAIModel
 
 
 # =========================================================

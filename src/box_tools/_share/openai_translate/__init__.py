@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 
-from .client import *
+from .client import OpenAIConfigError, resolve_api_key
 
 from .translate import translate_flat_dict, TranslationError
 from .json_translate import translate_from_to, JsonTranslateError
 from .models import OpenAIModel
+from .translate_list import *
 
 __all__ = [
     'translate_flat_dict',
@@ -16,4 +17,5 @@ __all__ = [
     'OpenAIConfigError',
     'resolve_api_key',
     'OpenAIClientFactory',
+    'translate_list'
 ]
