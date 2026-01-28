@@ -316,7 +316,8 @@ def run_sort(cfg: Config, yes: bool) -> int:
     changed = 0
     skipped = 0
 
-    for fp in files:
+    
+for fp in files:
         try:
             raw = fp.read_text(encoding="utf-8")
             data = json.loads(raw)
@@ -325,12 +326,30 @@ def run_sort(cfg: Config, yes: bool) -> int:
                 continue
 
             ordered = _ordered_json_obj(data)
-            new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + ""
+            new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + "
+"
             if new_text != raw:
                 fp.write_text(new_text, encoding="utf-8")
                 changed += 1
-        except Exception:
+
+        except json.JSONDecodeError as e:
             skipped += 1
+            # e.lineno / e.colno 是 1-based
+            print(f"[sort] JSON 解析失败：{fp} (line {getattr(e, 'lineno', '?')}, col {getattr(e, 'colno', '?')})")
+            # 打印错误行的内容（尽量不炸屏）
+            try:
+                lines = raw.splitlines()
+                ln = int(getattr(e, "lineno", 0))
+                if 1 <= ln <= len(lines):
+                    bad = lines[ln - 1]
+                    print(f"       > {bad[:200]}")
+            except Exception:
+                pass
+            continue
+
+        except Exception as e:
+            skipped += 1
+            print(f"[sort] 处理失败：{fp} ({type(e).__name__}: {e})")
             continue
 
     print(f"[sort] 完成：扫描 {len(files)} 个文件，写回 {changed} 个，跳过 {skipped} 个（非对象/解析失败）")
