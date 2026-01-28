@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 
 from .data import Config, compute_missing, create_missing, detect_mode, list_modules
 from box_tools._share.openai_translate.json_translate import translate_from_to, JsonTranslateError
@@ -33,6 +34,18 @@ def _expected_pair_paths(cfg: Config) -> List[Tuple[Path, Path, str]]:
     return pairs
 
 
+def _fmt_secs(s: float) -> str:
+    if s < 60:
+        return f"{s:.1f}s"
+    if s < 3600:
+        m = int(s // 60)
+        r = s - m * 60
+        return f"{m}m{r:.0f}s"
+    h = int(s // 3600)
+    m = int((s - h * 3600) // 60)
+    return f"{h}h{m}m"
+
+
 def run_translate(cfg: Config, incremental: bool, auto_create_targets: bool) -> int:
     if auto_create_targets:
         missing_dirs, missing_files = compute_missing(cfg)
@@ -40,19 +53,15 @@ def run_translate(cfg: Config, incremental: bool, auto_create_targets: bool) -> 
             create_missing(cfg, missing_dirs, missing_files)
             print("[translate] 已自动创建缺失目录/文件。")
 
-    # OpenAI key：优先用环境变量；也允许在 cfg.options 里放 apiKey
     api_key = os.getenv("OPENAI_API_KEY") or str((cfg.options or {}).get("openAIKey") or "")
 
-    # prompt：可选。若你的 yaml 里有 prompts.prompt_en，就会传进去
     prompt_en = None
     try:
         prompt_en = (cfg.prompts or {}).get("prompt_en") or (cfg.prompts or {}).get("promptEn")
     except Exception:
         prompt_en = None
 
-    # options：把 cfg.max_workers 也映射到并发池；OpenAI translate 内部也有 chunk 相关配置
     opt = _Options()
-    # 如果你的 yaml 里有 options.max_chunk_items / maxChunkItems，可覆盖默认
     try:
         max_chunk_items = (cfg.options or {}).get("max_chunk_items") or (cfg.options or {}).get("maxChunkItems")
         if max_chunk_items:
@@ -65,13 +74,22 @@ def run_translate(cfg: Config, incremental: bool, auto_create_targets: bool) -> 
         print("[translate] 未发现任何目标语言文件对（targets 为空？）")
         return 0
 
-    # incremental=True => translate_from_to 自带 diff 逻辑（缺失/为空/等于源文本才翻译）
-    # incremental=False => 我们仍用 translate_from_to，但先清空目标文件（只保留 meta），等价全量翻译
+    max_workers = int(cfg.max_workers) if int(cfg.max_workers) > 0 else min(8, max(1, len(pairs)))
+    failed = 0
+
+    t0 = time.perf_counter()
+    print(f"[translate] 开始翻译：pairs={len(pairs)} incremental={incremental} workers={max_workers} model={cfg.openai_model}")
+
+    done_files = 0
+
     def _job(source_fp: Path, target_fp: Path, tgt_locale: str) -> Tuple[str, str, int]:
+        nonlocal done_files
+
         if not source_fp.exists():
+            print(f"[translate] 跳过：缺少源文件：{source_fp}")
+            done_files += 1
             return (tgt_locale, str(target_fp), 1)
 
-        # 全量翻译：把 target 先重置成仅 meta（若有），让 diff 全部命中
         if not incremental:
             try:
                 import json
@@ -90,8 +108,42 @@ def run_translate(cfg: Config, incremental: bool, auto_create_targets: bool) -> 
                 target_fp.parent.mkdir(parents=True, exist_ok=True)
                 target_fp.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             except Exception:
-                # 忽略重置失败，继续走增量逻辑
                 pass
+
+        file_t0 = time.perf_counter()
+        last_print = {"t": 0.0}
+
+        def progress_cb(payload: Dict[str, Any]) -> None:
+            ev = payload.get("event")
+            now = time.perf_counter()
+
+            if ev == "diff":
+                src_keys = payload.get("src_keys")
+                todo_keys = payload.get("todo_keys")
+                target_keys = payload.get("target_keys")
+                print(f"[translate] {tgt_locale}: diff src={src_keys} target={target_keys} todo={todo_keys} -> {target_fp.name}")
+                return
+
+            if now - last_print["t"] < 0.2 and ev not in ("all_done", "noop"):
+                return
+            last_print["t"] = now
+
+            if ev == "chunk_done":
+                done = payload.get("done", 0)
+                total = payload.get("total", 0)
+                chunk_idx = payload.get("chunk_index")
+                chunk_items = payload.get("chunk_items")
+                print(f"[translate] {tgt_locale}: chunk {chunk_idx} +{chunk_items} ({done}/{total})")
+                return
+
+            if ev == "noop":
+                print(f"[translate] {tgt_locale}: 无需翻译（增量命中 0）")
+                return
+
+            if ev == "all_done":
+                total_written = payload.get("total_written", 0)
+                print(f"[translate] {tgt_locale}: 完成，写入 {total_written} 个 key")
+                return
 
         try:
             translate_from_to(
@@ -103,19 +155,25 @@ def run_translate(cfg: Config, incremental: bool, auto_create_targets: bool) -> 
                 api_key=api_key or None,
                 prompt_en=prompt_en,
                 opt=opt,
+                progress_cb=progress_cb,
             )
+            dt = time.perf_counter() - file_t0
+            done_files += 1
+            elapsed = time.perf_counter() - t0
+            print(f"[translate] {tgt_locale}: ✅ 用时 {_fmt_secs(dt)} | 总进度 {done_files}/{len(pairs)} | 总耗时 {_fmt_secs(elapsed)}")
             return (tgt_locale, str(target_fp), 0)
+
         except JsonTranslateError as e:
-            print(f"[translate] JSON 翻译失败：{target_fp} ({e})")
+            dt = time.perf_counter() - file_t0
+            done_files += 1
+            print(f"[translate] {tgt_locale}: ❌ JSON 翻译失败（{_fmt_secs(dt)}）：{target_fp} ({e})")
             return (tgt_locale, str(target_fp), 2)
+
         except Exception as e:
-            print(f"[translate] 翻译失败：{target_fp} ({type(e).__name__}: {e})")
+            dt = time.perf_counter() - file_t0
+            done_files += 1
+            print(f"[translate] {tgt_locale}: ❌ 翻译失败（{_fmt_secs(dt)}）：{target_fp} ({type(e).__name__}: {e})")
             return (tgt_locale, str(target_fp), 2)
-
-    max_workers = int(cfg.max_workers) if int(cfg.max_workers) > 0 else min(8, max(1, len(pairs)))
-    failed = 0
-
-    print(f"[translate] 开始翻译：pairs={len(pairs)} incremental={incremental} workers={max_workers} model={cfg.openai_model}")
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futs = [ex.submit(_job, s, t, loc) for (s, t, loc) in pairs]
@@ -124,9 +182,13 @@ def run_translate(cfg: Config, incremental: bool, auto_create_targets: bool) -> 
             if rc != 0:
                 failed += 1
 
+    total_dt = time.perf_counter() - t0
+    ok = len(pairs) - failed
+    rate = (ok / total_dt) if total_dt > 0 else 0.0
+
     if failed:
-        print(f"[translate] 完成但有失败：failed={failed}/{len(pairs)}")
+        print(f"[translate] 结束：✅{ok} ❌{failed} | 总耗时 {_fmt_secs(total_dt)} | 速率 {rate:.2f} 文件/秒")
         return 2
 
-    print("[translate] 完成：全部成功。")
+    print(f"[translate] 结束：全部成功 ✅{ok} | 总耗时 {_fmt_secs(total_dt)} | 速率 {rate:.2f} 文件/秒")
     return 0
