@@ -15,7 +15,7 @@ BOX_TOOL = tool(
     id="core.box_json_i18n",
     name="box_json_i18n",
     category="core",
-    summary="JSON i18n 资源管理 CLI：init/sync/sort/doctor/translate（含默认启动 doctor）",
+    summary="JSON i18n 资源管理 CLI：init/sync/sort/doctor/translate（启动默认 doctor）",
     usage=[
         "box_json_i18n",
         "box_json_i18n init",
@@ -34,12 +34,12 @@ BOX_TOOL = tool(
         opt("--i18n-dir", "覆盖配置中的 i18nDir（相对 project-root 或绝对路径）"),
         opt("--yes", "sync/sort：自动执行创建/删除等操作（跳过交互确认）"),
         opt("--no-incremental", "translate：关闭增量翻译，改为全量翻译"),
-        opt("--skip-doctor", "跳过启动时默认 doctor（不建议日常使用）"),
+        opt("--skip-doctor", "跳过启动时默认 doctor（不建议）"),
     ],
     examples=[
-        ex("box_json_i18n", "进入 menu；启动前会自动 doctor，有问题就提示"),
+        ex("box_json_i18n init", "使用同目录模板 gpt_json.yaml 初始化/校验配置"),
         ex("box_json_i18n sort", "自动先 sync，再执行 sort"),
-        ex("box_json_i18n translate", "目标文件缺失会自动创建后再翻译"),
+        ex("box_json_i18n translate", "目标目录/文件缺失会自动创建后再翻译"),
     ],
     docs="README.md",
 )
@@ -68,19 +68,6 @@ def _resolve_i18n_dir_override(project_root: Path, raw: str) -> Path:
     return p if p.is_absolute() else (project_root / p).resolve()
 
 
-def _startup_doctor(cfg: data.Config) -> int:
-    """
-    启动时默认执行 doctor：
-    - 有问题：提示并阻止继续（除非你未来加 --force）
-    - 无问题：放行
-    """
-    result = data.run_doctor(cfg)
-    if result != 0:
-        print("❌ doctor 检查未通过：请先修复上述问题。")
-        return result
-    return 0
-
-
 def main(argv=None) -> int:
     argv = argv or sys.argv
     args = build_parser().parse_args(argv[1:])
@@ -88,7 +75,7 @@ def main(argv=None) -> int:
     project_root = Path(args.project_root).resolve()
     cfg_path = (project_root / args.config).resolve()
 
-    # init：允许无配置
+    # init：允许无配置；若不存在则用包内模板创建
     if args.command == "init":
         try:
             data.init_config(project_root=project_root, cfg_path=cfg_path, yes=args.yes)
@@ -98,9 +85,9 @@ def main(argv=None) -> int:
             print(f"❌ init 失败：{e}")
             return 1
 
-    # 其余命令：必须有配置
+    # 其它命令：必须有配置
     try:
-        data.assert_config_ok(cfg_path, project_root=project_root, check_i18n_dir_exists=False)
+        data.assert_config_ok(cfg_path, project_root=project_root)
     except data.ConfigError as e:
         print(str(e))
         return 1
@@ -109,37 +96,33 @@ def main(argv=None) -> int:
     if args.i18n_dir:
         cfg = data.override_i18n_dir(cfg, _resolve_i18n_dir_override(project_root, args.i18n_dir))
 
-    # 启动时默认 doctor（你要求：有问题提示，无问题放行）
-    if not args.skip_doctor and args.command != "doctor":
-        rc = _startup_doctor(cfg)
+    # 启动默认 doctor：有问题提示并阻止继续；无问题放行
+    if not args.skip_doctor and args.command not in ("doctor",):
+        rc = data.run_doctor(cfg)
         if rc != 0:
+            print("❌ doctor 检查未通过：请先修复上述问题。")
             return rc
 
-    # menu
     if args.command == "menu":
         return data.run_menu(cfg_path=cfg_path, project_root=project_root)
 
-    # 显式 doctor
     if args.command == "doctor":
         return data.run_doctor(cfg)
 
-    # sync
     if args.command == "sync":
         return data.run_sync(cfg, yes=args.yes)
 
-    # sort：自动执行 sync（你要求）
     if args.command == "sort":
+        # sort 自动先 sync
         sync_rc = data.run_sync(cfg, yes=args.yes)
         if sync_rc != 0 and not args.yes:
-            # 同步阶段发现缺失但没 --yes，通常意味着用户还没创建；阻止继续 sort 更安全
             print("❌ sort 前 sync 检测到缺失且未创建（未使用 --yes），已停止。")
             return sync_rc
         return data.run_sort(cfg, yes=args.yes)
 
-    # translate：若缺失目标文件夹/文件，自动创建（你要求）
     if args.command == "translate":
         incremental = not args.no_incremental
-        return translate.run_translate(cfg, incremental=incremental, auto_create_targets=True, yes=args.yes)
+        return translate.run_translate(cfg, incremental=incremental, auto_create_targets=True)
 
     print("未知命令")
     return 1

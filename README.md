@@ -66,7 +66,7 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 ### gpt/json
 
-- **[`box_json_i18n`](#box_tools-gpt-json-tool)**：JSON i18n 资源管理 CLI：init/sync/sort/doctor/translate（含默认启动 doctor）（[README.md](src/box_tools/gpt/json/README.md)）
+- **[`box_json_i18n`](#box_tools-gpt-json-tool)**：JSON i18n 资源管理 CLI：init/sync/sort/doctor/translate（启动默认 doctor）（[README.md](src/box_tools/gpt/json/README.md)）
 
 ### iOS/strings_i18n
 
@@ -387,7 +387,7 @@ box_slang_i18n --project-root path/to/project
 
 ### box_json_i18n
 
-**简介**：JSON i18n 资源管理 CLI：init/sync/sort/doctor/translate（含默认启动 doctor）
+**简介**：JSON i18n 资源管理 CLI：init/sync/sort/doctor/translate（启动默认 doctor）
 
 **命令**：`box_json_i18n`
 
@@ -413,13 +413,13 @@ box_json_i18n --project-root path/to/project
 - `--i18n-dir`：覆盖配置中的 i18nDir（相对 project-root 或绝对路径）
 - `--yes`：sync/sort：自动执行创建/删除等操作（跳过交互确认）
 - `--no-incremental`：translate：关闭增量翻译，改为全量翻译
-- `--skip-doctor`：跳过启动时默认 doctor（不建议日常使用）
+- `--skip-doctor`：跳过启动时默认 doctor（不建议）
 
 **示例**
 
-- `box_json_i18n`：进入 menu；启动前会自动 doctor，有问题就提示
+- `box_json_i18n init`：使用同目录模板 gpt_json.yaml 初始化/校验配置
 - `box_json_i18n sort`：自动先 sync，再执行 sort
-- `box_json_i18n translate`：目标文件缺失会自动创建后再翻译
+- `box_json_i18n translate`：目标目录/文件缺失会自动创建后再翻译
 
 **文档**
 

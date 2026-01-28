@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 import yaml
 
@@ -13,10 +13,6 @@ DEFAULT_TEMPLATE_NAME = "gpt_json.yaml"
 class ConfigError(Exception):
     pass
 
-
-# -----------------------------
-# Config dataclasses
-# -----------------------------
 
 @dataclass(frozen=True)
 class Locale:
@@ -68,10 +64,6 @@ class Config:
     placeholder: Dict[str, Any]
 
 
-# -----------------------------
-# Menu
-# -----------------------------
-
 def run_menu(cfg_path: Path, project_root: Path) -> int:
     menu = [
         ("sort",      "排序 + 检查（冗余/重复/占位符）(自动 sync)"),
@@ -103,26 +95,20 @@ def run_menu(cfg_path: Path, project_root: Path) -> int:
         return 0
 
 
-# -----------------------------
-# Public API
-# -----------------------------
-
 def init_config(project_root: Path, cfg_path: Path, yes: bool = False) -> None:
+    # 不存在则用包内同目录模板创建
     if not cfg_path.exists():
-        _write_default_config(cfg_path)
+        _copy_packaged_template(cfg_path)
 
-    assert_config_ok(cfg_path, project_root=project_root, check_i18n_dir_exists=False)
+    assert_config_ok(cfg_path, project_root=project_root)
     cfg = load_config(cfg_path, project_root=project_root)
 
+    # init 阶段至少保证 i18nDir 存在
     if not cfg.i18n_dir.exists():
-        if yes:
-            cfg.i18n_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            # init 通常也可以直接创建 i18nDir，避免下一步卡住
-            cfg.i18n_dir.mkdir(parents=True, exist_ok=True)
+        cfg.i18n_dir.mkdir(parents=True, exist_ok=True)
 
 
-def assert_config_ok(cfg_path: Path, project_root: Path, check_i18n_dir_exists: bool) -> None:
+def assert_config_ok(cfg_path: Path, project_root: Path) -> None:
     if not cfg_path.exists():
         raise ConfigError(
             f"配置文件不存在：{cfg_path}\n"
@@ -133,14 +119,6 @@ def assert_config_ok(cfg_path: Path, project_root: Path, check_i18n_dir_exists: 
     errs = _validate_config_dict(raw)
     if errs:
         raise ConfigError("配置文件不合法：\n- " + "\n- ".join(errs))
-
-    if check_i18n_dir_exists:
-        i18n_dir = _resolve_i18n_dir(project_root, raw.get("i18nDir", "i18n"))
-        if not i18n_dir.exists():
-            raise ConfigError(
-                f"i18nDir 不存在：{i18n_dir}\n"
-                f"解决方法：执行 `box_json_i18n sync --yes` 创建缺失目录/文件。"
-            )
 
 
 def load_config(cfg_path: Path, project_root: Path) -> Config:
@@ -183,16 +161,20 @@ def override_i18n_dir(cfg: Config, i18n_dir: Path) -> Config:
     return replace(cfg, i18n_dir=i18n_dir)
 
 
-# -----------------------------
-# Layout & expected paths
-# -----------------------------
+def _copy_packaged_template(cfg_path: Path) -> None:
+    # 关键点：模板与 tool.py 同目录（模块发布时一起更新）
+    tpl = Path(__file__).resolve().parent / DEFAULT_TEMPLATE_NAME
+    if not tpl.exists():
+        raise ConfigError(f"内置模板不存在：{tpl}（请确保随包发布 gpt_json.yaml）")
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(tpl.read_text(encoding="utf-8"), encoding="utf-8")
+
 
 def detect_mode(cfg: Config) -> str:
     mode = cfg.layout.mode
     if mode in ("root", "module"):
         return mode
 
-    # auto:
     if not cfg.i18n_dir.exists():
         return "root"
     for p in cfg.i18n_dir.iterdir():
@@ -228,10 +210,6 @@ def expected_files(cfg: Config) -> List[Path]:
 
 
 def compute_missing(cfg: Config) -> Tuple[List[Path], List[Path]]:
-    """
-    返回 (missing_dirs, missing_files)
-    注意：模块模式下模块目录是“已存在模块”决定的；sync 不会凭空创建新模块目录（除非你后续加 modules 配置）
-    """
     missing_dirs: Set[Path] = set()
     missing_files: Set[Path] = set()
 
@@ -256,10 +234,6 @@ def create_missing(cfg: Config, missing_dirs: List[Path], missing_files: List[Pa
         if not f.exists():
             f.write_text("{}\n", encoding="utf-8")
 
-
-# -----------------------------
-# Commands
-# -----------------------------
 
 def run_sync(cfg: Config, yes: bool) -> int:
     missing_dirs, missing_files = compute_missing(cfg)
@@ -288,40 +262,32 @@ def run_sync(cfg: Config, yes: bool) -> int:
 
 
 def run_sort(cfg: Config, yes: bool) -> int:
-    # TODO: 这里后续实现具体检查/清理/排序。
+    # TODO: 冗余 key / 重复 key / 占位符差异 / 排序写回
     print(f"[sort] (skeleton) i18nDir={cfg.i18n_dir} yes={yes}")
     return 0
 
 
 def run_doctor(cfg: Config) -> int:
-    """
-    你要求：启动默认 doctor，有问题提示，无问题放行。
-    所以 doctor 的返回码非常关键：
-    - 0：通过
-    - 非 0：阻止继续
-    """
     problems: List[str] = []
 
-    # 1) 模式约束
     mode = detect_mode(cfg)
+
     if cfg.layout.mode == "root" and cfg.i18n_dir.exists():
         if any(p.is_dir() for p in cfg.i18n_dir.iterdir()):
             problems.append("layout.mode=root 但 i18nDir 下发现子目录（不允许模块目录）")
+
     if cfg.layout.mode == "module":
         if not cfg.i18n_dir.exists() or not any(p.is_dir() for p in cfg.i18n_dir.iterdir()):
             problems.append("layout.mode=module 但 i18nDir 下未发现任何模块子目录")
 
-    # 2) allow_nested_modules
     if cfg.i18n_dir.exists() and mode == "module" and not cfg.layout.rules.allow_nested_modules:
         for folder in list_modules(cfg):
             sub = cfg.i18n_dir / folder
             if any(p.is_dir() for p in sub.iterdir()):
                 problems.append(f"模块目录不允许嵌套子目录：{sub}")
 
-    # 3) 缺失检查（这里只做报告；是否创建交给 sync/translate）
     missing_dirs, missing_files = compute_missing(cfg)
     if missing_dirs or missing_files:
-        # doctor 提示问题，但不创建
         problems.append("存在缺失的目录/文件（可运行 sync --yes 创建）")
 
     if problems:
@@ -342,10 +308,6 @@ def run_doctor(cfg: Config) -> int:
     return 0
 
 
-# -----------------------------
-# Internal helpers
-# -----------------------------
-
 def _resolve_i18n_dir(project_root: Path, raw: str) -> Path:
     p = Path(str(raw))
     return p if p.is_absolute() else (project_root / p).resolve()
@@ -353,6 +315,7 @@ def _resolve_i18n_dir(project_root: Path, raw: str) -> Path:
 
 def _validate_config_dict(d: Dict[str, Any]) -> List[str]:
     errs: List[str] = []
+
     if "i18nDir" not in d:
         errs.append("缺少字段：i18nDir")
     if "source_locale" not in d or not (d.get("source_locale") or {}).get("code"):
@@ -373,40 +336,3 @@ def _validate_config_dict(d: Dict[str, Any]) -> List[str]:
         errs.append(f"locale code 重复：{sorted(dup)}")
 
     return errs
-
-
-def _write_default_config(cfg_path: Path) -> None:
-    template = {
-        "openAIModel": "gpt-4o",
-        "maxWorkers": 0,
-        "source_locale": {"code": "en", "name_en": "English"},
-        "target_locales": [{"code": "zh_Hant", "name_en": "Traditional Chinese (Taiwan)"}],
-        "i18nDir": "i18n",
-        "fileSuffix": "",
-        "layout": {
-            "mode": "auto",
-            "root": {"pattern": "{code}{suffix}.json"},
-            "module": {"pattern": "{folder}_{code}{suffix}.json"},
-            "rules": {"allow_unmatched_files": False, "allow_nested_modules": False},
-        },
-        "options": {
-            "sort_keys": True,
-            "cleanup_extra_keys": True,
-            "incremental_translate": True,
-            "normalize_filenames": False,
-            "post_sort_after_translate": True,
-        },
-        "prompts": {
-            "default_en": "Translate UI strings naturally.\nPreserve placeholders.\nOutput only translation.\n",
-            "by_locale_en": {"zh_Hant": "Use Traditional Chinese (Taiwan) UI style.\n"},
-        },
-        "placeholder": {
-            "patterns": [
-                r"\{\{\s*[A-Za-z0-9_]+\s*\}\}",
-                r"\{[A-Za-z0-9_]+\}",
-                r"%(\d+\$)?[@a-zA-Z]",
-            ]
-        },
-    }
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(yaml.safe_dump(template, sort_keys=False, allow_unicode=True), encoding="utf-8")
