@@ -162,38 +162,44 @@ def _finalize_placeholders_list(
 # =========================================================
 def _build_system_prompt_list(*, src_lang: str, tgt_locale: str, prompt_en: Optional[str]) -> str:
     """
-    Concise, strict prompt for translating a flat JSON array of strings.
+    Strict prompt for translating a flat JSON array of strings.
 
     Output MUST be: {"translations":[...]} with same length/order.
 
-    Empty output ("") is ONLY allowed for items that are truly not translatable
-    (e.g., empty input, symbols-only, placeholders-only). Do NOT output ""
-    just because an abbreviation/term is unclear—keep it in English instead.
+    Empty output ("") is ONLY allowed for items that are truly not translatable:
+    - empty/whitespace-only
+    - placeholders-only / format-tokens-only
+    - symbols-only
+    Otherwise, do NOT output "".
     """
     base = (
-        "You are a professional localization translator.\n"
-        f"Translate from {src_lang} to {tgt_locale} for mobile UI.\n\n"
-        "Output format (STRICT):\n"
+        "You are a professional localization translator for mobile UI.\n"
+        f"Translate from {src_lang} to {tgt_locale}.\n\n"
+
+        "HARD OUTPUT RULES (STRICT):\n"
         '- Return ONLY a valid JSON object: {"translations":[...]}.\n'
         '- "translations" MUST be an array of strings with the SAME length and SAME order as the input list (1:1).\n'
         "- Do NOT add/remove/merge/split items. No extra keys. No commentary. No markdown.\n\n"
-        "Translation rules:\n"
-        f"- Write in {tgt_locale}. Do not mix languages in normal text.\n"
+
+        "HARD TRANSLATION RULES:\n"
+        f"- Write the translation in {tgt_locale}.\n"
+        f"- Preserve ALL placeholders/format tokens EXACTLY as-is (e.g., {_PLACEHOLDER_EXAMPLES}). "
+        "Do NOT add/remove/rename/reorder them. Keep punctuation, spacing, and line breaks.\n"
+        "- Preserve URLs and explicit brand/proper nouns verbatim.\n"
+        "- Keep the structure of label/value strings such as 'Title: value' (translate both parts unless a part is a proper noun).\n\n"
+
+        "ABBREVIATIONS & TERMS:\n"
         "- Common technical abbreviations may remain in English (e.g., Wi-Fi, API, iOS).\n"
         "- For English abbreviations/acronyms or product-specific terms (e.g., ADL, SLA, KPI, SKU):\n"
-        "  - If there is no clear, widely accepted translation, KEEP the original term in English unchanged.\n"
-        "  - Do NOT omit the sentence or output an empty string due to uncertainty about such terms.\n"
-        '- Translate all human-visible text, including labels/titles before ":" and the text after it.\n'
-        "- Do NOT treat generic UI titles as brand names; translate them normally.\n"
-        "- Preserve explicit proper nouns/brand names and URLs verbatim.\n"
-        f"- Preserve ALL placeholders/format tokens EXACTLY as-is (e.g., {_PLACEHOLDER_EXAMPLES}). "
-        "Do NOT add/remove/rename/reorder placeholders. Keep punctuation, spacing, and line breaks.\n\n"
-        'Empty output ("") rule:\n'
+        "  - If there is no clear, widely accepted translation, KEEP the original English term unchanged.\n"
+        '  - Do NOT omit content and do NOT output "" due to uncertainty about such terms.\n\n'
+
+        'EMPTY OUTPUT ("") RULE:\n'
         '- Output "" ONLY if the input item is truly not translatable, such as:\n'
-        '  - the input is empty/whitespace-only, OR\n'
-        '  - the input is placeholders-only / format-tokens-only, OR\n'
-        '  - the input is symbols-only.\n'
-        '- Otherwise, ALWAYS provide a best-effort translation. If a term is unclear, keep that term in English.\n'
+        "  - empty/whitespace-only, OR\n"
+        "  - placeholders-only / format-tokens-only, OR\n"
+        "  - symbols-only.\n"
+        '- Otherwise: NEVER output "". Always provide a best-effort translation; if a term is unclear, keep that term in English.\n'
     )
 
     extra = (prompt_en or "").strip()
