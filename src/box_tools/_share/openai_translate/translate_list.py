@@ -176,13 +176,14 @@ def _build_system_prompt_list(*, src_lang: str, tgt_locale: str, prompt_en: Opti
         f"- Preserve ALL placeholders/format tokens exactly as-is (e.g., {_PLACEHOLDER_EXAMPLES}).\n"
         "- Preserve URLs and explicit brand/proper nouns verbatim.\n\n"
 
-        "ABBREVIATIONS:\n"
+        "ABBREVIATIONS & TERMS:\n"
         "- If the English source contains abbreviations, use the appropriate abbreviations in the target language.\n"
         "- If an abbreviation or term has no clear, standard translation, keep it in English.\n\n"
 
-        "FAILURE POLICY:\n"
-        '- If you truly cannot translate an item reliably, output "" for that item.\n'
-        "- Do not add any explanations; explanations are handled by the caller.\n"
+        "QUALITY REQUIREMENT:\n"
+        "- Always provide the best possible translation.\n"
+        "- Do not omit content.\n"
+        "- Do not return empty strings.\n"
     )
 
     extra = (prompt_en or "").strip()
