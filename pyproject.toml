@@ -1,6 +1,6 @@
 [project]
 name = "box"
-version = "0.1.89"
+version = "0.1.91"
 requires-python = ">=3.9"
 dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "rich", "pyperclip"]
 
@@ -8,6 +8,7 @@ dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "rich", "pyperclip"]
 box = "box.tool:main"
 box_ai_chat = "box_tools.ai.chat.tool:main"
 box_ai_translate = "box_tools.ai.translate.tool:main"
+box_json_i18n = "box_tools.gpt.json.tool:main"
 box_pubspec = "box_tools.flutter.pubspec.tool:main"
 box_riverpod_gen = "box_tools.flutter.riverpod_gen.tool:main"
 box_slang_i18n = "box_tools.flutter.slang_i18n.tool:main"

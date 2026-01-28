@@ -29,6 +29,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
   - [`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)
 - [flutter/slang_i18n](#flutter-slang_i18n)
   - [`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)
+- [gpt/json](#gpt-json)
+  - [`box_json_i18n`](#box_tools-gpt-json-tool)
 - [iOS/strings_i18n](#ios-strings_i18n)
   - [`box_strings_i18n`](#box_tools-ios-strings_i18n-tool)
 
@@ -61,6 +63,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### flutter/slang_i18n
 
 - **[`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)**：Flutter slang i18n 资源管理 CLI：基于默认模板生成/校验配置（保留注释），支持 sort/doctor，以及 AI 增量翻译（translate）（[README.md](src/box_tools/flutter/slang_i18n/README.md)）
+
+### gpt/json
+
+- **[`box_json_i18n`](#box_tools-gpt-json-tool)**：JSON i18n 资源管理 CLI：init/sync/sort/doctor/translate（含默认启动 doctor）（[README.md](src/box_tools/gpt/json/README.md)）
 
 ### iOS/strings_i18n
 
@@ -95,6 +101,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### flutter/slang_i18n
 
 - **box_slang_i18n**：[README.md](src/box_tools/flutter/slang_i18n/README.md)
+
+### gpt/json
+
+- **box_json_i18n**：[README.md](src/box_tools/gpt/json/README.md)
 
 ### iOS/strings_i18n
 
@@ -366,6 +376,54 @@ box_slang_i18n --project-root path/to/project
 **文档**
 
 [README.md](src/box_tools/flutter/slang_i18n/README.md)
+
+---
+
+<a id="gpt-json"></a>
+
+## gpt/json
+
+<a id="box_tools-gpt-json-tool"></a>
+
+### box_json_i18n
+
+**简介**：JSON i18n 资源管理 CLI：init/sync/sort/doctor/translate（含默认启动 doctor）
+
+**命令**：`box_json_i18n`
+
+**用法**
+
+```bash
+box_json_i18n
+box_json_i18n init
+box_json_i18n sync
+box_json_i18n sort
+box_json_i18n doctor
+box_json_i18n translate
+box_json_i18n translate --no-incremental
+box_json_i18n --config gpt_json.yaml
+box_json_i18n --project-root path/to/project
+```
+
+**参数说明**
+
+- `command`：子命令：menu/init/sync/sort/translate/doctor（默认 menu）
+- `--config`：配置文件路径（默认 gpt_json.yaml）
+- `--project-root`：项目根目录（默认当前目录）
+- `--i18n-dir`：覆盖配置中的 i18nDir（相对 project-root 或绝对路径）
+- `--yes`：sync/sort：自动执行创建/删除等操作（跳过交互确认）
+- `--no-incremental`：translate：关闭增量翻译，改为全量翻译
+- `--skip-doctor`：跳过启动时默认 doctor（不建议日常使用）
+
+**示例**
+
+- `box_json_i18n`：进入 menu；启动前会自动 doctor，有问题就提示
+- `box_json_i18n sort`：自动先 sync，再执行 sort
+- `box_json_i18n translate`：目标文件缺失会自动创建后再翻译
+
+**文档**
+
+[README.md](src/box_tools/gpt/json/README.md)
 
 ---
 
