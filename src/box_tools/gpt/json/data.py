@@ -316,18 +316,17 @@ def run_sort(cfg: Config, yes: bool) -> int:
     changed = 0
     skipped = 0
 
-    
-for fp in files:
+    for fp in files:
+        raw = ""
         try:
             raw = fp.read_text(encoding="utf-8")
-            data = json.loads(raw)
-            if not isinstance(data, dict):
+            obj = json.loads(raw)
+            if not isinstance(obj, dict):
                 skipped += 1
                 continue
 
-            ordered = _ordered_json_obj(data)
-            new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + "
-"
+            ordered = _ordered_json_obj(obj)
+            new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + ""
             if new_text != raw:
                 fp.write_text(new_text, encoding="utf-8")
                 changed += 1
@@ -335,13 +334,15 @@ for fp in files:
         except json.JSONDecodeError as e:
             skipped += 1
             # e.lineno / e.colno 是 1-based
-            print(f"[sort] JSON 解析失败：{fp} (line {getattr(e, 'lineno', '?')}, col {getattr(e, 'colno', '?')})")
-            # 打印错误行的内容（尽量不炸屏）
+            line = getattr(e, "lineno", "?")
+            col = getattr(e, "colno", "?")
+            print(f"[sort] JSON 解析失败：{fp} (line {line}, col {col})")
+
+            # 打印错误行的内容（避免炸屏）
             try:
                 lines = raw.splitlines()
-                ln = int(getattr(e, "lineno", 0))
-                if 1 <= ln <= len(lines):
-                    bad = lines[ln - 1]
+                if isinstance(line, int) and 1 <= line <= len(lines):
+                    bad = lines[line - 1]
                     print(f"       > {bad[:200]}")
             except Exception:
                 pass
