@@ -104,7 +104,7 @@ def main(argv=None) -> int:
             return rc
 
     if args.command == "menu":
-        return data.run_menu(cfg_path=cfg_path, project_root=project_root)
+        return data.run_menu(cfg, yes=args.yes)
 
     if args.command == "doctor":
         return data.run_doctor(cfg)
