@@ -96,14 +96,30 @@ def main(argv=None) -> int:
     if args.i18n_dir:
         cfg = data.override_i18n_dir(cfg, _resolve_i18n_dir_override(project_root, args.i18n_dir))
 
-    # 启动默认 doctor：有问题提示并阻止继续；无问题放行
-    if not args.skip_doctor and args.command not in ("doctor",):
+
+    # 启动默认 doctor：发现问题不退出；若是缺失目录/文件则可直接提示是否自动补齐，然后继续执行
+    if not args.skip_doctor and args.command not in ("doctor", "init"):
         rc = data.run_doctor(cfg)
         if rc != 0:
-            print("❌ doctor 检查未通过：请先修复上述问题。")
-            return rc
+            # 仅针对“缺失目录/文件”提供一键补齐
+            missing_dirs, missing_files = data.compute_missing(cfg)
+            if missing_dirs or missing_files:
+                do_fix = args.yes
+                if not args.yes:
+                    ans = input("⚠️ doctor 检测到缺失目录/文件，是否现在自动补齐？[y/N] ").strip().lower()
+                    do_fix = ans in ("y", "yes")
+                if do_fix:
+                    data.create_missing(cfg, missing_dirs, missing_files)
+                    print("[doctor] 已自动补齐缺失目录/文件。")
+                    # 再跑一次 doctor，输出结果（不阻断）
+                    data.run_doctor(cfg)
+                else:
+                    print("⚠️ 未补齐缺失目录/文件，将继续执行当前命令（可能失败）。")
+            else:
+                print("⚠️ doctor 发现问题，将继续执行当前命令（可能失败）。")
 
     if args.command == "menu":
+
         return data.run_menu(cfg, yes=args.yes)
 
     if args.command == "doctor":
