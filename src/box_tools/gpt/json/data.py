@@ -66,10 +66,9 @@ class Config:
 
 def run_menu(cfg_path: Path, project_root: Path) -> int:
     menu = [
-        ("sort",      "排序 + 检查（冗余/重复/占位符）(自动 sync)"),
-        ("translate", "翻译（缺目标文件自动创建）"),
-        ("doctor",    "结构诊断"),
-        ("sync",      "目录/文件同步检查"),
+        ("sort",      "排序"),
+        ("translate", "翻译（默认增量）"),
+        ("doctor",    "环境诊断"),
         ("init",      "生成/校验配置"),
     ]
 
