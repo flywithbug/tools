@@ -342,8 +342,7 @@ def run_sort(cfg: Config, yes: bool) -> int:
 
     def _write_ordered(fp: Path, obj: Dict[str, Any], raw_before: str | None = None) -> bool:
         ordered = _ordered_json_obj(obj)
-        new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + "
-"
+        new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + ""
         if raw_before is not None and new_text == raw_before:
             return False
         fp.write_text(new_text, encoding="utf-8")
