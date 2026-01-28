@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Literal
-
 
 from enum import Enum
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Tuple, Literal
+
+
 
 class OpenAIModel(str, Enum):
     # 4.x / 4o
@@ -142,7 +143,6 @@ def _parse_strings_keep_comments(path: str) -> Tuple[List[str], List[StringsKV]]
     pending_comments: List[str] = []
     in_block_comment = False
     block_buf: List[str] = []
-    seen_any_pair = False
 
     def flush_pending_to_header():
         nonlocal pending_comments
@@ -186,7 +186,6 @@ def _parse_strings_keep_comments(path: str) -> Tuple[List[str], List[StringsKV]]
 
         m = _STRINGS_PAIR_RE.match(line)
         if m:
-            seen_any_pair = True
             k = _unescape_strings(m.group("key"))
             v = _unescape_strings(m.group("val"))
             pairs.append(StringsKV(key=k, value=v, leading_comments=pending_comments[:] if pending_comments else []))
@@ -343,9 +342,39 @@ def sort_file(path: str, *, role: SortRole) -> None:
     raise ValueError(f"Unsupported file type: {path}")
 
 
-def sort_before_translate(*, sourceFilePath: str, targetFilePath: str) -> None:
+def sort_before_translate(*, source_file_path: str, target_file_path: str) -> None:
     """
     翻译前调用：把源/目标都整理成稳定形态。
     """
-    sort_file(sourceFilePath, role="source")
-    sort_file(targetFilePath, role="target")
+    sort_file(source_file_path, role="source")
+    sort_file(target_file_path, role="target")
+
+
+def load_map(path: str) -> Dict[str, str]:
+    """
+    读取 *.json / *.strings 为平铺 dict[str,str]
+    - json: {"k":"v"}
+    - strings: "k" = "v";
+    """
+    ft = detect_file_type(path)
+    if ft == FileType.JSON:
+        return _load_flat_json_map(path)
+    if ft == FileType.STRINGS:
+        return _load_strings_map(path)
+    raise ValueError(f"Unsupported file type: {path}")
+
+
+def save_target_map(path: str, data: Dict[str, str]) -> None:
+    """
+    目标文件写回（用于翻译过程落盘）：
+    - json: 稳定排序写回
+    - strings: 无注释、无分组、无空行，仅按 key 排序写回
+    """
+    ft = detect_file_type(path)
+    if ft == FileType.JSON:
+        _save_sorted_json(path, data)
+        return
+    if ft == FileType.STRINGS:
+        _write_strings_target_sorted_no_comments(path, data)
+        return
+    raise ValueError(f"Unsupported file type: {path}")
