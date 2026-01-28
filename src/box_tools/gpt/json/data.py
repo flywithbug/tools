@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 import yaml
+import json
 
 
 DEFAULT_TEMPLATE_NAME = "gpt_json.yaml"
@@ -64,7 +65,7 @@ class Config:
     placeholder: Dict[str, Any]
 
 
-def run_menu(cfg_path: Path, project_root: Path) -> int:
+def run_menu(cfg: Config, yes: bool = False) -> int:
     menu = [
         ("sort",      "排序"),
         ("translate", "翻译（默认增量）"),
@@ -73,7 +74,8 @@ def run_menu(cfg_path: Path, project_root: Path) -> int:
     ]
 
     while True:
-        print("\n=== box_json_i18n ===")
+        print("
+=== box_json_i18n ===")
         for idx, (cmd, label) in enumerate(menu, start=1):
             print(f"{idx}. {cmd:<10} {label}")
         print("0. exit       退出")
@@ -90,8 +92,34 @@ def run_menu(cfg_path: Path, project_root: Path) -> int:
             continue
 
         cmd = menu[idx - 1][0]
-        print(f"请在命令行执行：box_json_i18n {cmd} --config {cfg_path} --project-root {project_root}")
-        return 0
+
+        # 直接执行，不再打印命令行
+        if cmd == "doctor":
+            run_doctor(cfg)
+            continue
+
+        if cmd == "init":
+            try:
+                init_config(project_root=cfg.project_root, cfg_path=cfg.cfg_path, yes=yes)
+                print(f"✅ init 完成：{cfg.cfg_path}")
+            except Exception as e:
+                print(f"❌ init 失败：{e}")
+            continue
+
+        if cmd == "sort":
+            run_sort(cfg, yes=yes)
+            continue
+
+        if cmd == "translate":
+            # translate 的具体实现仍在 translate.py，默认增量
+            try:
+                from . import translate as _translate  # 局部导入，避免循环引用
+                _translate.run_translate(cfg, incremental=True, auto_create_targets=True)
+            except Exception as e:
+                print(f"❌ translate 失败：{e}")
+            continue
+
+        print("未知选择")
 
 
 def init_config(project_root: Path, cfg_path: Path, yes: bool = False) -> None:
@@ -260,9 +288,54 @@ def run_sync(cfg: Config, yes: bool) -> int:
     return 0
 
 
+def _ordered_json_obj(obj: Dict[str, Any]) -> Dict[str, Any]:
+    # 固定把这两个 key 放最顶部（如果存在）
+    pinned = ["@@dirty", "@@locale"]
+
+    out: Dict[str, Any] = {}
+    for k in pinned:
+        if k in obj:
+            out[k] = obj[k]
+
+    rest_keys = [k for k in obj.keys() if k not in out]
+    for k in sorted(rest_keys):
+        out[k] = obj[k]
+    return out
+
+
 def run_sort(cfg: Config, yes: bool) -> int:
-    # TODO: 冗余 key / 重复 key / 占位符差异 / 排序写回
-    print(f"[sort] (skeleton) i18nDir={cfg.i18n_dir} yes={yes}")
+    # 对 i18nDir 以及子目录下所有 *.json 文件按 key 排序写回
+    if not cfg.i18n_dir.exists():
+        print(f"[sort] i18nDir 不存在：{cfg.i18n_dir}")
+        return 1
+
+    files = sorted([p for p in cfg.i18n_dir.rglob("*.json") if p.is_file()])
+    if not files:
+        print(f"[sort] 未找到任何 json 文件：{cfg.i18n_dir}")
+        return 0
+
+    changed = 0
+    skipped = 0
+
+    for fp in files:
+        try:
+            raw = fp.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                skipped += 1
+                continue
+
+            ordered = _ordered_json_obj(data)
+            new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + "
+"
+            if new_text != raw:
+                fp.write_text(new_text, encoding="utf-8")
+                changed += 1
+        except Exception:
+            skipped += 1
+            continue
+
+    print(f"[sort] 完成：扫描 {len(files)} 个文件，写回 {changed} 个，跳过 {skipped} 个（非对象/解析失败）")
     return 0
 
 

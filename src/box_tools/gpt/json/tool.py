@@ -96,28 +96,18 @@ def main(argv=None) -> int:
     if args.i18n_dir:
         cfg = data.override_i18n_dir(cfg, _resolve_i18n_dir_override(project_root, args.i18n_dir))
 
-    # 启动默认 doctor：遇到问题不退出；若检测到缺失目录/文件则直接询问是否自动补齐，然后继续执行用户命令
+    # 启动默认 doctor：发现问题不退出（仅提示建议），继续执行用户命令
     if not args.skip_doctor and args.command not in ("doctor",):
         rc = data.run_doctor(cfg)
         if rc != 0:
-            missing_dirs, missing_files = data.compute_missing(cfg)
-            if missing_dirs or missing_files:
-                if args.yes:
-                    # 若用户已传 --yes，则自动补齐后继续
-                    data.run_sync(cfg, yes=True)
-                    print("✅ 已自动补齐目录/文件，继续执行当前命令。")
-                else:
-                    ans = input("⚠️ doctor 检测到缺失目录/文件，是否现在自动补齐？[y/N] ").strip().lower()
-                    if ans in ("y", "yes"):
-                        data.run_sync(cfg, yes=True)
-                        print("✅ 已补齐目录/文件。")
-                    else:
-                        print("⚠️ 未补齐目录/文件，将继续执行当前命令（可能会失败）。")
-            else:
-                print("⚠️ doctor 发现问题，将继续执行当前命令（可能会失败）。")
+            print("⚠️ doctor 发现问题：建议按需执行以下操作后再重试：")
+            print(f"  - 查看详情：box_json_i18n doctor --config {cfg_path} --project-root {project_root}")
+            print(f"  - 自动补齐目录/文件：box_json_i18n sync --yes --config {cfg_path} --project-root {project_root}")
+            print(f"  - 重新生成/校验配置：box_json_i18n init --config {cfg_path} --project-root {project_root}")
+            print("⚠️ 将继续执行当前命令（可能会因为上述问题导致后续失败）。")
 
     if args.command == "menu":
-        return data.run_menu(cfg_path=cfg_path, project_root=project_root)
+        return data.run_menu(cfg, yes=args.yes)
 
     if args.command == "doctor":
         return data.run_doctor(cfg)
