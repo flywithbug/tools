@@ -318,7 +318,13 @@ def _build_tasks(
 
 
 def _make_progress_cb(t: _Task):
-    """Build progress callback for translate_flat_dict without affecting old call sites."""
+    """Build progress callback for translate_flat_dict (best-effort).
+
+    Rules:
+      - Only print chunking/chunk start/done when total chunks > 1 (avoid noise)
+      - Still print minimal retry/split lines to avoid "silent hang"
+      - Callback errors are swallowed and never affect translation
+    """
     t_start = time.perf_counter()
     chunk_start: Dict[Any, float] = {}
 
@@ -328,51 +334,99 @@ def _make_progress_cb(t: _Task):
     except Exception:
         chunk_keys_hint = None
 
+    _chunk_total: Optional[int] = None
+    _printed_chunking_done = False
+
+    def _fmt_idx(ci: Any, cn: Any) -> str:
+        try:
+            ci_i = int(ci)
+            cn_i = int(cn)
+            if cn_i > 0 and ci_i > 0 and ci_i <= cn_i:
+                return f"{ci_i}/{cn_i}"
+        except Exception:
+            pass
+        return ""
+
+    def _set_total(payload: Dict[str, Any]) -> None:
+        nonlocal _chunk_total
+        if _chunk_total is not None:
+            return
+        for v in (payload.get("chunks"), payload.get("chunk_total"), payload.get("n")):
+            try:
+                if v is not None:
+                    _chunk_total = int(v)
+                    return
+            except Exception:
+                continue
+
+    def _should_print_chunks() -> bool:
+        return isinstance(_chunk_total, int) and _chunk_total > 1
+
     def cb(payload: Any) -> None:
+        nonlocal _printed_chunking_done
         try:
             if not isinstance(payload, dict):
                 return
-            ev = payload.get("event") or payload.get("type") or payload.get("name") or ""
-            ev = str(ev)
+
+            e = payload.get("event") or payload.get("type") or payload.get("name") or "event"
+            ci = payload.get("chunk_index") or payload.get("i")
+            cn = payload.get("chunk_total") or payload.get("n")
+            ck = payload.get("chunk_keys") or payload.get("chunk_items") or payload.get("items") or payload.get("keys") or chunk_keys_hint
+            attempt = payload.get("attempt")
+            msg = payload.get("error") or payload.get("message") or ""
+
+            _set_total(payload)
+
             now = time.perf_counter()
-            elapsed = now - t_start
+            since = now - t_start
 
-            if ev in ("chunking_done", "chunked", "chunking"):
-                chunks_total = payload.get("chunks_total") or payload.get("chunks") or payload.get("total_chunks") or payload.get("n")
-                chunk_keys = payload.get("chunk_keys") or payload.get("chunk_size") or payload.get("max_chunk_items") or chunk_keys_hint
-                _ts_print(
-                    f"   ⏱️ [{t.idx}/{t.total}] {t.module_name} → {t.tgt_code} 分片完成：{chunks_total} 片（chunk_keys={chunk_keys}） | {elapsed:.2f}s"
-                )
-                return
-
-            if ev in ("chunk_start", "chunk_begin", "chunk_started"):
-                i = payload.get("chunk_index") or payload.get("i") or payload.get("idx") or payload.get("chunk_i")
-                n = payload.get("chunks_total") or payload.get("n") or payload.get("total") or payload.get("chunk_n")
-                nk = payload.get("n_keys") or payload.get("keys") or payload.get("chunk_len") or payload.get("size")
-                chunk_start[i] = now
-                _ts_print(
-                    f"   ⏱️ [{t.idx}/{t.total}] {t.module_name} → {t.tgt_code} chunk {i}/{n} 开始（{nk} key） | {elapsed:.2f}s"
-                )
-                return
-
-            if ev in ("chunk_done", "chunk_end", "chunk_finished"):
-                i = payload.get("chunk_index") or payload.get("i") or payload.get("idx") or payload.get("chunk_i")
-                n = payload.get("chunks_total") or payload.get("n") or payload.get("total") or payload.get("chunk_n")
-                nk = payload.get("n_keys") or payload.get("keys") or payload.get("chunk_len") or payload.get("size")
+            if e == "chunk_start":
+                chunk_start[ci] = now
+            if e == "chunk_done":
+                st = chunk_start.pop(ci, None)
+                sec = (now - st) if st else None
+            else:
                 sec = None
-                if i in chunk_start:
-                    sec = now - chunk_start[i]
-                sec_str = f"{sec:.2f}s" if sec is not None else "?"
-                _ts_print(
-                    f"   ⏱️ [{t.idx}/{t.total}] {t.module_name} → {t.tgt_code} chunk {i}/{n} 完成（{nk} key） | {sec_str} | {elapsed:.2f}s"
-                )
-                return
+
+            with _PRINT_LOCK:
+                head = f"   ⏱️ [{t.idx}/{t.total}] ({t.phase}) {t.tgt_code}"
+                idx = _fmt_idx(ci, cn)
+
+                if e == "chunking_done":
+                    if _should_print_chunks() and not _printed_chunking_done:
+                        size = ck or chunk_keys_hint
+                        print(f"{head} 分片完成：{_chunk_total} 片（chunk_keys={size}） | {since:.2f}s")
+                        _printed_chunking_done = True
+                    return
+
+                if e == "chunk_start":
+                    if _should_print_chunks() and idx:
+                        print(f"{head} chunk {idx} 开始（{ck} key） | {since:.2f}s")
+                    return
+
+                if e == "chunk_done":
+                    if _should_print_chunks() and idx:
+                        s = f"{sec:.2f}s" if isinstance(sec, (int, float)) else "?"
+                        print(f"{head} chunk {idx} 完成（{ck} key） | {s} | {since:.2f}s")
+                    return
+
+                if e in {"chunk_error", "retry"}:
+                    if idx and _should_print_chunks():
+                        print(f"{head} chunk {idx} 异常/重试 attempt={attempt} {msg} | {since:.2f}s")
+                    else:
+                        print(f"{head} 异常/重试 attempt={attempt} {msg} | {since:.2f}s")
+                    return
+
+                if e == "chunk_split":
+                    print(f"{head} chunk 拆分重试（减小批次） | {since:.2f}s")
+                    return
+
+                if os.environ.get("BOX_SLANG_I18N_PROGRESS_DEBUG", ""):
+                    print(f"{head} {e}: {payload} | {since:.2f}s")
         except Exception:
             return
 
     return cb
-
-
 def _translate_one(t: _Task) -> _TaskResult:
     t0 = time.perf_counter()
     cb = _make_progress_cb(t)
