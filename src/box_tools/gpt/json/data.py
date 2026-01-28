@@ -74,8 +74,7 @@ def run_menu(cfg: Config, yes: bool = False) -> int:
     ]
 
     while True:
-        print("
-=== box_json_i18n ===")
+        print("=== box_json_i18n ===")
         for idx, (cmd, label) in enumerate(menu, start=1):
             print(f"{idx}. {cmd:<10} {label}")
         print("0. exit       退出")
@@ -326,8 +325,7 @@ def run_sort(cfg: Config, yes: bool) -> int:
                 continue
 
             ordered = _ordered_json_obj(data)
-            new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + "
-"
+            new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + ""
             if new_text != raw:
                 fp.write_text(new_text, encoding="utf-8")
                 changed += 1
