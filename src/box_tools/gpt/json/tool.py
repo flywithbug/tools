@@ -96,18 +96,15 @@ def main(argv=None) -> int:
     if args.i18n_dir:
         cfg = data.override_i18n_dir(cfg, _resolve_i18n_dir_override(project_root, args.i18n_dir))
 
-    # 启动默认 doctor：发现问题不退出（仅提示建议），继续执行用户命令
+    # 启动默认 doctor：有问题提示并阻止继续；无问题放行
     if not args.skip_doctor and args.command not in ("doctor",):
         rc = data.run_doctor(cfg)
         if rc != 0:
-            print("⚠️ doctor 发现问题：建议按需执行以下操作后再重试：")
-            print(f"  - 查看详情：box_json_i18n doctor --config {cfg_path} --project-root {project_root}")
-            print(f"  - 自动补齐目录/文件：box_json_i18n sync --yes --config {cfg_path} --project-root {project_root}")
-            print(f"  - 重新生成/校验配置：box_json_i18n init --config {cfg_path} --project-root {project_root}")
-            print("⚠️ 将继续执行当前命令（可能会因为上述问题导致后续失败）。")
+            print("❌ doctor 检查未通过：请先修复上述问题。")
+            return rc
 
     if args.command == "menu":
-        return data.run_menu(cfg, yes=args.yes)
+        return data.run_menu(cfg_path=cfg_path, project_root=project_root)
 
     if args.command == "doctor":
         return data.run_doctor(cfg)

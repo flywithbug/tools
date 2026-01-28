@@ -304,6 +304,7 @@ def _ordered_json_obj(obj: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_sort(cfg: Config, yes: bool) -> int:
     # 对 i18nDir 以及子目录下所有 *.json 文件按 key 排序写回
+    # 额外：检测“冗余字段”——目标语言文件中存在但 source_locale 对应文件不存在的 key，提示是否删除
     if not cfg.i18n_dir.exists():
         print(f"[sort] i18nDir 不存在：{cfg.i18n_dir}")
         return 1
@@ -313,6 +314,108 @@ def run_sort(cfg: Config, yes: bool) -> int:
         print(f"[sort] 未找到任何 json 文件：{cfg.i18n_dir}")
         return 0
 
+    meta_keys = {"@@dirty", "@@locale"}
+
+    def _load_json_dict(fp: Path) -> Tuple[Dict[str, Any] | None, str | None]:
+        raw = ""
+        try:
+            raw = fp.read_text(encoding="utf-8")
+            obj = json.loads(raw)
+            if not isinstance(obj, dict):
+                return (None, "not_dict")
+            return (obj, None)
+        except json.JSONDecodeError as e:
+            line = getattr(e, "lineno", "?")
+            col = getattr(e, "colno", "?")
+            print(f"[sort] JSON 解析失败：{fp} (line {line}, col {col})")
+            try:
+                lines = raw.splitlines()
+                if isinstance(line, int) and 1 <= line <= len(lines):
+                    bad = lines[line - 1]
+                    print(f"       > {bad[:200]}")
+            except Exception:
+                pass
+            return (None, "json_error")
+        except Exception as e:
+            print(f"[sort] 读取失败：{fp} ({type(e).__name__}: {e})")
+            return (None, "read_error")
+
+    def _write_ordered(fp: Path, obj: Dict[str, Any], raw_before: str | None = None) -> bool:
+        ordered = _ordered_json_obj(obj)
+        new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + "
+"
+        if raw_before is not None and new_text == raw_before:
+            return False
+        fp.write_text(new_text, encoding="utf-8")
+        return True
+
+    # 1) 先做“冗余字段”检测（按 layout 逐对比）
+    mode = detect_mode(cfg)
+    redundant_found = 0
+    redundant_deleted = 0
+
+    def _handle_pair(source_fp: Path, target_fp: Path) -> None:
+        nonlocal redundant_found, redundant_deleted
+
+        if not source_fp.exists() or not target_fp.exists():
+            return
+
+        src_obj, src_err = _load_json_dict(source_fp)
+        tgt_obj, tgt_err = _load_json_dict(target_fp)
+        if src_obj is None or tgt_obj is None:
+            return
+
+        extra = sorted([k for k in tgt_obj.keys() if k not in src_obj and k not in meta_keys])
+        if not extra:
+            return
+
+        redundant_found += 1
+        print(f"[sort] 检测到冗余字段：{target_fp}")
+        for k in extra:
+            print(f"  - {k}")
+
+        do_delete = yes
+        if not yes:
+            ans = input("是否删除以上冗余字段？[y/N] ").strip().lower()
+            do_delete = ans in ("y", "yes")
+
+        if do_delete:
+            for k in extra:
+                tgt_obj.pop(k, None)
+            # 写回（同时保持排序规则）
+            try:
+                raw_before = target_fp.read_text(encoding="utf-8")
+            except Exception:
+                raw_before = None
+            changed_now = _write_ordered(target_fp, tgt_obj, raw_before=raw_before)
+            if changed_now:
+                redundant_deleted += 1
+            print("[sort] 已删除冗余字段并写回。")
+        else:
+            print("[sort] 已保留冗余字段（未删除）。")
+
+    if mode == "root":
+        suffix = cfg.file_suffix or ""
+        src_name = cfg.layout.root.pattern.format(code=cfg.source.code, suffix=suffix)
+        source_fp = cfg.i18n_dir / src_name
+        for t in cfg.targets:
+            tgt_name = cfg.layout.root.pattern.format(code=t.code, suffix=suffix)
+            target_fp = cfg.i18n_dir / tgt_name
+            _handle_pair(source_fp, target_fp)
+    else:
+        suffix = cfg.file_suffix or ""
+        for folder in list_modules(cfg):
+            src_name = cfg.layout.module.pattern.format(folder=folder, code=cfg.source.code, suffix=suffix)
+            source_fp = cfg.i18n_dir / folder / src_name
+            for t in cfg.targets:
+                tgt_name = cfg.layout.module.pattern.format(folder=folder, code=t.code, suffix=suffix)
+                target_fp = cfg.i18n_dir / folder / tgt_name
+                _handle_pair(source_fp, target_fp)
+
+    if redundant_found:
+        print(f"[sort] 冗余字段检查：发现 {redundant_found} 个文件存在冗余字段，删除 {redundant_deleted} 个文件的冗余字段。")
+
+    # 2) 再对所有 json 文件做 key 排序写回（包括 source/targets/其它 json）
     changed = 0
     skipped = 0
 
@@ -325,20 +428,14 @@ def run_sort(cfg: Config, yes: bool) -> int:
                 skipped += 1
                 continue
 
-            ordered = _ordered_json_obj(obj)
-            new_text = json.dumps(ordered, ensure_ascii=False, indent=2) + ""
-            if new_text != raw:
-                fp.write_text(new_text, encoding="utf-8")
+            if _write_ordered(fp, obj, raw_before=raw):
                 changed += 1
 
         except json.JSONDecodeError as e:
             skipped += 1
-            # e.lineno / e.colno 是 1-based
             line = getattr(e, "lineno", "?")
             col = getattr(e, "colno", "?")
             print(f"[sort] JSON 解析失败：{fp} (line {line}, col {col})")
-
-            # 打印错误行的内容（避免炸屏）
             try:
                 lines = raw.splitlines()
                 if isinstance(line, int) and 1 <= line <= len(lines):
@@ -347,7 +444,6 @@ def run_sort(cfg: Config, yes: bool) -> int:
             except Exception:
                 pass
             continue
-
         except Exception as e:
             skipped += 1
             print(f"[sort] 处理失败：{fp} ({type(e).__name__}: {e})")
