@@ -68,11 +68,20 @@ def _load_flat_json_map(path: str) -> Dict[str, str]:
     return data
 
 
+def _json_sort_key(k: str) -> tuple[int, str]:
+    # @@* 的 key 排在最前，其余按字典序
+    return (0, k) if k.startswith("@@") else (1, k)
+
+
 def _save_sorted_json(path: str, data: Dict[str, str]) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    # ✅ 自定义顺序：@@* 在最顶端
+    ordered = {k: data[k] for k in sorted(data.keys(), key=_json_sort_key)}
+
     with open(path, "w", encoding="utf-8") as f:
-        # sort_keys=True：稳定输出
-        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+        # ⚠️ 不再用 sort_keys=True，否则会打乱自定义顺序
+        json.dump(ordered, f, ensure_ascii=False, indent=2)
         f.write("\n")
 
 
@@ -167,11 +176,11 @@ def _parse_strings_keep_comments(path: str) -> Tuple[List[str], List[StringsKV]]
             continue
 
         if stripped.startswith("/*"):
-            in_block_comment = True
             block_buf.append(line)
             if "*/" in line:
-                in_block_comment = False
                 flush_block()
+            else:
+                in_block_comment = True
             continue
 
         if stripped.startswith("//"):
