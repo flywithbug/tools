@@ -6,8 +6,8 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple, Union, Literal
 
-from translate_list import translate_list, _Options
-from models import OpenAIModel, sort_before_translate, load_map, save_target_map
+from .translate_list import translate_list, _Options
+from .models import OpenAIModel, sort_before_translate, load_map, save_target_map
 
 
 # =========================
