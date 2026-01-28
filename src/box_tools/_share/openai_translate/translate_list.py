@@ -160,13 +160,15 @@ def _finalize_placeholders_list(
 # =========================================================
 # Prompt & payload (List[str] version)
 # =========================================================
-
 def _build_system_prompt_list(*, src_lang: str, tgt_locale: str, prompt_en: Optional[str]) -> str:
     """
     Concise, strict prompt for translating a flat JSON array of strings.
 
     Output MUST be: {"translations":[...]} with same length/order.
-    If cannot translate reliably => "".
+
+    Empty output ("") is ONLY allowed for items that are truly not translatable
+    (e.g., empty input, symbols-only, placeholders-only). Do NOT output ""
+    just because an abbreviation/term is unclear—keep it in English instead.
     """
     base = (
         "You are a professional localization translator.\n"
@@ -178,12 +180,20 @@ def _build_system_prompt_list(*, src_lang: str, tgt_locale: str, prompt_en: Opti
         "Translation rules:\n"
         f"- Write in {tgt_locale}. Do not mix languages in normal text.\n"
         "- Common technical abbreviations may remain in English (e.g., Wi-Fi, API, iOS).\n"
+        "- For English abbreviations/acronyms or product-specific terms (e.g., ADL, SLA, KPI, SKU):\n"
+        "  - If there is no clear, widely accepted translation, KEEP the original term in English unchanged.\n"
+        "  - Do NOT omit the sentence or output an empty string due to uncertainty about such terms.\n"
         '- Translate all human-visible text, including labels/titles before ":" and the text after it.\n'
         "- Do NOT treat generic UI titles as brand names; translate them normally.\n"
         "- Preserve explicit proper nouns/brand names and URLs verbatim.\n"
         f"- Preserve ALL placeholders/format tokens EXACTLY as-is (e.g., {_PLACEHOLDER_EXAMPLES}). "
         "Do NOT add/remove/rename/reorder placeholders. Keep punctuation, spacing, and line breaks.\n\n"
-        '- If an item cannot be translated reliably, output "" for that item.\n'
+        'Empty output ("") rule:\n'
+        '- Output "" ONLY if the input item is truly not translatable, such as:\n'
+        '  - the input is empty/whitespace-only, OR\n'
+        '  - the input is placeholders-only / format-tokens-only, OR\n'
+        '  - the input is symbols-only.\n'
+        '- Otherwise, ALWAYS provide a best-effort translation. If a term is unclear, keep that term in English.\n'
     )
 
     extra = (prompt_en or "").strip()
