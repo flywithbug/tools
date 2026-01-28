@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from box_tools._share.openai_translate.models import OpenAIModel
-from box_tools._share.openai_translate.translate import translate_flat_dict
+from box_tools._share.openai_translate.translate import translate_list
 
 from _share.tool_spec import tool, opt, ex
 
@@ -33,15 +33,11 @@ BOX_TOOL = tool(
         "PyYAML>=6.0",
         "openai>=1.0.0",
     ],
-    docs="README.md",  # 可省略：默认就是 README.md
+    docs="README.md",
 )
 
 
 # 你要求的语言集合：英语/简中/繁中/粤语/日语/韩语/法语
-# 说明：
-# - zh-Hans: 简体中文（推荐用法）
-# - zh-Hant: 繁体中文（推荐用法）
-# - yue: 粤语（常用 BCP47/ISO 639-3）
 LANG_CHOICES: List[Tuple[str, str]] = [
     ("en", "英语 (English)"),
     ("zh-Hans", "中文简体 (简体中文)"),
@@ -192,16 +188,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         # translate
         try:
-            # 用 translate_flat_dict 复用你已有的翻译底座能力
-            out = translate_flat_dict(
+            # ✅ 使用 translate_list：输入 List[str]，输出 List[str]（等长同序）
+            out_list = translate_list(
                 prompt_en=None,
-                src_dict={"text": text},
+                src_items=[text],
                 src_lang=st.src,
                 tgt_locale=st.tgt,
                 model=model_name,
-                api_key=args.api_key,  # 不传则内部自动读 OPENAI_API_KEY，并在缺失时提示 export 方法
+                api_key=args.api_key,  # 不传则内部自动读 OPENAI_API_KEY（取决于你们 OpenAIClientFactory 的实现）
             )
-            print(out.get("text", ""))
+            print(out_list[0] if out_list else "")
         except Exception as e:
             print(f"[错误] {e}")
 
