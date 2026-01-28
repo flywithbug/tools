@@ -114,9 +114,14 @@ def run_translate(cfg: Config, incremental: bool, auto_create_targets: bool) -> 
         last_print = {"t": 0.0}
 
         def progress_cb(payload: Dict[str, Any]) -> None:
+            """兼容两层回调：
+            - json_translate.translate_from_to: diff / chunk_begin / chunk_done / noop / all_done
+            - openai_translate.translate_flat_dict: chunk_start / chunk_done / all_done / ...
+            """
             ev = payload.get("event")
             now = time.perf_counter()
 
+            # 只要是 diff，直接打一次（这是最有信息量的）
             if ev == "diff":
                 src_keys = payload.get("src_keys")
                 todo_keys = payload.get("todo_keys")
@@ -124,26 +129,42 @@ def run_translate(cfg: Config, incremental: bool, auto_create_targets: bool) -> 
                 print(f"[translate] {tgt_locale}: diff src={src_keys} target={target_keys} todo={todo_keys} -> {target_fp.name}")
                 return
 
-            if now - last_print["t"] < 0.2 and ev not in ("all_done", "noop"):
+            # 限流（避免太吵）；但结束事件不限流
+            if now - last_print["t"] < 0.25 and ev not in ("all_done", "noop"):
                 return
             last_print["t"] = now
 
-            if ev == "chunk_done":
-                done = payload.get("done", 0)
-                total = payload.get("total", 0)
-                chunk_idx = payload.get("chunk_index")
-                chunk_items = payload.get("chunk_items")
-                print(f"[translate] {tgt_locale}: chunk {chunk_idx} +{chunk_items} ({done}/{total})")
+            # inner translate_flat_dict chunk
+            if ev in ("chunk_start", "chunk_done"):
+                idx = payload.get("chunk_index")
+                total = payload.get("chunk_total")
+                items = payload.get("items")
+                elapsed_s = payload.get("elapsed_s")
+                if ev == "chunk_done":
+                    if elapsed_s is not None:
+                        print(f"[translate] {tgt_locale}: chunk {idx}/{total} +{items} done ({elapsed_s}s)")
+                    else:
+                        print(f"[translate] {tgt_locale}: chunk {idx}/{total} +{items} done")
                 return
 
+            # outer translate_from_to noop
             if ev == "noop":
                 print(f"[translate] {tgt_locale}: 无需翻译（增量命中 0）")
                 return
 
+            # all_done：分辨 inner/outer
             if ev == "all_done":
-                total_written = payload.get("total_written", 0)
-                print(f"[translate] {tgt_locale}: 完成，写入 {total_written} 个 key")
+                if "total_written" in payload:
+                    total_written = payload.get("total_written", 0)
+                    print(f"[translate] {tgt_locale}: 文件完成，写入 {total_written} 个 key")
+                elif "total_items" in payload:
+                    total_items = payload.get("total_items")
+                    chunks = payload.get("chunks")
+                    print(f"[translate] {tgt_locale}: 批次完成 items={total_items} chunks={chunks}")
                 return
+
+            # ignore other events (chunk_split/chunking_done/chunk_error etc.)
+            return
 
         try:
             translate_from_to(
@@ -178,7 +199,7 @@ def run_translate(cfg: Config, incremental: bool, auto_create_targets: bool) -> 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futs = [ex.submit(_job, s, t, loc) for (s, t, loc) in pairs]
         for fut in as_completed(futs):
-            tgt_locale, target_fp, rc = fut.result()
+            _, _, rc = fut.result()
             if rc != 0:
                 failed += 1
 
