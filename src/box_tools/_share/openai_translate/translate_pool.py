@@ -172,23 +172,32 @@ class _WorkerLine:
 
 class _ProgressPanel:
     """
-    A tidy 3-section panel:
-    - Done (top)
-    - Running (middle, 1 line per worker)
-    - Pending (bottom)
-    Refreshes in-place (TTY only).
+    Best-practice terminal progress display:
+
+    - Preflight (printed once):
+        shows worker count and a compact list of planned jobs (name | tgt_locale | todo).
+    - Live panel (in-place refresh, no scrolling):
+        DONE (top, newest first, capped)
+        RUNNING (fixed N lines: 1 per worker, refreshed)
+        PENDING (bottom, brief + remaining count)
+
+    Implementation detail:
+    - Uses ANSI "move cursor up + clear line" based on the previous render line count,
+      rather than clearing the whole screen (less flicker, more stable).
     """
     def __init__(
-            self,
-            *,
-            total_workers: int,
-            pending_brief_lines: int = 3,
-            refresh_min_interval_s: float = 0.08,
-            stream = None,
+        self,
+        *,
+        total_workers: int,
+        pending_brief_lines: int = 3,
+        done_brief_lines: int = 8,
+        refresh_min_interval_s: float = 0.10,
+        stream=None,
     ) -> None:
         self.total_workers = total_workers
         self.pending_brief_lines = max(0, int(pending_brief_lines))
-        self.refresh_min_interval_s = max(0.01, float(refresh_min_interval_s))
+        self.done_brief_lines = max(0, int(done_brief_lines))
+        self.refresh_min_interval_s = max(0.03, float(refresh_min_interval_s))
         self.stream = stream or sys.stdout
 
         self._lock = threading.Lock()
@@ -197,11 +206,13 @@ class _ProgressPanel:
         self._enabled = bool(getattr(self.stream, "isatty", lambda: False)())
 
         self._lines: Dict[str, _WorkerLine] = {}
-        self._done_order: List[str] = []  # newest done first
-        self._running_order: List[str] = []  # stable insertion order
-        self._pending_order: List[str] = []  # stable
+        self._done_order: List[str] = []       # newest first
+        self._running_order: List[str] = []    # stable insertion order
+        self._pending_order: List[str] = []    # stable queue order
 
         self._cursor_hidden = False
+        self._last_render_lines = 0
+        self._spinner_i = 0
 
     @property
     def enabled(self) -> bool:
@@ -216,19 +227,43 @@ class _ProgressPanel:
             self._done_order.clear()
             self._running_order.clear()
             self._pending_order.clear()
+            self._last_render_lines = 0
+            self._spinner_i = 0
 
             for job_id, job, todo in jobs:
                 name = job.name or _basename(job.target_file_path)
-                self._lines[job_id] = _WorkerLine(job_id=job_id, name=name, tgt_locale=job.tgt_locale, todo=todo, stage="pending")
+                self._lines[job_id] = _WorkerLine(
+                    job_id=job_id,
+                    name=name,
+                    tgt_locale=job.tgt_locale,
+                    todo=todo,
+                    stage="pending",
+                )
                 self._pending_order.append(job_id)
 
-            if self._enabled:
-                self._hide_cursor()
-                self._render(force=True)
-            else:
-                # Non-TTY: print a compact header once
-                self.stream.write(f"[translate_pool] workers={self.total_workers} files={len(jobs)} start={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._started_at))}\n")
+            if not self._enabled:
+                self.stream.write(
+                    f"[translate_pool] workers={self.total_workers} files={len(jobs)} start={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._started_at))}\n"
+                )
                 self.stream.flush()
+                return
+
+            # Preflight summary (printed once; does not refresh)
+            self._hide_cursor()
+            started_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self._started_at))
+            self.stream.write(f"translate_pool preflight | workers={self.total_workers} | files={len(jobs)} | start={started_str}\n")
+            brief = jobs[: min(len(jobs), max(6, self.pending_brief_lines))]
+            for job_id, job, todo in brief:
+                name = job.name or _basename(job.target_file_path)
+                self.stream.write(f"  - {name:<18} | {job.tgt_locale:<16} | todo={todo}\n")
+            remain = len(jobs) - len(brief)
+            if remain > 0:
+                self.stream.write(f"  ... and {remain} more\n")
+            self.stream.write("\n")  # spacing before live panel
+            self.stream.flush()
+
+            # First live render
+            self._render(force=True)
 
     def mark_running(self, job_id: str) -> None:
         with self._lock:
@@ -244,11 +279,13 @@ class _ProgressPanel:
     def apply_progress(self, job_id: str, p: FileProgress) -> None:
         with self._lock:
             line = self._lines[job_id]
-            # translate_from_to emits total/done based on jobs; trust it for real-time display
-            if p.total >= 0:
+
+            # IMPORTANT: never allow total to become 0/0 because of an early error emit.
+            if p.total and p.total > 0:
                 line.todo = p.total
             if p.done >= 0:
                 line.done = p.done
+
             line.message = p.message
 
             if p.stage == "start":
@@ -262,7 +299,6 @@ class _ProgressPanel:
             elif p.stage == "done":
                 line.stage = "done"
                 line.finished_at = _now()
-                # move to done top
                 if job_id in self._running_order:
                     self._running_order.remove(job_id)
                 if job_id in self._pending_order:
@@ -290,7 +326,8 @@ class _ProgressPanel:
             if self._enabled:
                 self._render(force=True)
                 self._show_cursor()
-            # Always print a final summary (TTY or not)
+
+            # Always print a final summary
             ok = sum(1 for r in results if r.ok)
             fail = len(results) - ok
             total_elapsed = 0.0
@@ -298,14 +335,15 @@ class _ProgressPanel:
                 start = min(r.started_at for r in results)
                 end = max(r.finished_at for r in results)
                 total_elapsed = max(0.0, end - start)
+
             self.stream.write("\n")
-            self.stream.write(f"[translate_pool] done: ok={ok} fail={fail} total_elapsed={_fmt_hms(total_elapsed)}\n")
+            self.stream.write(f"[translate_pool] summary: ok={ok} fail={fail} total_elapsed={_fmt_hms(total_elapsed)}\n")
             for r in results:
                 status = "OK" if r.ok else "FAIL"
                 name = r.job.name or _basename(r.job.target_file_path)
-                msg = f"{status:<4} {name} ({r.job.tgt_locale}) {r.translated}/{r.todo} elapsed={_fmt_hms(r.elapsed_s)}"
+                msg = f"{status:<4} {name:<18} | {r.job.tgt_locale:<16} | {r.translated:>5}/{r.todo:<5} | {_fmt_hms(r.elapsed_s)}"
                 if r.error:
-                    msg += f" error={r.error}"
+                    msg += f" | error={r.error}"
                 self.stream.write(msg + "\n")
             self.stream.flush()
 
@@ -323,6 +361,16 @@ class _ProgressPanel:
         self.stream.flush()
         self._cursor_hidden = False
 
+    def _move_up_and_clear(self, n_lines: int) -> None:
+        if n_lines <= 0:
+            return
+        # move cursor up n lines, then clear each line
+        self.stream.write(f"{_Ansi.ESC}[{n_lines}A")
+        for _ in range(n_lines):
+            self.stream.write(_Ansi.clear_line() + "\n")
+        # move back up again to the first cleared line
+        self.stream.write(f"{_Ansi.ESC}[{n_lines}A")
+
     def _render(self, force: bool = False) -> None:
         if not self._enabled:
             return
@@ -332,64 +380,75 @@ class _ProgressPanel:
             return
         self._last_render_at = now
 
-        started_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self._started_at))
+        self._spinner_i = (self._spinner_i + 1) % 4
+        spinner = ["⠋", "⠙", "⠹", "⠸"][self._spinner_i]
+
         elapsed = _fmt_hms(now - self._started_at)
-        total_files = len(self._lines)
-        done_files = sum(1 for lid in self._done_order if self._lines[lid].stage in ("done", "error"))
+        started_str = time.strftime("%H:%M:%S", time.localtime(self._started_at))
+
+        done_files = len(self._done_order)
         running_files = len(self._running_order)
         pending_files = len(self._pending_order)
 
         out: List[str] = []
-        out.append(f"workers={self.total_workers} | files={total_files} | done={done_files} running={running_files} pending={pending_files} | start={started_str} | elapsed={elapsed}")
-        out.append("")
-        out.append("DONE (completed first)")
+        out.append(f"workers={self.total_workers} | done={done_files} running={running_files} pending={pending_files} | start={started_str} | elapsed={elapsed}")
+
+        # DONE
+        out.append("DONE")
         if self._done_order:
-            for lid in self._done_order[: max(1, min(12, len(self._done_order)))]:
+            for lid in self._done_order[: self.done_brief_lines]:
                 line = self._lines[lid]
                 status = "OK " if line.stage == "done" else "ERR"
                 el = _fmt_hms(line.elapsed_s(now))
                 out.append(f"  {status} {line.name:<18} | {line.tgt_locale:<16} | {line.done:>5}/{line.todo:<5} | {el}")
         else:
             out.append("  (none)")
-        out.append("")
-        out.append("RUNNING (1 line per worker, auto-refresh)")
-        if self._running_order:
-            for lid in self._running_order:
+
+        # RUNNING (fixed N lines)
+        out.append("RUNNING")
+        running_ids = list(self._running_order)[: self.total_workers]
+        for slot in range(self.total_workers):
+            if slot < len(running_ids):
+                lid = running_ids[slot]
                 line = self._lines[lid]
                 el = _fmt_hms(line.elapsed_s(now))
-                out.append(f"  loading  {line.name:<18} | {line.tgt_locale:<16} | {line.done:>5}/{line.todo:<5} | {el}")
-        else:
-            out.append("  (none)")
-        out.append("")
-        out.append("PENDING (queue)")
+                out.append(f"  {spinner}  {line.name:<18} | {line.tgt_locale:<16} | {line.done:>5}/{line.todo:<5} | {el}")
+            else:
+                out.append("     (idle)")
+
+        # PENDING (brief)
+        out.append("PENDING")
         if self._pending_order:
             brief = self._pending_order[: self.pending_brief_lines]
             for lid in brief:
                 line = self._lines[lid]
-                out.append(f"  wait     {line.name:<18} | {line.tgt_locale:<16} | todo={line.todo}")
+                out.append(f"  ... {line.name:<18} | {line.tgt_locale:<16} | todo={line.todo}")
             remain = len(self._pending_order) - len(brief)
             if remain > 0:
-                out.append(f"  ... and {remain} more pending")
+                out.append(f"  ... and {remain} more")
         else:
             out.append("  (none)")
 
-        self.stream.write(_Ansi.home() + _Ansi.clear_screen())
-        self.stream.write("\n".join(out) + "\n")
+        # In-place update (no scrolling)
+        if self._last_render_lines > 0:
+            self._move_up_and_clear(self._last_render_lines)
+
+        text = "\n".join(out) + "\n"
+        self.stream.write(text)
         self.stream.flush()
-
-
+        self._last_render_lines = text.count("\n")
 # =========================================================
 # Public function: translate_files
 # =========================================================
 
 def translate_files(
-        *,
-        jobs: List[TranslateJob],
-        api_key: Optional[str] = None,
-        model: Optional[Union[OpenAIModel, str]] = None,
-        max_workers: int = 4,
-        pending_brief_lines: int = 3,
-        fail_fast: bool = False,
+    *,
+    jobs: List[TranslateJob],
+    api_key: Optional[str] = None,
+    model: Optional[Union[OpenAIModel, str]] = None,
+    max_workers: int = 4,
+    pending_brief_lines: int = 3,
+    fail_fast: bool = False,
 ) -> PoolResult:
     """
     Translate many files concurrently (file-level parallelism).
