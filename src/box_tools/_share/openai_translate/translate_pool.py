@@ -5,7 +5,7 @@ import sys
 import time
 import threading
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Union, Literal, Tuple
+from typing import Dict, List, Optional, Union, Literal, Tuple
 
 from .models import OpenAIModel, load_map
 from .translate_file import translate_from_to, FileProgress, ProgressCallback
@@ -105,32 +105,8 @@ def _count_incremental_todo(source_file_path: str, target_file_path: str) -> int
 
 
 # =========================================================
-# Internal: clean progress panel (TTY)
+# Internal: time utils
 # =========================================================
-
-class _Ansi:
-    ESC = "\033"
-
-    @staticmethod
-    def clear_screen() -> str:
-        return _Ansi.ESC + "[2J" + _Ansi.ESC + "[H"
-
-    @staticmethod
-    def home() -> str:
-        return _Ansi.ESC + "[H"
-
-    @staticmethod
-    def hide_cursor() -> str:
-        return _Ansi.ESC + "[?25l"
-
-    @staticmethod
-    def show_cursor() -> str:
-        return _Ansi.ESC + "[?25h"
-
-    @staticmethod
-    def clear_line() -> str:
-        return _Ansi.ESC + "[2K"
-
 
 def _fmt_hms(seconds: float) -> str:
     s = max(0, int(seconds))
@@ -175,14 +151,18 @@ class _LinearLogger:
       START：worker 开始处理文件
       PROG ：进度推进（节流）
       DONE/ERR：结束（失败带原因摘要）
+
+    关键修复点：
+    - 不要求 _WorkerLine 具备 tgt_locale 字段
+    - logger 自己维护 job_id -> tgt_locale 映射，避免版本不一致导致 TypeError
     """
     def __init__(
-        self,
-        *,
-        total_workers: int,
-        progress_every_keys: int = 40,
-        progress_every_seconds: float = 1.5,
-        stream=None,
+            self,
+            *,
+            total_workers: int,
+            progress_every_keys: int = 40,
+            progress_every_seconds: float = 1.5,
+            stream=None,
     ) -> None:
         self.total_workers = total_workers
         self.progress_every_keys = max(1, int(progress_every_keys))
@@ -199,10 +179,12 @@ class _LinearLogger:
         self._last_print_at: Dict[str, float] = {}
 
         self._line: Dict[str, _WorkerLine] = {}
+        self._tgt_locale: Dict[str, str] = {}  # ✅ fix: store tgt locale here
 
     def init_jobs(self, jobs: List[Tuple[str, TranslateJob, int]]) -> None:
         with self._lock:
             self._line.clear()
+            self._tgt_locale.clear()
             self._worker_for.clear()
             self._free_workers = list(range(1, self.total_workers + 1))
             self._last_done.clear()
@@ -213,17 +195,17 @@ class _LinearLogger:
                 self._line[job_id] = _WorkerLine(
                     job_id=job_id,
                     name=name,
-                    tgt_locale=job.tgt_locale,
                     todo=todo,
                     stage="pending",
                 )
+                self._tgt_locale[job_id] = job.tgt_locale
                 self._last_done[job_id] = 0
                 self._last_print_at[job_id] = self._t0
 
             start_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self._t0))
             self._w(f"[translate_pool] start={start_str} workers={self.total_workers} files={len(jobs)}")
             self._w("[translate_pool] plan (first 8): name | target | todo")
-            for _, job, todo in jobs[:8]:
+            for job_id, job, todo in jobs[:8]:
                 name = job.name or _basename(job.target_file_path)
                 self._w(f"  - {name} | {job.tgt_locale} | todo={todo}")
             remain = len(jobs) - min(8, len(jobs))
@@ -245,6 +227,7 @@ class _LinearLogger:
         with self._lock:
             line = self._line[job_id]
 
+            # keep todo stable: avoid 0/0 caused by early error emits
             if p.total and p.total > 0:
                 line.todo = p.total
             if p.done >= 0:
@@ -281,6 +264,7 @@ class _LinearLogger:
                 return
 
     def on_exception(self, job_id: str, err: str) -> None:
+        """兜底：确保异常也一定输出 ERR 行（带原因摘要）。"""
         with self._lock:
             line = self._line.get(job_id)
             if not line or line.stage in ("done", "error"):
@@ -322,7 +306,7 @@ class _LinearLogger:
         slot = self._worker_for.get(job_id, 0)
         self._last_done[job_id] = max(self._last_done.get(job_id, 0), line.done)
         self._last_print_at[job_id] = _now()
-        self._w(self._fmt_line(slot, "START", line, extra=None))
+        self._w(self._fmt_line(slot, job_id, "START", line, extra=None))
 
     def _maybe_print_progress(self, job_id: str) -> None:
         line = self._line[job_id]
@@ -338,20 +322,21 @@ class _LinearLogger:
         if (line.done > last_done) and (bumped_enough or waited_enough):
             self._last_done[job_id] = line.done
             self._last_print_at[job_id] = now
-            self._w(self._fmt_line(slot, "PROG ", line, extra=None))
+            self._w(self._fmt_line(slot, job_id, "PROG ", line, extra=None))
 
     def _print_done(self, job_id: str, *, ok: bool, err: Optional[str]) -> None:
         line = self._line[job_id]
         slot = self._worker_for.get(job_id, 0)
         tag = "DONE " if ok else "ERR  "
         extra = self._short(err) if err else None
-        self._w(self._fmt_line(slot, tag, line, extra=extra))
+        self._w(self._fmt_line(slot, job_id, tag, line, extra=extra))
 
-    def _fmt_line(self, slot: int, tag: str, line: _WorkerLine, extra: Optional[str]) -> str:
+    def _fmt_line(self, slot: int, job_id: str, tag: str, line: _WorkerLine, extra: Optional[str]) -> str:
         t = _fmt_hms(_now() - self._t0)
         el = _fmt_hms(line.elapsed_s(_now()))
         w = f"W{slot}" if slot else "W?"
-        base = f"[{t}] {w} {tag} {line.name:<18} | {line.tgt_locale:<16} | {line.done:>5}/{line.todo:<5} | {el}"
+        tgt = self._tgt_locale.get(job_id, "")
+        base = f"[{t}] {w} {tag} {line.name:<18} | {tgt:<16} | {line.done:>5}/{line.todo:<5} | {el}"
         if extra:
             return base + f" | {extra}"
         return base
@@ -374,28 +359,17 @@ class _LinearLogger:
 # =========================================================
 
 def translate_files(
-    *,
-    jobs: List[TranslateJob],
-    api_key: Optional[str] = None,
-    model: Optional[Union[OpenAIModel, str]] = None,
-    max_workers: int = 4,
-    pending_brief_lines: int = 3,
-    fail_fast: bool = False,
+        *,
+        jobs: List[TranslateJob],
+        api_key: Optional[str] = None,
+        model: Optional[Union[OpenAIModel, str]] = None,
+        max_workers: int = 4,
+        pending_brief_lines: int = 3,  # kept for backwards compat (unused in linear logger)
+        fail_fast: bool = False,
 ) -> PoolResult:
     """
     Translate many files concurrently (file-level parallelism).
     Within each file, translation remains serial (chunked) inside translate_from_to.
-
-    Args:
-        jobs: list of TranslateJob
-        api_key: OpenAI API key (or env OPENAI_API_KEY)
-        model: model enum or string
-        max_workers: maximum concurrent file translations
-        pending_brief_lines: how many pending items to show in panel
-        fail_fast: if True, stop scheduling new jobs after first failure (running tasks still finish)
-
-    Returns:
-        PoolResult containing per-job results.
     """
     if not jobs:
         return PoolResult(results=[])
@@ -403,7 +377,6 @@ def translate_files(
     max_workers = max(1, int(max_workers))
     max_workers = min(max_workers, len(jobs))
 
-    # Precompute todo counts (used for initial panel + pending list)
     planned: List[Tuple[str, TranslateJob, int]] = []
     for idx, j in enumerate(jobs):
         job_id = f"job{idx+1}"
@@ -413,7 +386,6 @@ def translate_files(
     logger = _LinearLogger(total_workers=max_workers, progress_every_keys=40, progress_every_seconds=1.5)
     logger.init_jobs(planned)
 
-    # ThreadPoolExecutor import locally to keep module import light
     from concurrent.futures import ThreadPoolExecutor, Future, wait, FIRST_COMPLETED
 
     results: Dict[str, JobResult] = {}
@@ -424,17 +396,15 @@ def translate_files(
     for job_id, job, _ in planned:
         tgt = os.path.abspath(job.target_file_path)
         if tgt in seen_targets:
-            raise ValueError(f"duplicate target_file_path detected: {job.target_file_path} (jobs: {seen_targets[tgt]}, {job_id})")
+            raise ValueError(
+                f"duplicate target_file_path detected: {job.target_file_path} "
+                f"(jobs: {seen_targets[tgt]}, {job_id})"
+            )
         seen_targets[tgt] = job_id
 
     pending_ids = [job_id for job_id, _, _ in planned]
     todo_by_id = {job_id: todo for job_id, _, todo in planned}
     job_by_id = {job_id: job for job_id, job, _ in planned}
-
-    def make_progress_cb(job_id: str) -> ProgressCallback:
-        def _cb(p: FileProgress) -> None:
-            logger.apply_progress(job_id, p)
-        return _cb
 
     def run_one(job_id: str) -> None:
         job = job_by_id[job_id]
@@ -443,13 +413,11 @@ def translate_files(
         err: Optional[str] = None
         ok = True
 
-        # Mark running ASAP (so it appears in "running list" immediately)
         logger.mark_running(job_id)
 
         try:
             def cb(p: FileProgress) -> None:
                 nonlocal translated
-                # keep a best-effort translated count
                 if p.stage in ("progress", "done"):
                     translated = max(translated, int(p.done))
                 logger.apply_progress(job_id, p)
@@ -469,8 +437,8 @@ def translate_files(
         except Exception as e:
             ok = False
             err = str(e)
+            # 兜底：确保线性日志一定打印失败原因（即使 translate_from_to 没 emit）
             logger.on_exception(job_id, err)
-            # translate_from_to already emitted error progress; ensure translated stays
         finally:
             finished = _now()
             res = JobResult(
@@ -485,7 +453,6 @@ def translate_files(
             with lock:
                 results[job_id] = res
 
-    # Scheduling with "dynamic refill": keep at most max_workers running.
     in_flight: Dict[Future[None], str] = {}
     stop_scheduling = False
 
@@ -500,7 +467,6 @@ def translate_files(
         in_flight[fut] = jid
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        # Fill initial workers
         for _ in range(max_workers):
             submit_next(ex)
 
@@ -508,34 +474,38 @@ def translate_files(
             done_set, _ = wait(list(in_flight.keys()), return_when=FIRST_COMPLETED)
             for fut in done_set:
                 jid = in_flight.pop(fut)
-                # Bubble exception if any (it should already be captured in JobResult)
                 try:
                     fut.result()
                 except Exception:
-                    # should not happen because run_one catches; still guard.
+                    # run_one catches, but guard anyway
                     pass
 
-                # If fail_fast and this job failed => stop scheduling new ones
                 if fail_fast:
                     r = results.get(jid)
                     if r is not None and (not r.ok):
                         stop_scheduling = True
 
-                # Refill one slot
                 submit_next(ex)
 
-            # If fail_fast triggered: drain in-flight (no new submits)
             if stop_scheduling and pending_ids:
                 pending_ids.clear()
 
-    # Preserve original job order in final summary
     ordered_results: List[JobResult] = []
     for job_id, job, _ in planned:
         r = results.get(job_id)
         if r is None:
-            # shouldn't happen; create a placeholder failure
             now = _now()
-            ordered_results.append(JobResult(job=job, ok=False, todo=todo_by_id.get(job_id, 0), translated=0, started_at=now, finished_at=now, error="not executed"))
+            ordered_results.append(
+                JobResult(
+                    job=job,
+                    ok=False,
+                    todo=todo_by_id.get(job_id, 0),
+                    translated=0,
+                    started_at=now,
+                    finished_at=now,
+                    error="not executed",
+                )
+            )
         else:
             ordered_results.append(r)
 
