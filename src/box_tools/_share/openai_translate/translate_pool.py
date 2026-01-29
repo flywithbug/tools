@@ -31,7 +31,7 @@ class TranslateJob:
 
     # optional overrides
     prompt_en: Optional[str] = None
-    batch_size: int = 50
+    batch_size: int = 40
     pre_sort: bool = True
 
     # optional UI label (defaults to basename(target_file_path))
@@ -154,6 +154,7 @@ def _basename(path: str) -> str:
 class _WorkerLine:
     job_id: str
     name: str
+    tgt_locale: str
     todo: int
     done: int = 0
     stage: Literal["pending", "running", "done", "error"] = "pending"
@@ -178,12 +179,12 @@ class _ProgressPanel:
     Refreshes in-place (TTY only).
     """
     def __init__(
-        self,
-        *,
-        total_workers: int,
-        pending_brief_lines: int = 3,
-        refresh_min_interval_s: float = 0.08,
-        stream = None,
+            self,
+            *,
+            total_workers: int,
+            pending_brief_lines: int = 3,
+            refresh_min_interval_s: float = 0.08,
+            stream = None,
     ) -> None:
         self.total_workers = total_workers
         self.pending_brief_lines = max(0, int(pending_brief_lines))
@@ -218,7 +219,7 @@ class _ProgressPanel:
 
             for job_id, job, todo in jobs:
                 name = job.name or _basename(job.target_file_path)
-                self._lines[job_id] = _WorkerLine(job_id=job_id, name=name, todo=todo, stage="pending")
+                self._lines[job_id] = _WorkerLine(job_id=job_id, name=name, tgt_locale=job.tgt_locale, todo=todo, stage="pending")
                 self._pending_order.append(job_id)
 
             if self._enabled:
@@ -302,7 +303,7 @@ class _ProgressPanel:
             for r in results:
                 status = "OK" if r.ok else "FAIL"
                 name = r.job.name or _basename(r.job.target_file_path)
-                msg = f"{status:<4} {name} {r.translated}/{r.todo} elapsed={_fmt_hms(r.elapsed_s)}"
+                msg = f"{status:<4} {name} ({r.job.tgt_locale}) {r.translated}/{r.todo} elapsed={_fmt_hms(r.elapsed_s)}"
                 if r.error:
                     msg += f" error={r.error}"
                 self.stream.write(msg + "\n")
@@ -331,6 +332,7 @@ class _ProgressPanel:
             return
         self._last_render_at = now
 
+        started_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self._started_at))
         elapsed = _fmt_hms(now - self._started_at)
         total_files = len(self._lines)
         done_files = sum(1 for lid in self._done_order if self._lines[lid].stage in ("done", "error"))
@@ -338,44 +340,39 @@ class _ProgressPanel:
         pending_files = len(self._pending_order)
 
         out: List[str] = []
-        out.append(f"workers={self.total_workers} | files={total_files} | done={done_files} running={running_files} pending={pending_files} | elapsed={elapsed}")
-
-        # Done section
+        out.append(f"workers={self.total_workers} | files={total_files} | done={done_files} running={running_files} pending={pending_files} | start={started_str} | elapsed={elapsed}")
+        out.append("")
+        out.append("DONE (completed first)")
         if self._done_order:
-            out.append("✅ 已完成")
-            for lid in self._done_order[: max(1, min(10, len(self._done_order)))]:
+            for lid in self._done_order[: max(1, min(12, len(self._done_order)))]:
                 line = self._lines[lid]
-                tag = "OK" if line.stage == "done" else "ERR"
+                status = "OK " if line.stage == "done" else "ERR"
                 el = _fmt_hms(line.elapsed_s(now))
-                out.append(f"  {tag:<3} {line.name} {line.done}/{line.todo} {el}")
+                out.append(f"  {status} {line.name:<18} | {line.tgt_locale:<16} | {line.done:>5}/{line.todo:<5} | {el}")
         else:
-            out.append("✅ 已完成")
-            out.append("  (无)")
-
-        # Running section
-        out.append("🔄 翻译中")
+            out.append("  (none)")
+        out.append("")
+        out.append("RUNNING (1 line per worker, auto-refresh)")
         if self._running_order:
             for lid in self._running_order:
                 line = self._lines[lid]
                 el = _fmt_hms(line.elapsed_s(now))
-                out.append(f"  loading  {line.name}  {line.done}/{line.todo}  {el}")
+                out.append(f"  loading  {line.name:<18} | {line.tgt_locale:<16} | {line.done:>5}/{line.todo:<5} | {el}")
         else:
-            out.append("  (无)")
-
-        # Pending section
-        out.append("⏳ 待翻译")
+            out.append("  (none)")
+        out.append("")
+        out.append("PENDING (queue)")
         if self._pending_order:
             brief = self._pending_order[: self.pending_brief_lines]
             for lid in brief:
                 line = self._lines[lid]
-                out.append(f"  wait     {line.name}  todo={line.todo}")
+                out.append(f"  wait     {line.name:<18} | {line.tgt_locale:<16} | todo={line.todo}")
             remain = len(self._pending_order) - len(brief)
             if remain > 0:
-                out.append(f"  … 还有 {remain} 个等待中")
+                out.append(f"  ... and {remain} more pending")
         else:
-            out.append("  (无)")
+            out.append("  (none)")
 
-        # Draw
         self.stream.write(_Ansi.home() + _Ansi.clear_screen())
         self.stream.write("\n".join(out) + "\n")
         self.stream.flush()
@@ -386,13 +383,13 @@ class _ProgressPanel:
 # =========================================================
 
 def translate_files(
-    *,
-    jobs: List[TranslateJob],
-    api_key: Optional[str] = None,
-    model: Optional[Union[OpenAIModel, str]] = None,
-    max_workers: int = 4,
-    pending_brief_lines: int = 3,
-    fail_fast: bool = False,
+        *,
+        jobs: List[TranslateJob],
+        api_key: Optional[str] = None,
+        model: Optional[Union[OpenAIModel, str]] = None,
+        max_workers: int = 4,
+        pending_brief_lines: int = 3,
+        fail_fast: bool = False,
 ) -> PoolResult:
     """
     Translate many files concurrently (file-level parallelism).
