@@ -349,7 +349,7 @@ def translate_list(
                     base_system_prompt = base_system_prompt + stricter
                     attempt += 1
                     continue
-                print('translations:', translations)
+                # print('translations:', translations)
                 translations = _finalize_placeholders_list(
                     src_items,
                     translations,
