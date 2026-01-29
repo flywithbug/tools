@@ -157,7 +157,7 @@ def translate_from_to(
             translations = translate_list(
                 prompt_en=prompt_en,
                 src_items=texts,
-                src_lang=src_locale,
+                src_locale=src_locale,
                 tgt_locale=tgt_locale,
                 model=m,
                 api_key=api_key,

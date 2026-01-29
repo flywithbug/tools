@@ -160,10 +160,10 @@ def _finalize_placeholders_list(
 # =========================================================
 # Prompt & payload (List[str] version)
 # =========================================================
-def _build_system_prompt_list(*, src_lang: str, tgt_locale: str, prompt_en: Optional[str]) -> str:
+def _build_system_prompt_list(*, src_locale: str, tgt_locale: str, prompt_en: Optional[str]) -> str:
     base = (
         "You are a professional localization translator for mobile UI.\n"
-        f"Translate from {src_lang} to {tgt_locale}.\n\n"
+        f"Translate from {src_locale} to {tgt_locale}.\n\n"
 
         "OUTPUT (STRICT):\n"
         '- Return ONLY valid JSON: {"translations":[...]}.\n'
@@ -271,7 +271,7 @@ def translate_list(
         *,
         prompt_en: Optional[str],
         src_items: List[str],
-        src_lang: str,
+        src_locale: str,
         tgt_locale: str,
         model: Optional[Union[OpenAIModel, str]] = None,
         api_key: Optional[str] = None,
@@ -300,7 +300,7 @@ def translate_list(
         model_name = str(model).strip() or OpenAIModel.GPT_4O.value
 
     base_system_prompt = _build_system_prompt_list(
-        src_lang=src_lang,
+        src_locale=src_locale,
         tgt_locale=tgt_locale,
         prompt_en=prompt_en,
     )
@@ -353,7 +353,7 @@ def translate_list(
                     base_system_prompt = base_system_prompt + stricter
                     attempt += 1
                     continue
-
+                print('translations:', translations)
                 translations = _finalize_placeholders_list(
                     src_items,
                     translations,
