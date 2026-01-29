@@ -154,7 +154,6 @@ def _basename(path: str) -> str:
 class _WorkerLine:
     job_id: str
     name: str
-    tgt_locale: str
     todo: int
     done: int = 0
     stage: Literal["pending", "running", "done", "error"] = "pending"
@@ -170,164 +169,130 @@ class _WorkerLine:
         return max(0.0, end - self.started_at)
 
 
-class _ProgressPanel:
+class _LinearLogger:
     """
-    Best-practice terminal progress display:
-
-    - Preflight (printed once):
-        shows worker count and a compact list of planned jobs (name | tgt_locale | todo).
-    - Live panel (in-place refresh, no scrolling):
-        DONE (top, newest first, capped)
-        RUNNING (fixed N lines: 1 per worker, refreshed)
-        PENDING (bottom, brief + remaining count)
-
-    Implementation detail:
-    - Uses ANSI "move cursor up + clear line" based on the previous render line count,
-      rather than clearing the whole screen (less flicker, more stable).
+    线性日志（追加写入）进度输出（无面板重绘）：
+      START：worker 开始处理文件
+      PROG ：进度推进（节流）
+      DONE/ERR：结束（失败带原因摘要）
     """
     def __init__(
         self,
         *,
         total_workers: int,
-        pending_brief_lines: int = 3,
-        done_brief_lines: int = 8,
-        refresh_min_interval_s: float = 0.10,
+        progress_every_keys: int = 40,
+        progress_every_seconds: float = 1.5,
         stream=None,
     ) -> None:
         self.total_workers = total_workers
-        self.pending_brief_lines = max(0, int(pending_brief_lines))
-        self.done_brief_lines = max(0, int(done_brief_lines))
-        self.refresh_min_interval_s = max(0.03, float(refresh_min_interval_s))
+        self.progress_every_keys = max(1, int(progress_every_keys))
+        self.progress_every_seconds = max(0.1, float(progress_every_seconds))
         self.stream = stream or sys.stdout
 
         self._lock = threading.Lock()
-        self._started_at = _now()
-        self._last_render_at = 0.0
-        self._enabled = bool(getattr(self.stream, "isatty", lambda: False)())
+        self._t0 = _now()
 
-        self._lines: Dict[str, _WorkerLine] = {}
-        self._done_order: List[str] = []       # newest first
-        self._running_order: List[str] = []    # stable insertion order
-        self._pending_order: List[str] = []    # stable queue order
+        self._worker_for: Dict[str, int] = {}
+        self._free_workers: List[int] = list(range(1, total_workers + 1))
 
-        self._cursor_hidden = False
-        self._last_render_lines = 0
-        self._spinner_i = 0
+        self._last_done: Dict[str, int] = {}
+        self._last_print_at: Dict[str, float] = {}
 
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
+        self._line: Dict[str, _WorkerLine] = {}
 
     def init_jobs(self, jobs: List[Tuple[str, TranslateJob, int]]) -> None:
-        """
-        jobs: list of (job_id, job, todo)
-        """
         with self._lock:
-            self._lines.clear()
-            self._done_order.clear()
-            self._running_order.clear()
-            self._pending_order.clear()
-            self._last_render_lines = 0
-            self._spinner_i = 0
+            self._line.clear()
+            self._worker_for.clear()
+            self._free_workers = list(range(1, self.total_workers + 1))
+            self._last_done.clear()
+            self._last_print_at.clear()
 
             for job_id, job, todo in jobs:
                 name = job.name or _basename(job.target_file_path)
-                self._lines[job_id] = _WorkerLine(
+                self._line[job_id] = _WorkerLine(
                     job_id=job_id,
                     name=name,
                     tgt_locale=job.tgt_locale,
                     todo=todo,
                     stage="pending",
                 )
-                self._pending_order.append(job_id)
+                self._last_done[job_id] = 0
+                self._last_print_at[job_id] = self._t0
 
-            if not self._enabled:
-                self.stream.write(
-                    f"[translate_pool] workers={self.total_workers} files={len(jobs)} start={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._started_at))}\n"
-                )
-                self.stream.flush()
-                return
-
-            # Preflight summary (printed once; does not refresh)
-            self._hide_cursor()
-            started_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self._started_at))
-            self.stream.write(f"translate_pool preflight | workers={self.total_workers} | files={len(jobs)} | start={started_str}\n")
-            brief = jobs[: min(len(jobs), max(6, self.pending_brief_lines))]
-            for job_id, job, todo in brief:
+            start_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self._t0))
+            self._w(f"[translate_pool] start={start_str} workers={self.total_workers} files={len(jobs)}")
+            self._w("[translate_pool] plan (first 8): name | target | todo")
+            for _, job, todo in jobs[:8]:
                 name = job.name or _basename(job.target_file_path)
-                self.stream.write(f"  - {name:<18} | {job.tgt_locale:<16} | todo={todo}\n")
-            remain = len(jobs) - len(brief)
+                self._w(f"  - {name} | {job.tgt_locale} | todo={todo}")
+            remain = len(jobs) - min(8, len(jobs))
             if remain > 0:
-                self.stream.write(f"  ... and {remain} more\n")
-            self.stream.write("\n")  # spacing before live panel
-            self.stream.flush()
-
-            # First live render
-            self._render(force=True)
+                self._w(f"  ... +{remain} more")
+            self._w("")
 
     def mark_running(self, job_id: str) -> None:
         with self._lock:
-            line = self._lines[job_id]
+            line = self._line[job_id]
+            if job_id not in self._worker_for:
+                slot = self._free_workers.pop(0) if self._free_workers else 0
+                self._worker_for[job_id] = slot
             line.stage = "running"
             line.started_at = line.started_at or _now()
-            if job_id in self._pending_order:
-                self._pending_order.remove(job_id)
-            if job_id not in self._running_order:
-                self._running_order.append(job_id)
-            self._render()
+            self._print_start(job_id)
 
     def apply_progress(self, job_id: str, p: FileProgress) -> None:
         with self._lock:
-            line = self._lines[job_id]
+            line = self._line[job_id]
 
-            # IMPORTANT: never allow total to become 0/0 because of an early error emit.
             if p.total and p.total > 0:
                 line.todo = p.total
             if p.done >= 0:
                 line.done = p.done
-
-            line.message = p.message
+            if p.message:
+                line.message = p.message
 
             if p.stage == "start":
+                if job_id not in self._worker_for:
+                    slot = self._free_workers.pop(0) if self._free_workers else 0
+                    self._worker_for[job_id] = slot
                 line.stage = "running"
                 line.started_at = line.started_at or _now()
-                if job_id in self._pending_order:
-                    self._pending_order.remove(job_id)
-                if job_id not in self._running_order:
-                    self._running_order.append(job_id)
+                self._print_start(job_id)
+                return
 
-            elif p.stage == "done":
+            if p.stage == "progress":
+                self._maybe_print_progress(job_id)
+                return
+
+            if p.stage == "done":
                 line.stage = "done"
                 line.finished_at = _now()
-                if job_id in self._running_order:
-                    self._running_order.remove(job_id)
-                if job_id in self._pending_order:
-                    self._pending_order.remove(job_id)
-                if job_id in self._done_order:
-                    self._done_order.remove(job_id)
-                self._done_order.insert(0, job_id)
+                self._print_done(job_id, ok=True, err=None)
+                self._release_worker(job_id)
+                return
 
-            elif p.stage == "error":
+            if p.stage == "error":
                 line.stage = "error"
-                line.error = p.message or "error"
                 line.finished_at = _now()
-                if job_id in self._running_order:
-                    self._running_order.remove(job_id)
-                if job_id in self._pending_order:
-                    self._pending_order.remove(job_id)
-                if job_id in self._done_order:
-                    self._done_order.remove(job_id)
-                self._done_order.insert(0, job_id)
+                line.error = p.message or "error"
+                self._print_done(job_id, ok=False, err=line.error)
+                self._release_worker(job_id)
+                return
 
-            self._render()
+    def on_exception(self, job_id: str, err: str) -> None:
+        with self._lock:
+            line = self._line.get(job_id)
+            if not line or line.stage in ("done", "error"):
+                return
+            line.stage = "error"
+            line.finished_at = _now()
+            line.error = err or "error"
+            self._print_done(job_id, ok=False, err=line.error)
+            self._release_worker(job_id)
 
     def finalize(self, results: List[JobResult]) -> None:
         with self._lock:
-            if self._enabled:
-                self._render(force=True)
-                self._show_cursor()
-
-            # Always print a final summary
             ok = sum(1 for r in results if r.ok)
             fail = len(results) - ok
             total_elapsed = 0.0
@@ -336,107 +301,74 @@ class _ProgressPanel:
                 end = max(r.finished_at for r in results)
                 total_elapsed = max(0.0, end - start)
 
-            self.stream.write("\n")
-            self.stream.write(f"[translate_pool] summary: ok={ok} fail={fail} total_elapsed={_fmt_hms(total_elapsed)}\n")
+            self._w("")
+            self._w(f"[translate_pool] summary ok={ok} fail={fail} total_elapsed={_fmt_hms(total_elapsed)}")
             for r in results:
                 status = "OK" if r.ok else "FAIL"
                 name = r.job.name or _basename(r.job.target_file_path)
-                msg = f"{status:<4} {name:<18} | {r.job.tgt_locale:<16} | {r.translated:>5}/{r.todo:<5} | {_fmt_hms(r.elapsed_s)}"
+                msg = f"  {status:<4} {name:<18} | {r.job.tgt_locale:<16} | {r.translated:>5}/{r.todo:<5} | {_fmt_hms(r.elapsed_s)}"
                 if r.error:
-                    msg += f" | error={r.error}"
-                self.stream.write(msg + "\n")
-            self.stream.flush()
+                    msg += f" | error={self._short(r.error)}"
+                self._w(msg)
 
-    def _hide_cursor(self) -> None:
-        if self._cursor_hidden or not self._enabled:
-            return
-        self.stream.write(_Ansi.hide_cursor())
-        self.stream.flush()
-        self._cursor_hidden = True
+    def _release_worker(self, job_id: str) -> None:
+        slot = self._worker_for.pop(job_id, None)
+        if slot and slot not in self._free_workers:
+            self._free_workers.append(slot)
+            self._free_workers.sort()
 
-    def _show_cursor(self) -> None:
-        if (not self._cursor_hidden) or (not self._enabled):
-            return
-        self.stream.write(_Ansi.show_cursor())
-        self.stream.flush()
-        self._cursor_hidden = False
+    def _print_start(self, job_id: str) -> None:
+        line = self._line[job_id]
+        slot = self._worker_for.get(job_id, 0)
+        self._last_done[job_id] = max(self._last_done.get(job_id, 0), line.done)
+        self._last_print_at[job_id] = _now()
+        self._w(self._fmt_line(slot, "START", line, extra=None))
 
-    def _move_up_and_clear(self, n_lines: int) -> None:
-        if n_lines <= 0:
-            return
-        # move cursor up n lines, then clear each line
-        self.stream.write(f"{_Ansi.ESC}[{n_lines}A")
-        for _ in range(n_lines):
-            self.stream.write(_Ansi.clear_line() + "\n")
-        # move back up again to the first cleared line
-        self.stream.write(f"{_Ansi.ESC}[{n_lines}A")
-
-    def _render(self, force: bool = False) -> None:
-        if not self._enabled:
-            return
-
+    def _maybe_print_progress(self, job_id: str) -> None:
+        line = self._line[job_id]
+        slot = self._worker_for.get(job_id, 0)
         now = _now()
-        if (not force) and (now - self._last_render_at) < self.refresh_min_interval_s:
-            return
-        self._last_render_at = now
 
-        self._spinner_i = (self._spinner_i + 1) % 4
-        spinner = ["⠋", "⠙", "⠹", "⠸"][self._spinner_i]
+        last_done = self._last_done.get(job_id, 0)
+        last_at = self._last_print_at.get(job_id, self._t0)
 
-        elapsed = _fmt_hms(now - self._started_at)
-        started_str = time.strftime("%H:%M:%S", time.localtime(self._started_at))
+        bumped_enough = (line.done - last_done) >= self.progress_every_keys
+        waited_enough = (now - last_at) >= self.progress_every_seconds
 
-        done_files = len(self._done_order)
-        running_files = len(self._running_order)
-        pending_files = len(self._pending_order)
+        if (line.done > last_done) and (bumped_enough or waited_enough):
+            self._last_done[job_id] = line.done
+            self._last_print_at[job_id] = now
+            self._w(self._fmt_line(slot, "PROG ", line, extra=None))
 
-        out: List[str] = []
-        out.append(f"workers={self.total_workers} | done={done_files} running={running_files} pending={pending_files} | start={started_str} | elapsed={elapsed}")
+    def _print_done(self, job_id: str, *, ok: bool, err: Optional[str]) -> None:
+        line = self._line[job_id]
+        slot = self._worker_for.get(job_id, 0)
+        tag = "DONE " if ok else "ERR  "
+        extra = self._short(err) if err else None
+        self._w(self._fmt_line(slot, tag, line, extra=extra))
 
-        # DONE
-        out.append("DONE")
-        if self._done_order:
-            for lid in self._done_order[: self.done_brief_lines]:
-                line = self._lines[lid]
-                status = "OK " if line.stage == "done" else "ERR"
-                el = _fmt_hms(line.elapsed_s(now))
-                out.append(f"  {status} {line.name:<18} | {line.tgt_locale:<16} | {line.done:>5}/{line.todo:<5} | {el}")
-        else:
-            out.append("  (none)")
+    def _fmt_line(self, slot: int, tag: str, line: _WorkerLine, extra: Optional[str]) -> str:
+        t = _fmt_hms(_now() - self._t0)
+        el = _fmt_hms(line.elapsed_s(_now()))
+        w = f"W{slot}" if slot else "W?"
+        base = f"[{t}] {w} {tag} {line.name:<18} | {line.tgt_locale:<16} | {line.done:>5}/{line.todo:<5} | {el}"
+        if extra:
+            return base + f" | {extra}"
+        return base
 
-        # RUNNING (fixed N lines)
-        out.append("RUNNING")
-        running_ids = list(self._running_order)[: self.total_workers]
-        for slot in range(self.total_workers):
-            if slot < len(running_ids):
-                lid = running_ids[slot]
-                line = self._lines[lid]
-                el = _fmt_hms(line.elapsed_s(now))
-                out.append(f"  {spinner}  {line.name:<18} | {line.tgt_locale:<16} | {line.done:>5}/{line.todo:<5} | {el}")
-            else:
-                out.append("     (idle)")
+    def _short(self, s: Optional[str]) -> str:
+        if not s:
+            return ""
+        s2 = str(s).replace("\n", " ").strip()
+        if len(s2) > 140:
+            return s2[:137] + "..."
+        return s2
 
-        # PENDING (brief)
-        out.append("PENDING")
-        if self._pending_order:
-            brief = self._pending_order[: self.pending_brief_lines]
-            for lid in brief:
-                line = self._lines[lid]
-                out.append(f"  ... {line.name:<18} | {line.tgt_locale:<16} | todo={line.todo}")
-            remain = len(self._pending_order) - len(brief)
-            if remain > 0:
-                out.append(f"  ... and {remain} more")
-        else:
-            out.append("  (none)")
-
-        # In-place update (no scrolling)
-        if self._last_render_lines > 0:
-            self._move_up_and_clear(self._last_render_lines)
-
-        text = "\n".join(out) + "\n"
-        self.stream.write(text)
+    def _w(self, s: str) -> None:
+        self.stream.write(s + "\n")
         self.stream.flush()
-        self._last_render_lines = text.count("\n")
+
+
 # =========================================================
 # Public function: translate_files
 # =========================================================
@@ -478,8 +410,8 @@ def translate_files(
         todo = _count_incremental_todo(j.source_file_path, j.target_file_path)
         planned.append((job_id, j, todo))
 
-    panel = _ProgressPanel(total_workers=max_workers, pending_brief_lines=pending_brief_lines)
-    panel.init_jobs(planned)
+    logger = _LinearLogger(total_workers=max_workers, progress_every_keys=40, progress_every_seconds=1.5)
+    logger.init_jobs(planned)
 
     # ThreadPoolExecutor import locally to keep module import light
     from concurrent.futures import ThreadPoolExecutor, Future, wait, FIRST_COMPLETED
@@ -501,7 +433,7 @@ def translate_files(
 
     def make_progress_cb(job_id: str) -> ProgressCallback:
         def _cb(p: FileProgress) -> None:
-            panel.apply_progress(job_id, p)
+            logger.apply_progress(job_id, p)
         return _cb
 
     def run_one(job_id: str) -> None:
@@ -512,7 +444,7 @@ def translate_files(
         ok = True
 
         # Mark running ASAP (so it appears in "running list" immediately)
-        panel.mark_running(job_id)
+        logger.mark_running(job_id)
 
         try:
             def cb(p: FileProgress) -> None:
@@ -520,7 +452,7 @@ def translate_files(
                 # keep a best-effort translated count
                 if p.stage in ("progress", "done"):
                     translated = max(translated, int(p.done))
-                panel.apply_progress(job_id, p)
+                logger.apply_progress(job_id, p)
 
             translate_from_to(
                 source_file_path=job.source_file_path,
@@ -537,6 +469,7 @@ def translate_files(
         except Exception as e:
             ok = False
             err = str(e)
+            logger.on_exception(job_id, err)
             # translate_from_to already emitted error progress; ensure translated stays
         finally:
             finished = _now()
@@ -606,5 +539,5 @@ def translate_files(
         else:
             ordered_results.append(r)
 
-    panel.finalize(ordered_results)
+    logger.finalize(ordered_results)
     return PoolResult(results=ordered_results)
