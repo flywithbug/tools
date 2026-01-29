@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import os
+from pathlib import Path
+import sys
 
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple, Union, Literal
@@ -27,6 +29,33 @@ class FileProgress:
 
 
 ProgressCallback = Callable[[FileProgress], None]
+
+
+def _supports_osc8() -> bool:
+    # 非 TTY（比如重定向到文件 / CI）就别输出控制符，避免乱码
+    if not sys.stdout.isatty():
+        return False
+
+    # 一些常见终端/IDE 环境信号（覆盖 VS Code、Windows Terminal、通用 xterm 系）
+    if os.environ.get("VSCODE_PID") or os.environ.get("WT_SESSION"):
+        return True
+
+    term = os.environ.get("TERM", "")
+    return any(x in term for x in ("xterm", "screen", "tmux", "vt100", "rxvt", "alacritty", "kitty"))
+
+
+def _osc8_link(text: str, target: str) -> str:
+    esc = "\033"
+    return f"{esc}]8;;{target}\a{text}{esc}]8;;\a"
+
+
+def _file_hyperlink_display(path: str) -> str:
+    name = os.path.basename(path)
+    if not _supports_osc8():
+        return name
+    uri = Path(path).resolve().as_uri()  # file:///Users/...
+    return _osc8_link(name, uri)
+
 
 
 def _one_line(s: str) -> str:
@@ -108,7 +137,7 @@ def translate_from_to(
     def emit(stage: ProgressStage, total: int, done: int, message: Optional[str] = None) -> None:
         if progress:
             progress(FileProgress(
-                file=target_file_path,
+                file=_file_hyperlink_display(target_file_path),  # ✅ 显示为文件名，点击打开完整路径
                 stage=stage,
                 total=total,
                 done=done,
