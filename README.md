@@ -23,6 +23,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
   - [`box_ai_chat`](#box_tools-ai-chat-tool)
 - [ai/file](#ai-file)
   - [`box_ai_file`](#box_tools-ai-file-tool)
+- [ai/files](#ai-files)
+  - [`box_ai_files`](#box_tools-ai-files-tool)
 - [ai/translate](#ai-translate)
   - [`box_ai_translate`](#box_tools-ai-translate-tool)
 - [flutter/pubspec](#flutter-pubspec)
@@ -51,6 +53,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### ai/file
 
 - **[`box_ai_file`](#box_tools-ai-file-tool)**：交互式多语言翻译：选择源语言/目标语言后输入文本，AI 实时翻译（支持中途切换）（[README.md](src/box_tools/ai/file/README.md)）
+
+### ai/files
+
+- **[`box_ai_files`](#box_tools-ai-files-tool)**：AI 多文件翻译测试工具：读取 YAML 配置，检查 i18nDir 与源语言文件，并将 <source_locale.code>.json 翻译为 target_locales 下的 <code>.json（多文件并发）。（[README.md](src/box_tools/ai/files/README.md)）
 
 ### ai/translate
 
@@ -89,6 +95,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### ai/file
 
 - **box_ai_file**：[README.md](src/box_tools/ai/file/README.md)
+
+### ai/files
+
+- **box_ai_files**：[README.md](src/box_tools/ai/files/README.md)
 
 ### ai/translate
 
@@ -237,6 +247,44 @@ box_ai_file --in Base.lproj/Localizable.strings --out zh-Hant.lproj/Localizable.
 **文档**
 
 [README.md](src/box_tools/ai/file/README.md)
+
+---
+
+<a id="ai-files"></a>
+
+## ai/files
+
+<a id="box_tools-ai-files-tool"></a>
+
+### box_ai_files
+
+**简介**：AI 多文件翻译测试工具：读取 YAML 配置，检查 i18nDir 与源语言文件，并将 <source_locale.code>.json 翻译为 target_locales 下的 <code>.json（多文件并发）。
+
+**命令**：`box_ai_files`
+
+**用法**
+
+```bash
+box_ai_files
+box_ai_files doctor
+box_ai_files translate
+box_ai_files --config slang_i18n.yaml
+box_ai_files translate --max-workers 4
+```
+
+**参数说明**
+
+- `--config <path>`：配置文件路径（默认 slang_i18n.yaml）
+- `--max-workers <n>`：覆盖配置 maxWorkers（0=自动）
+
+**示例**
+
+- `box_ai_files doctor`：检查 i18nDir 与源语言文件是否存在
+- `box_ai_files translate --max-workers 6`：以 6 并发翻译所有目标语言
+
+**文档**
+
+[README.md](src/box_tools/ai/files/README.md)
 
 ---
 
