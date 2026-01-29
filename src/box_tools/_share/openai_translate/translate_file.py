@@ -120,7 +120,7 @@ def translate_from_to(
         api_key: Optional[str] = None,
         prompt_en: Optional[str] = None,
         progress: Optional[ProgressCallback] = None,
-        batch_size: int = 40,
+        batch_size: int = 50,
         pre_sort: bool = True,
 ) -> None:
 

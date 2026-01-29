@@ -8,6 +8,8 @@ from .translate_file import translate_from_to
 from .models import OpenAIModel
 
 from .translate_list import translate_list
+from .translate_pool import translate_files
+
 
 __all__ = [
     'translate_flat_dict',
@@ -16,5 +18,6 @@ __all__ = [
     'OpenAIModel',
     'OpenAIConfigError',
     'resolve_api_key',
-    'translate_list'
+    'translate_list',
+    'translate_files'
 ]
