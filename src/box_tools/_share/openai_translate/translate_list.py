@@ -60,7 +60,7 @@ _PLACEHOLDER_RE: Pattern[str] = re.compile(
     r"|\$\{\s*[A-Za-z0-9_.-]+\s*\}"         # ${var}
     r"|%\{\s*[A-Za-z0-9_.-]+\s*\}"          # %{var}
     r"|%\(\s*[A-Za-z0-9_.-]+\s*\)[a-zA-Z]"  # %(name)s
-    r"|%(?:\d+\$)?[#0\- +']*\d*(?:\.\d+)?[a-zA-Z@]"  # %1$@, %d, %.2f, %@ ...
+    r"|(?<!\d)%(?!\s*[A-Za-z])(?:\d+\$)?[#0\-+']*\d*(?:\.\d+)?[a-zA-Z@]"    # %1$@, %d, %.2f, %@ ...
     r"|%%"                                   # %%
     r")"
 )
@@ -140,19 +140,10 @@ def _finalize_placeholders_list(
 ) -> List[str]:
     finalized: List[str] = []
     for src_text, tgt_text in zip(src_items, out_items):
-        src_ph = _extract_placeholders(src_text)
-
-        # ✅ 最关键：源文本没有占位符 => 占位符系统不应介入、更不应清空
-        if not src_ph:
-            finalized.append(tgt_text)
-            continue
-
-        # ✅ 只有真的存在占位符时，才做严格兼容校验
         if _placeholders_compatible(src_text, tgt_text):
             finalized.append(tgt_text)
             continue
 
-        # mismatch：按你原逻辑兜底
         if fallback_safe_to_source and (_is_url_only(src_text) or _is_placeholder_only(src_text)):
             finalized.append(src_text)
         else:
@@ -178,6 +169,7 @@ def _build_system_prompt_list(*, src_locale: str, tgt_locale: str, prompt_en: Op
         "- Strings may contain parameters like {{name}}; keep them intact.\n"
         f"- Preserve ALL placeholders/format tokens exactly as-is (e.g., {_PLACEHOLDER_EXAMPLES}).\n"
         "- Preserve URLs and explicit brand/proper nouns verbatim.\n\n"
+        "- Insert a single space between numbers/percentages and adjacent Latin words/abbreviations."
 
         "ABBREVIATIONS & TERMS:\n"
         "- If the English source contains abbreviations, use the appropriate abbreviations in the target language.\n"
@@ -351,8 +343,9 @@ def translate_list(
                         "\nCRITICAL PLACEHOLDER RULE:\n"
                         "- Placeholders MUST be preserved EXACTLY.\n"
                         "- Do NOT add, remove, rename, reorder, or translate placeholders.\n"
-                        '- If you cannot keep placeholders exactly, output "" for that item.\n'
+                        "- If placeholders are uncertain, return the original placeholder text unchanged.\n"
                     )
+
                     base_system_prompt = base_system_prompt + stricter
                     attempt += 1
                     continue
