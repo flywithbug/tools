@@ -138,18 +138,21 @@ def _finalize_placeholders_list(
         *,
         fallback_safe_to_source: bool,
 ) -> List[str]:
-    """
-    Ensure placeholders are compatible.
-    If still mismatching:
-      - fallback to "" (recommended) OR
-      - fallback to source only for "safe" items (URL-only / placeholder-only).
-    """
     finalized: List[str] = []
     for src_text, tgt_text in zip(src_items, out_items):
+        src_ph = _extract_placeholders(src_text)
+
+        # ✅ 最关键：源文本没有占位符 => 占位符系统不应介入、更不应清空
+        if not src_ph:
+            finalized.append(tgt_text)
+            continue
+
+        # ✅ 只有真的存在占位符时，才做严格兼容校验
         if _placeholders_compatible(src_text, tgt_text):
             finalized.append(tgt_text)
             continue
 
+        # mismatch：按你原逻辑兜底
         if fallback_safe_to_source and (_is_url_only(src_text) or _is_placeholder_only(src_text)):
             finalized.append(src_text)
         else:
