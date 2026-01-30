@@ -183,11 +183,11 @@ def _render_translation(
 
     if console is None or not _RICH_AVAILABLE:
         print(translated)
-        print(f"(耗时 {elapsed_s:.2f}s @ {_format_ts_for_display(ts)} | {src_name}->{tgt_name})")
+        print(f"(耗时 {elapsed_s:.2f}s @ {_format_ts_for_display(ts)} | {src_name} -> {tgt_name})")
         return
 
     subtitle = Text(
-        f"耗时 {elapsed_s:.2f}s  ·  {_format_ts_for_display(ts)}  ·  {src_name}→{tgt_name}",
+        f"耗时 {elapsed_s:.2f}s  ·  {_format_ts_for_display(ts)}  ·  {src_name} → {tgt_name}",
         style="meta",
     )
     body = Text(translated if translated.strip() else "(空)", no_wrap=False)
