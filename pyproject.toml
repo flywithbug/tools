@@ -1,14 +1,15 @@
 [project]
 name = "box"
-version = "0.1.99"
+version = "0.1.100"
 requires-python = ">=3.9"
-dependencies = ["PyYAML>=6.0", "openai>=1.0.0", "rich", "pyperclip"]
+dependencies = ["fastapi", "uvicorn", "PyYAML>=6.0", "openai>=1.0.0", "rich", "pyperclip"]
 
 [project.scripts]
 box = "box.tool:main"
 box_ai_chat = "box_tools.ai.chat.tool:main"
 box_ai_file = "box_tools.ai.file.tool:main"
 box_ai_files = "box_tools.ai.files.tool:main"
+box_ai_tm = "ai_tm.tool:main"
 box_ai_translate = "box_tools.ai.translate.tool:main"
 box_pubspec = "box_tools.flutter.pubspec.tool:main"
 box_riverpod_gen = "box_tools.flutter.riverpod_gen.tool:main"
@@ -21,7 +22,7 @@ build-backend = "hatchling.build"
 
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/box", "src/_share", "src/box_tools"]
+packages = ["src/box", "src/_share", "src/ai_tm", "src/box_tools"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]

@@ -19,6 +19,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - [工具集文档索引](#section)
 - [box（工具集管理）](#box)
   - [`box`](#box-tool)
+- [ai_tm](#ai_tm)
+  - [`box_ai_tm`](#ai_tm-tool)
 - [ai/chat](#ai-chat)
   - [`box_ai_chat`](#box_tools-ai-chat-tool)
 - [ai/file](#ai-file)
@@ -45,6 +47,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### box（工具集管理）
 
 - **[`box`](#box-tool)**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表（[README.md](src/box/README.md)）
+
+### ai_tm
+
+- **[`box_ai_tm`](#ai_tm-tool)**：本地 AI TM 服务：扫描本地文件并提供 API（无数据库）（[README.md](src/ai_tm/README.md)）
 
 ### ai/chat
 
@@ -87,6 +93,10 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 ### box（工具集管理）
 
 - **box**：[README.md](src/box/README.md)
+
+### ai_tm
+
+- **box_ai_tm**：[README.md](src/ai_tm/README.md)
 
 ### ai/chat
 
@@ -157,6 +167,48 @@ box tools --full
 **文档**
 
 [README.md](src/box/README.md)
+
+---
+
+<a id="ai_tm"></a>
+
+## ai_tm
+
+<a id="ai_tm-tool"></a>
+
+### box_ai_tm
+
+**简介**：本地 AI TM 服务：扫描本地文件并提供 API（无数据库）
+
+**命令**：`box_ai_tm`
+
+**用法**
+
+```bash
+box_ai_tm --help
+box_ai_tm server
+box_ai_tm server --workspace .
+box_ai_tm server --port 37123 --open
+```
+
+**参数说明**
+
+- `server`：启动本地服务
+- `--host`：监听地址（默认 127.0.0.1）
+- `--port`：监听端口（默认 37123）
+- `--workspace`：工作区根目录（默认当前目录）
+- `--open`：启动后打开 WebUI（如存在）
+- `--no-webui`：不托管静态 WebUI
+
+**示例**
+
+- `box_ai_tm server`：启动服务（默认 workspace=当前目录）
+- `box_ai_tm server --workspace ~/proj/app`：指定工作区启动
+- `box_ai_tm server --port 40001 --open`：换端口并自动打开页面
+
+**文档**
+
+[README.md](src/ai_tm/README.md)
 
 ---
 
