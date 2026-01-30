@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_server(_parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
-    from .server.app import create_app
+    from ai_tm.server.app import create_app
 
     host: str = args.host
     port: int = args.port
