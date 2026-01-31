@@ -48,6 +48,7 @@ BOX_TOOL = tool(
         "PyYAML>=6.0",
         "openai>=1.0.0",
         "rich>=13.0.0",
+        "httpx[socks]>=0.24.0",
     ],
     docs="README.md",  # 可省略：tool() 默认就是 README.md
 )
