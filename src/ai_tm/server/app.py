@@ -10,7 +10,6 @@ from .webui import mount_webui
 def create_app(workspace: str, enable_webui: bool = True) -> FastAPI:
     app = FastAPI(title="box_ai_tm", version="0.1.0")
 
-    # 本地工具：允许任意 origin，方便原生 H5 直连
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
