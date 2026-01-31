@@ -8,36 +8,36 @@ from pathlib import Path
 from _share.tool_spec import tool, opt, ex
 
 
-BOX_TOOL = tool(
-    id="box.ai_tm",
-    name="box_ai_tm",
-    category="ai",
-    summary="本地 AI TM 服务：扫描本地文件并提供 API（无数据库）",
-    usage=[
-        "box_ai_tm --help",
-        "box_ai_tm server",
-        "box_ai_tm server --workspace .",
-        "box_ai_tm server --port 37123 --open",
-    ],
-    options=[
-        opt("server", "启动本地服务"),
-        opt("--host", "监听地址（默认 127.0.0.1）"),
-        opt("--port", "监听端口（默认 37123）"),
-        opt("--workspace", "工作区根目录（默认当前目录）"),
-        opt("--open", "启动后打开 WebUI（如存在）"),
-        opt("--no-webui", "不托管静态 WebUI"),
-    ],
-    examples=[
-        ex("box_ai_tm server", "启动服务（默认 workspace=当前目录）"),
-        ex("box_ai_tm server --workspace ~/proj/app", "指定工作区启动"),
-        ex("box_ai_tm server --port 40001 --open", "换端口并自动打开页面"),
-    ],
-    dependencies=[
-        "fastapi",
-        "uvicorn",
-    ],
-    docs="README.md",
-)
+# BOX_TOOL = tool(
+#     id="box.ai_tm",
+#     name="box_ai_tm",
+#     category="ai",
+#     summary="本地 AI TM 服务：扫描本地文件并提供 API（无数据库）",
+#     usage=[
+#         "box_ai_tm --help",
+#         "box_ai_tm server",
+#         "box_ai_tm server --workspace .",
+#         "box_ai_tm server --port 37123 --open",
+#     ],
+#     options=[
+#         opt("server", "启动本地服务"),
+#         opt("--host", "监听地址（默认 127.0.0.1）"),
+#         opt("--port", "监听端口（默认 37123）"),
+#         opt("--workspace", "工作区根目录（默认当前目录）"),
+#         opt("--open", "启动后打开 WebUI（如存在）"),
+#         opt("--no-webui", "不托管静态 WebUI"),
+#     ],
+#     examples=[
+#         ex("box_ai_tm server", "启动服务（默认 workspace=当前目录）"),
+#         ex("box_ai_tm server --workspace ~/proj/app", "指定工作区启动"),
+#         ex("box_ai_tm server --port 40001 --open", "换端口并自动打开页面"),
+#     ],
+#     dependencies=[
+#         "fastapi",
+#         "uvicorn",
+#     ],
+#     docs="README.md",
+# )
 
 
 def build_parser() -> argparse.ArgumentParser:

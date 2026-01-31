@@ -1,270 +1,481 @@
-# 本地翻译管理平台 PRD
-**Local Translation Manager – Local Service + Local Web UI**
+下面给你一份**详细的技术开发文档（从框架设计 → 最小可跑通 → 接口文档 → 分阶段实现能力）**，完全按你当前约束来写：
+
+* ✅ **复用 box 的 `tool.py / BOX_TOOL / 发布机制`**
+* ✅ **不复用 box 里任何已完成业务组件**（扫描/翻译/normalize 等都在 ai_tm 内部自研）
+* ✅ 以“先把骨架跑起来 + API 定义稳定”为第一优先
+
+文档会偏“工程说明书”，你照着做就能落地。
 
 ---
 
-## 1. 产品背景与目标
+# ai_tm 本地翻译平台（服务端）技术开发文档
 
-### 1.1 背景
-在多语言项目中，开发者通常依赖脚本或零散工具完成以下工作：
+## 0. 约束与原则
 
-- 管理多语言配置
-- 扫描多语言文件
-- 执行排序、去重、冗余检查
-- 调用 AI 进行增量翻译
+### 0.1 生态约束（必须遵守）
 
-这些能力往往缺乏统一的状态管理与可视化反馈，难以持续使用与维护。
+1. 工具入口文件必须是 `tool.py`，并导出 `BOX_TOOL` 元数据
+2. 发布脚本会扫描 `src/**/tool.py` 并 import 读取 `BOX_TOOL`
+3. 除 `tool.py` 外，其他 `.py` 文件不得再出现 `BOX_TOOL`（否则结构校验失败）
+   这些是发布机制的硬约束。
 
-### 1.2 产品目标
-构建一个**完全本地运行**的翻译管理平台，提供：
+`BOX_TOOL` 的字段规范（id/name/category/summary/usage/options/examples/dependencies/docs）遵循统一结构与校验。
 
-- 本地服务（Local Service）作为唯一状态与逻辑中心
-- 本地 Web 页面（Local Web UI）作为可视化操作界面
-- 对当前工作目录内多语言文件的统一管理能力
+### 0.2 架构原则（最佳实践）
 
----
-
-## 2. 产品定位
-
-- 本地工具（Local-first）
-- 非 SaaS、非远程服务
-- 面向开发者 / 本地工程
-- CLI 启动 + 浏览器访问
-- 强调确定性、可恢复性、可审计性
-
-一句话定位：
-
-> 一个“带 Web UI 的本地翻译管理工具”，而不是一个在线翻译平台。
+* **HTTP 层只做适配，不做业务决策**
+* **业务内核全部在 ai_tm 自己的 core/translate/normalize 模块**
+* **文件系统即唯一真相**：不引入 DB，不缓存“项目状态”，最多做短时内存缓存（可选）
+* 翻译必须**任务化**：可进度、可取消、可重试、可 dry-run
 
 ---
 
-## 3. 使用方式
+## 1. 框架设计
 
-### 3.1 启动方式
-```bash
-cd <project-root>
-box_ai_tm serve
-```
+## 1.1 目录结构（推荐）
 
-- 启动目录即 Workspace Root
-- 所有扫描与写回操作仅允许在该目录树内
-
-### 3.2 访问方式
-- 浏览器访问：`http://127.0.0.1:<port>`
-
----
-
-## 4. 整体架构
+以工具集标准布局，ai_tm 作为 box_tools 下的一个工具：
 
 ```
-┌────────────────────┐
-│   Browser (UI)     │
-│  原生 HTML/CSS/JS  │
-└─────────┬──────────┘
-          │ HTTP / SSE
-          ▼
-┌──────────────────────────┐
-│   本地 FastAPI 服务      │
-│                          │
-│ - Workspace 管理         │
-│ - 配置识别与生成         │
-│ - 文件扫描与规范化       │
-│ - 冗余检查               │
-│ - 翻译任务（Job）        │
-│ - SSE 事件推送           │
-│ - UI 静态资源托管        │
-└─────────┬────────────────┘
-          ▼
-┌──────────────────────────┐
-│     本地文件系统         │
-│                          │
-│ - 翻译配置 YAML          │
-│ - 多语言文件             │
-│ - 本地状态（SQLite）     │
-└──────────────────────────┘
+repo_root/
+└─ src/
+   └─ box_tools/
+      └─ ai_tm/
+         ├─ tool.py                  # ✅ 唯一 BOX_TOOL 所在文件
+         ├─ __init__.py
+         ├─ cli/
+         │  └─ server.py             # 启动服务（uvicorn）
+         ├─ service/
+         │  ├─ app.py                # FastAPI app + 路由挂载
+         │  ├─ routes/
+         │  │  ├─ health.py
+         │  │  ├─ project.py
+         │  │  ├─ tasks.py
+         │  │  ├─ translate.py
+         │  │  └─ normalize.py
+         │  └─ dto/
+         │     ├─ common.py           # ErrorResponse, Envelope
+         │     ├─ project.py
+         │     ├─ tasks.py
+         │     └─ translate.py
+         ├─ core/
+         │  ├─ config.py             # 配置加载/校验/模板生成
+         │  ├─ scanner.py            # 扫描文件与解析
+         │  ├─ repository.py         # 统一文件读写抽象（FS）
+         │  └─ analysis.py           # missing/redundant/untranslated 计算
+         ├─ i18n/
+         │  ├─ strings_parser.py      # .strings 解析/写回（保留注释策略）
+         │  └─ json_parser.py         # .json 解析/写回
+         ├─ normalize/
+         │  └─ normalize.py           # 排序/去重/保留注释
+         ├─ translate/
+         │  ├─ engine.py              # 翻译任务引擎（调度）
+         │  ├─ prompt.py              # prompt 策略
+         │  ├─ executor.py            # 模型调用 + 并发 + 重试
+         │  └─ validator.py           # 占位符/格式校验
+         └─ runtime/
+            ├─ state.py               # 内存任务表、锁、取消 token
+            └─ ids.py                 # task_id 生成
+```
+
+你会发现：
+
+* `tool.py` 只负责 CLI + BOX_TOOL
+* `service` 只负责 API
+* `core/i18n/translate/normalize` 才是业务内核
+  这样既能遵守发布机制，又不会“盒子里长盒子”。
+
+---
+
+## 1.2 依赖建议（最小集）
+
+* `fastapi`
+* `uvicorn`
+* `pydantic`（FastAPI 会用到）
+* （可选）`python-dotenv`：开发态读环境变量
+* （可选）`watchdog`：后续做文件变化监听/推送（先别引入）
+
+注意：依赖会被发布脚本自动维护（显式 + import 推断），但建议在 BOX_TOOL.dependencies 里也写清楚。
+
+---
+
+## 2. 最基本开发框架（M1 目标：可启动 + 有 API + 能返回项目状态空壳）
+
+### 2.1 CLI 入口（tool.py）设计
+
+`tool.py` 提供的命令建议：
+
+* `box_ai_tm --help`
+* `box_ai_tm server [--host] [--port] [--root] [--reload]`
+* `box_ai_tm doctor`（可选：仅做 ai_tm 自己的检查，不复用 box 的 doctor）
+
+其中 `server` 是核心。
+
+`BOX_TOOL` 要写清 usage/options/examples/docs/dependencies。
+
+---
+
+### 2.2 服务启动（cli/server.py）
+
+职责：
+
+* 解析参数
+* 构造 FastAPI app（传 root 路径）
+* `uvicorn.run(app, ...)`
+
+开发态支持 `--reload`，生产态可关掉。
+
+---
+
+### 2.3 FastAPI app（service/app.py）
+
+职责：
+
+* 创建 `FastAPI(title="ai_tm", version=...)`
+* 挂载路由：
+
+  * `/api/health`
+  * `/api/project/status`
+  * `/api/tasks/*`（先空壳）
+  * `/api/translate/*`（先空壳）
+  * `/api/normalize`（先空壳）
+* 统一异常处理（返回同一错误结构）
+
+---
+
+## 3. 接口文档（先定协议，再填能力）
+
+下面是**建议的最小 API 集**，先让 Web UI 有“稳定 contract”，后续实现只需要填逻辑。
+
+### 3.1 通用约定
+
+#### 3.1.1 统一返回 Envelope（建议）
+
+成功：
+
+```json
+{ "ok": true, "data": { ... }, "error": null }
+```
+
+失败：
+
+```json
+{
+  "ok": false,
+  "data": null,
+  "error": { "code": "CONFIG_MISSING", "message": "xxx", "details": {...} }
+}
+```
+
+错误码建议分组：
+
+* `CONFIG_*`：配置相关
+* `FS_*`：文件系统/路径
+* `PARSE_*`：解析失败
+* `TRANSLATE_*`：翻译失败
+* `TASK_*`：任务状态/取消等
+
+---
+
+### 3.2 Health
+
+#### `GET /api/health`
+
+用途：服务是否活着 + 版本信息
+
+响应：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "name": "ai_tm",
+    "version": "0.1.0",
+    "time": "2026-01-31T12:34:56+08:00"
+  },
+  "error": null
+}
 ```
 
 ---
 
-## 5. 核心设计原则
+### 3.3 Project Status（M1 核心）
 
-### 5.1 状态唯一来源
-- 所有“文件状态”“翻译状态”“是否需要生成/冗余”等判断
-- **必须由本地服务端统一计算并维护**
-- 前端页面不得自行扫描文件系统或推断状态
+#### `GET /api/project/status?root=...`（或 root 在启动时固定）
 
-### 5.2 数据同步模型
-- 页面加载：HTTP 获取全量状态快照
-- 状态变化：SSE 实时推送事件
-- 前端根据事件刷新 UI 或重新拉取快照
+用途：返回项目扫描结果（即使配置缺失也要返回可引导信息）
 
----
+响应 data（建议）：
 
-## 6. Workspace 与启动引导
+```json
+{
+  "root": "/abs/path",
+  "config": {
+    "exists": true,
+    "path": "/abs/path/ai_tm.yaml",
+    "errors": []
+  },
+  "project": {
+    "fileType": "STRINGS",
+    "baseLocale": "en",
+    "coreLocales": ["zh-Hans", "ja"],
+    "nonCoreLocales": ["fr", "de"]
+  },
+  "summary": {
+    "languages": 4,
+    "files": 4,
+    "missingKeys": 12,
+    "redundantKeys": 3,
+    "untranslatedKeys": 25
+  },
+  "files": [
+    {
+      "language": "zh-Hans",
+      "role": "CORE",
+      "path": "path/to/Localizable.strings",
+      "totalKeys": 120,
+      "missingKeys": ["a", "b"],
+      "redundantKeys": ["c"],
+      "untranslatedKeys": ["d"]
+    }
+  ],
+  "hints": [
+    {
+      "code": "CONFIG_MISSING",
+      "message": "未找到 ai_tm.yaml，可调用 /api/config/template 获取模板"
+    }
+  ]
+}
+```
 
-### 6.1 Workspace 定义
-- Workspace Root = 服务启动时的当前目录
-- 所有操作路径必须在 Workspace Root 内
-- 禁止路径越界（`..`）
-
-### 6.2 Doctor 启动诊断
-服务启动后自动执行环境诊断，判断：
-
-- 是否存在翻译配置文件
-- 配置是否可解析
-- 是否存在可翻译文件
-- 是否存在待翻译内容
-
-### 6.3 引导状态
-- `config_missing`：未发现配置文件
-- `no_files_found`：有配置但未发现翻译文件
-- `nothing_to_translate`：文件存在但无待翻译项
-- `ready`：可正常操作
-
----
-
-## 7. 本地服务（Backend）需求
-
-### 7.1 配置管理
-- 自动识别配置文件（优先支持 `slang_i18n.yaml`）
-- 校验配置合法性
-- 支持生成默认配置
-
-### 7.2 文件扫描（Scan）
-- 根据配置扫描指定目录
-- 识别 source / target 文件对
-- 统计：
-  - key 总数
-  - missing 数
-  - checksum
-- 解析错误需明确指出文件与原因
-
-### 7.3 文件规范化（Normalize）
-- 排序
-- 去重（重复 key）
-- 稳定化输出
-- 支持 dry-run 与实际写回
-- 返回变更摘要
-
-### 7.4 冗余检查（Redundant）
-- 查找 base 中不存在但 target 中存在的 key
-- 生成冗余报告
-- 支持批量删除
-
-### 7.5 翻译执行（Translate）
-- 增量翻译（仅缺失或空值）
-- 支持 batch 翻译
-- placeholder 校验
-- 多文件并发、单文件互斥写回
-
-### 7.6 文件写回
-- 写回前校验 source 是否变化
-- 原子写入（tmp → rename）
-- 自动生成 `.bak` 备份
+> M1 的“可交付”标准：无论项目是否完整，都能返回结构化信息，让前端可渲染。
 
 ---
 
-## 8. Job 系统与实时推送
+### 3.4 Config 引导（强烈建议先做）
 
-### 8.1 Job 模型
-- job_id
-- job_type（scan / normalize / redundant / translate）
-- status（pending / running / success / failed）
-- progress（0–100）
-- 日志（流式）
+#### `GET /api/config/template`
 
-### 8.2 SSE 推送
-- 提供全局事件流：
-  ```
-  GET /api/events
-  ```
-- 事件类型包括：
-  - scan_started / scan_done
-  - normalize_done
-  - redundant_check_done
-  - translate_progress
-  - translate_done
-  - state_changed
-  - toast
-  - ping
+用途：返回配置模板（字符串或 JSON）
+
+#### `POST /api/config/init`
+
+用途：在 root 下生成配置文件（如果不存在）
+
+这样 Web UI 才能做到“一键初始化”。
 
 ---
 
-## 9. 本地文件变化监控
+### 3.5 Translate（M2 做闭环：plan → execute → commit）
 
-### 9.1 监控范围
-- Workspace Root 下的配置文件
-- 配置中指定的目标文件夹（如 i18nDir）
+#### `POST /api/translate/plan`
 
-### 9.2 行为规则
-- 监听文件新增/修改/删除
-- debounce 合并事件（推荐 ~800ms）
-- 触发重新扫描（scan）
-- 通过 SSE 推送 `state_changed`
+输入：
+
+```json
+{
+  "mode": "incremental",
+  "scope": "core",
+  "allowOverwrite": false
+}
+```
+
+输出：
+
+```json
+{
+  "changes": [
+    {
+      "language": "zh-Hans",
+      "willTranslateKeys": ["k1", "k2"],
+      "willSkipKeys": ["k3"],
+      "reason": { "k3": "already_translated" }
+    }
+  ],
+  "total": 123
+}
+```
+
+#### `POST /api/translate/execute`
+
+输入同 plan，返回 task_id：
+
+```json
+{ "taskId": "t_abc123" }
+```
+
+#### `GET /api/tasks/{taskId}`
+
+输出：
+
+```json
+{
+  "taskId": "t_abc123",
+  "status": "running",
+  "progress": { "done": 10, "total": 123 },
+  "errors": [
+    { "key": "k9", "language": "ja", "message": "placeholder_mismatch" }
+  ]
+}
+```
+
+#### `POST /api/tasks/{taskId}/cancel`
+
+取消任务。
+
+#### `POST /api/translate/commit`
+
+输入：
+
+```json
+{ "taskId": "t_abc123" }
+```
+
+输出：写回影响的文件列表、keys 数量。
+
+> commit 独立出来是最佳实践：防止“翻译一半就落盘”，也让 dry-run 和 UI review 成为可能。
 
 ---
 
-## 10. 本地前端页面（Frontend）需求
+### 3.6 Normalize & Redundant（M3）
 
-### 10.1 技术约束
-- 原生 HTML / CSS / JavaScript
-- 不使用前端框架
-- 不使用 TypeScript
-- 不使用构建工具
+#### `POST /api/normalize`
 
-### 10.2 页面模块
-- Workspace / 配置状态栏
-- 操作区：
-  - 扫描
-  - 规范化
-  - 冗余检查
-  - 翻译
-- 文件列表表格
-- Job 进度与日志区
+输入：
 
-### 10.3 前端职责边界
-- 不直接读取本地文件
-- 不自行推断状态
-- 所有数据来自本地服务 API / SSE
+```json
+{ "targets": ["all"] }
+```
+
+输出：修改了哪些文件、做了哪些动作（排序/去重）
+
+#### `GET /api/redundant`
+
+输出：按语言列出 base 不存在但其他语言存在的 key，并给出建议（但不自动删）
 
 ---
 
-## 11. API 概览
+## 4. 分阶段实现路线（一步步填能力）
 
-### 状态与引导
-- `GET /api/state`
-- `GET /api/doctor`
+### Milestone 1：骨架可跑 + 状态可查（建议 1～2 天内完成）
 
-### 启动引导
-- `POST /api/bootstrap/config`
-- `POST /api/bootstrap/sample`
+**目标**
 
-### 操作
-- `POST /api/scan`
-- `POST /api/normalize`
-- `POST /api/redundant/check`
-- `POST /api/redundant/apply`
-- `POST /api/translate`
+* `box_ai_tm server` 能启动
+* `/api/health` 正常
+* `/api/project/status` 返回结构化信息
+* 配置缺失时有引导（template + init）
 
-### 实时推送
-- `GET /api/events`（SSE）
+**实现清单**
 
----
+* [ ] tool.py：BOX_TOOL + argparse 子命令
+* [ ] FastAPI app + routes + DTO
+* [ ] core/config.py：读取/校验/模板生成
+* [ ] core/scanner.py：先实现“发现文件”与“空解析”
+* [ ] 错误模型 + 统一 Envelope
 
-## 12. 非功能性需求
+**验收**
 
-- 单个任务失败不影响服务整体运行
-- 状态可恢复、可重复执行
-- 文件操作安全、可回滚
-- 易于扩展新的文件类型与翻译引擎
+* 在空目录启动，status 能明确提示“缺配置/缺文件”
+* 在有配置但无文件时，提示缺文件
+* 在有文件但解析未完成时，至少能列出文件路径
 
 ---
 
-## 13. 产品总结
+### Milestone 2：解析器 + 分析能力（missing/redundant/untranslated）
 
-这是一个以**本地文件系统为核心**、  
-以**本地服务为唯一状态与逻辑中心**、  
-通过 **SSE 驱动前端实时更新** 的本地翻译管理平台。
+**目标**
 
-它强调的是：  
-**确定性、可控性、可持续使用，而不是一次性脚本。**
+* `.strings` 解析出 key/value/注释结构
+* `.json` 解析出 key/value
+* 能计算 missing/redundant/untranslated
+
+**实现清单**
+
+* [ ] i18n/strings_parser.py：读取 + 写回（先写回可延后）
+* [ ] i18n/json_parser.py
+* [ ] core/analysis.py：对齐你定义的三类 keys
+* [ ] status API 返回真实统计
+
+**验收**
+
+* 能对一个真实 iOS Localizable.strings 工程给出正确统计
+
+---
+
+### Milestone 3：翻译引擎（plan/execute/task/cancel/commit）
+
+**目标**
+
+* 任务表（内存）
+* dry-run plan 可用
+* execute 后可查询进度
+* commit 才落盘
+
+**实现清单**
+
+* [ ] runtime/state.py：任务存储、锁、取消 token
+* [ ] translate/engine.py：组装任务、拆 batch、汇总结果
+* [ ] translate/executor.py：并发、重试（先简单）
+* [ ] translate/prompt.py：结构化 JSON 输出
+* [ ] translate/validator.py：占位符一致性、JSON 结构校验
+* [ ] routes/tasks.py + translate.py
+
+**验收**
+
+* 翻译失败只影响单 key，不导致任务整体崩溃
+* cancel 能停止后续 batch
+* commit 写回可追踪
+
+---
+
+### Milestone 4：normalize + 冗余处理建议 + Web UI 对接增强
+
+**目标**
+
+* normalize 能排序/去重/保留注释
+* redundant API 给出建议（不自动删）
+* 可选：SSE 推送任务进度（Web UI 更顺滑）
+
+---
+
+## 5. 开发态调试建议（落地性很关键）
+
+### 5.1 本地启动
+
+* `box_ai_tm server --root . --port 8765 --reload`
+
+### 5.2 PyCharm 飘红 fastapi 的常见原因（你之前遇到过）
+
+* 解释器不是 pipx venv 的解释器
+* 或项目 venv 没装 fastapi/uvicorn
+
+最佳实践：
+
+* 给 ai_tm 单独建一个 dev venv（用于开发）
+* 发布时依赖由 pyproject 维护；运行时用 pipx 安装后的环境
+
+> 你之前“Unresolved reference fastapi”基本就是解释器/依赖环境没对上，不是代码问题。
+
+---
+
+## 6. 与发布机制的对接（你只需要做到这些）
+
+* 确保 `src/box_tools/ai_tm/tool.py` 存在且可 import
+* `BOX_TOOL` 字段齐全
+* 依赖在 import 中出现（发布脚本会推断并写入 dependencies）
+
+---
+
+# 你接下来我建议的“最优先落地顺序”
+
+1. 先做 **M1：最小骨架 + status API + config template/init**
+2. 再做 **M2：解析 + 分析**
+3. 然后 **M3：翻译任务闭环**
+4. 最后 **M4：normalize/冗余/SSE**
+
+这样每一步都能交付、可演示、可被 Web UI 接起来。
+
+---
+
+如果你同意按这个节奏走，下一步我会直接输出 **M1 的“工程骨架实现清单”**（包含具体文件列表、每个文件的职责、函数签名、DTO 字段定义），让你可以直接开始写代码而不是再讨论结构。

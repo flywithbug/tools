@@ -12,37 +12,37 @@ from box_tools._share.openai_translate.translate_file import translate_from_to, 
 
 from _share.tool_spec import tool, opt, ex
 
-BOX_TOOL = tool(
-    id="ai.file",
-    name="box_ai_file",
-    category="ai",
-    summary="交互式多语言翻译：选择源语言/目标语言后输入文本，AI 实时翻译（支持中途切换）",
-    usage=[
-        "box_ai_file",
-        "box_ai_file --model gpt-4o-mini",
-        "box_ai_file --source en --target zh-Hant --in en.json --out zh-hant.json",
-        "box_ai_file --in Base.lproj/Localizable.strings --out zh-Hant.lproj/Localizable.strings",
-    ],
-    options=[
-        opt("--model", "指定模型（默认 gpt-4o-mini）"),
-        opt("--api-key", "显式传入 OpenAI API Key（不传则读取 OPENAI_API_KEY）"),
-        opt("--source", "源语言代码（如 en/zh-Hans/ja…；不传则交互选择）"),
-        opt("--target", "目标语言代码（如 zh-Hant/ko/fr…；不传则交互选择）"),
-        opt("--in", "源文件路径（支持相对路径；不传则交互输入）"),
-        opt("--out", "目标文件路径（支持相对路径；不传则交互输入）"),
-        opt("--batch-size", "每批翻译条数（默认 40）"),
-        opt("--no-pre-sort", "翻译前不做排序（默认会对源/目标做排序以稳定输出）"),
-    ],
-    examples=[
-        ex("export OPENAI_API_KEY='sk-***' && box_ai_file", "交互选择语言并输入文件路径"),
-        ex("box_ai_file --source en --target zh-Hant --in en.json --out zh-hant.json", "英->繁中，翻译 json 文件"),
-        ex("box_ai_file --in Base.lproj/Localizable.strings --out zh-Hant.lproj/Localizable.strings", "翻译 iOS .strings 文件"),
-    ],
-    dependencies=[
-        "openai>=1.0.0",
-    ],
-    docs="README.md",
-)
+# BOX_TOOL = tool(
+#     id="ai.file",
+#     name="box_ai_file",
+#     category="ai",
+#     summary="交互式多语言翻译：选择源语言/目标语言后输入文本，AI 实时翻译（支持中途切换）",
+#     usage=[
+#         "box_ai_file",
+#         "box_ai_file --model gpt-4o-mini",
+#         "box_ai_file --source en --target zh-Hant --in en.json --out zh-hant.json",
+#         "box_ai_file --in Base.lproj/Localizable.strings --out zh-Hant.lproj/Localizable.strings",
+#     ],
+#     options=[
+#         opt("--model", "指定模型（默认 gpt-4o-mini）"),
+#         opt("--api-key", "显式传入 OpenAI API Key（不传则读取 OPENAI_API_KEY）"),
+#         opt("--source", "源语言代码（如 en/zh-Hans/ja…；不传则交互选择）"),
+#         opt("--target", "目标语言代码（如 zh-Hant/ko/fr…；不传则交互选择）"),
+#         opt("--in", "源文件路径（支持相对路径；不传则交互输入）"),
+#         opt("--out", "目标文件路径（支持相对路径；不传则交互输入）"),
+#         opt("--batch-size", "每批翻译条数（默认 40）"),
+#         opt("--no-pre-sort", "翻译前不做排序（默认会对源/目标做排序以稳定输出）"),
+#     ],
+#     examples=[
+#         ex("export OPENAI_API_KEY='sk-***' && box_ai_file", "交互选择语言并输入文件路径"),
+#         ex("box_ai_file --source en --target zh-Hant --in en.json --out zh-hant.json", "英->繁中，翻译 json 文件"),
+#         ex("box_ai_file --in Base.lproj/Localizable.strings --out zh-Hant.lproj/Localizable.strings", "翻译 iOS .strings 文件"),
+#     ],
+#     dependencies=[
+#         "openai>=1.0.0",
+#     ],
+#     docs="README.md",
+# )
 
 # 你给的那套语言集合（可按需扩展）
 LANG_CHOICES: List[Tuple[str, str]] = [

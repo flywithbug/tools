@@ -14,30 +14,30 @@ from box_tools._share.openai_translate.models import OpenAIModel
 from box_tools._share.openai_translate.translate_pool import TranslateJob, translate_files
 
 
-BOX_TOOL = {
-    "id": "ai.box_ai_files",
-    "name": "box_ai_files",
-    "category": "ai",
-    "summary": (
-        "AI 多文件翻译测试工具：读取 YAML 配置，检查 i18nDir 与源语言文件，"
-        "并将 <source_locale.code>.json 翻译为 target_locales 下的 <code>.json（多文件并发）。"
-    ),
-    "usage": [
-        "box_ai_files",
-        "box_ai_files doctor",
-        "box_ai_files translate",
-        "box_ai_files --config slang_i18n.yaml",
-        "box_ai_files translate --max-workers 4",
-    ],
-    "options": [
-        {"flag": "--config <path>", "desc": "配置文件路径（默认 slang_i18n.yaml）"},
-        {"flag": "--max-workers <n>", "desc": "覆盖配置 maxWorkers（0=自动）"},
-    ],
-    "examples": [
-        {"cmd": "box_ai_files doctor", "desc": "检查 i18nDir 与源语言文件是否存在"},
-        {"cmd": "box_ai_files translate --max-workers 6", "desc": "以 6 并发翻译所有目标语言"},
-    ],
-}
+# BOX_TOOL = {
+#     "id": "ai.box_ai_files",
+#     "name": "box_ai_files",
+#     "category": "ai",
+#     "summary": (
+#         "AI 多文件翻译测试工具：读取 YAML 配置，检查 i18nDir 与源语言文件，"
+#         "并将 <source_locale.code>.json 翻译为 target_locales 下的 <code>.json（多文件并发）。"
+#     ),
+#     "usage": [
+#         "box_ai_files",
+#         "box_ai_files doctor",
+#         "box_ai_files translate",
+#         "box_ai_files --config slang_i18n.yaml",
+#         "box_ai_files translate --max-workers 4",
+#     ],
+#     "options": [
+#         {"flag": "--config <path>", "desc": "配置文件路径（默认 slang_i18n.yaml）"},
+#         {"flag": "--max-workers <n>", "desc": "覆盖配置 maxWorkers（0=自动）"},
+#     ],
+#     "examples": [
+#         {"cmd": "box_ai_files doctor", "desc": "检查 i18nDir 与源语言文件是否存在"},
+#         {"cmd": "box_ai_files translate --max-workers 6", "desc": "以 6 并发翻译所有目标语言"},
+#     ],
+# }
 
 
 # =========================

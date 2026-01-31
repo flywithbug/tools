@@ -19,7 +19,7 @@
 
 硬性约定（强校验）：
 - 工具入口文件必须命名为 tool.py
-- tool.py 必须包含 BOX_TOOL（支持 BOX_TOOL = tool(...) 等可执行构造，将通过 import 读取）
+- tool.py 若缺少 BOX_TOOL：仅提示警告并跳过该工具（不会中断流程，也不会写入 pyproject.toml / README）。
 - 除 tool.py 之外，任何 .py 文件不得包含 BOX_TOOL（否则判定为结构违规）
 - README 汇总的文档链接统一显示为 [README.md](path)（不显示冗长路径作为文本）
 """
@@ -137,38 +137,39 @@ def has_box_tool_assign(py_file: Path) -> bool:
 
 def validate_structure_or_exit() -> None:
     """
-    强校验：
+    结构校验（强校验 + 软校验）：
     1) 任何非 tool.py 的文件如果包含 BOX_TOOL -> 报错退出
-    2) 任何 tool.py 如果不包含 BOX_TOOL -> 报错退出（不要求字面量，可为函数构造）
+    2) tool.py 若不包含 BOX_TOOL -> 仅提示警告（不退出），后续会跳过该入口
     """
     entry_files = set(iter_tool_entry_files())
     offenders_has_box_tool: List[Path] = []
-    offenders_missing_box_tool: List[Path] = []
+    warn_missing_box_tool: List[Path] = []
 
     for py in iter_all_py_files():
         has_meta = has_box_tool_assign(py)
         if py.name == "tool.py":
             if not has_meta:
-                offenders_missing_box_tool.append(py)
+                warn_missing_box_tool.append(py)
         else:
             if has_meta:
                 offenders_has_box_tool.append(py)
 
-    if offenders_has_box_tool or offenders_missing_box_tool:
+    if offenders_has_box_tool:
         print("❌ 工具结构校验失败：")
-        if offenders_has_box_tool:
-            print("\n[发现 BOX_TOOL 但文件名不是 tool.py]（请重命名为 tool.py 或移除 BOX_TOOL）")
-            for p in offenders_has_box_tool:
-                print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
-        if offenders_missing_box_tool:
-            print("\n[文件名是 tool.py 但没有 BOX_TOOL]（请补充 BOX_TOOL 元数据）")
-            for p in offenders_missing_box_tool:
-                print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
+        print("\n[发现 BOX_TOOL 但文件名不是 tool.py]（请重命名为 tool.py 或移除 BOX_TOOL）")
+        for p in offenders_has_box_tool:
+            print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
         raise SystemExit(2)
+
+    if warn_missing_box_tool:
+        print("⚠️ 发现 tool.py 缺少 BOX_TOOL，将跳过这些入口（不会写入 pyproject.toml / README）：")
+        for p in warn_missing_box_tool:
+            print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
 
     if not entry_files:
         print("❌ 未找到任何 tool.py（至少应该有 src/box/tool.py）。")
         raise SystemExit(2)
+
 
 
 def module_from_py_path(py_file: Path) -> str:
@@ -333,6 +334,11 @@ def _is_box_tool(t: Tool) -> bool:
 def collect_tools() -> List[Tool]:
     tools: List[Tool] = []
     for py in iter_tool_entry_files():
+        if not has_box_tool_assign(py):
+            # 软跳过：只警告，不中断
+            print(f"⚠️ 跳过（缺少 BOX_TOOL）：{py.relative_to(REPO_ROOT).as_posix()}")
+            continue
+
         meta = load_box_tool_by_import(py)
         t = build_tool(py, meta)
         if t:
@@ -340,6 +346,7 @@ def collect_tools() -> List[Tool]:
 
     tools.sort(key=lambda t: (0, "") if _is_box_tool(t) else (1, t.sort_key[0].lower(), t.sort_key[1].lower()))
     return tools
+
 
 
 # -------------------------
@@ -973,14 +980,18 @@ def update_pyproject(tools: List[Tool], do_bump: bool, ensure_tests: bool) -> Tu
     if do_bump:
         text, new_version = bump_patch_version(text)
 
-    scripts = build_scripts(tools)
-    text = update_project_scripts(text, scripts)
+    scripts: List[Tuple[str, str]] = []
+    if tools:
+        scripts = build_scripts(tools)
+        text = update_project_scripts(text, scripts)
 
     wheel_pkgs = collect_src_packages()
     text = replace_wheel_packages_line(text, wheel_pkgs)
 
-    deps_desired = collect_tool_dependencies(tools)
-    text, final_deps = ensure_project_dependencies_exact(text, deps_desired)
+    final_deps: List[str] = []
+    if tools:
+        deps_desired = collect_tool_dependencies(tools)
+        text, final_deps = ensure_project_dependencies_exact(text, deps_desired)
 
     written_tests: List[Path] = []
     if ensure_tests:
@@ -1205,7 +1216,7 @@ def main() -> None:
 
     tools = collect_tools()
     if not tools:
-        raise SystemExit("未找到任何包含 BOX_TOOL 的工具入口（tool.py）。")
+        print("⚠️ 未发现任何可用的 BOX_TOOL 工具入口（tool.py）。将跳过 scripts/dependencies 自动维护与 README 工具汇总。")
 
     if not args.no_readme:
         header = TEMP_MD.read_text(encoding="utf-8", errors="ignore")

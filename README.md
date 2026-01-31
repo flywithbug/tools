@@ -19,14 +19,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 - [工具集文档索引](#section)
 - [box（工具集管理）](#box)
   - [`box`](#box-tool)
-- [ai_tm](#ai_tm)
-  - [`box_ai_tm`](#ai_tm-tool)
 - [ai/chat](#ai-chat)
   - [`box_ai_chat`](#box_tools-ai-chat-tool)
-- [ai/file](#ai-file)
-  - [`box_ai_file`](#box_tools-ai-file-tool)
-- [ai/files](#ai-files)
-  - [`box_ai_files`](#box_tools-ai-files-tool)
 - [ai/translate](#ai-translate)
   - [`box_ai_translate`](#box_tools-ai-translate-tool)
 - [flutter/pubspec](#flutter-pubspec)
@@ -48,21 +42,9 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 - **[`box`](#box-tool)**：工具集管理入口：诊断、更新、版本查看、卸载、工具列表（[README.md](src/box/README.md)）
 
-### ai_tm
-
-- **[`box_ai_tm`](#ai_tm-tool)**：本地 AI TM 服务：扫描本地文件并提供 API（无数据库）（[README.md](src/ai_tm/README.md)）
-
 ### ai/chat
 
 - **[`box_ai_chat`](#box_tools-ai-chat-tool)**：命令行连续对话：输入问题→等待 AI 回复→继续追问（支持 /new /reset /save /load /model 等）（[README.md](src/box_tools/ai/chat/README.md)）
-
-### ai/file
-
-- **[`box_ai_file`](#box_tools-ai-file-tool)**：交互式多语言翻译：选择源语言/目标语言后输入文本，AI 实时翻译（支持中途切换）（[README.md](src/box_tools/ai/file/README.md)）
-
-### ai/files
-
-- **[`box_ai_files`](#box_tools-ai-files-tool)**：AI 多文件翻译测试工具：读取 YAML 配置，检查 i18nDir 与源语言文件，并将 <source_locale.code>.json 翻译为 target_locales 下的 <code>.json（多文件并发）。（[README.md](src/box_tools/ai/files/README.md)）
 
 ### ai/translate
 
@@ -94,21 +76,9 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 - **box**：[README.md](src/box/README.md)
 
-### ai_tm
-
-- **box_ai_tm**：[README.md](src/ai_tm/README.md)
-
 ### ai/chat
 
 - **box_ai_chat**：[README.md](src/box_tools/ai/chat/README.md)
-
-### ai/file
-
-- **box_ai_file**：[README.md](src/box_tools/ai/file/README.md)
-
-### ai/files
-
-- **box_ai_files**：[README.md](src/box_tools/ai/files/README.md)
 
 ### ai/translate
 
@@ -170,48 +140,6 @@ box tools --full
 
 ---
 
-<a id="ai_tm"></a>
-
-## ai_tm
-
-<a id="ai_tm-tool"></a>
-
-### box_ai_tm
-
-**简介**：本地 AI TM 服务：扫描本地文件并提供 API（无数据库）
-
-**命令**：`box_ai_tm`
-
-**用法**
-
-```bash
-box_ai_tm --help
-box_ai_tm server
-box_ai_tm server --workspace .
-box_ai_tm server --port 37123 --open
-```
-
-**参数说明**
-
-- `server`：启动本地服务
-- `--host`：监听地址（默认 127.0.0.1）
-- `--port`：监听端口（默认 37123）
-- `--workspace`：工作区根目录（默认当前目录）
-- `--open`：启动后打开 WebUI（如存在）
-- `--no-webui`：不托管静态 WebUI
-
-**示例**
-
-- `box_ai_tm server`：启动服务（默认 workspace=当前目录）
-- `box_ai_tm server --workspace ~/proj/app`：指定工作区启动
-- `box_ai_tm server --port 40001 --open`：换端口并自动打开页面
-
-**文档**
-
-[README.md](src/ai_tm/README.md)
-
----
-
 <a id="ai-chat"></a>
 
 ## ai/chat
@@ -255,88 +183,6 @@ box_ai_chat --load ~/.box_tools/ai_chat/20260121_120000.json
 **文档**
 
 [README.md](src/box_tools/ai/chat/README.md)
-
----
-
-<a id="ai-file"></a>
-
-## ai/file
-
-<a id="box_tools-ai-file-tool"></a>
-
-### box_ai_file
-
-**简介**：交互式多语言翻译：选择源语言/目标语言后输入文本，AI 实时翻译（支持中途切换）
-
-**命令**：`box_ai_file`
-
-**用法**
-
-```bash
-box_ai_file
-box_ai_file --model gpt-4o-mini
-box_ai_file --source en --target zh-Hant --in en.json --out zh-hant.json
-box_ai_file --in Base.lproj/Localizable.strings --out zh-Hant.lproj/Localizable.strings
-```
-
-**参数说明**
-
-- `--model`：指定模型（默认 gpt-4o-mini）
-- `--api-key`：显式传入 OpenAI API Key（不传则读取 OPENAI_API_KEY）
-- `--source`：源语言代码（如 en/zh-Hans/ja…；不传则交互选择）
-- `--target`：目标语言代码（如 zh-Hant/ko/fr…；不传则交互选择）
-- `--in`：源文件路径（支持相对路径；不传则交互输入）
-- `--out`：目标文件路径（支持相对路径；不传则交互输入）
-- `--batch-size`：每批翻译条数（默认 40）
-- `--no-pre-sort`：翻译前不做排序（默认会对源/目标做排序以稳定输出）
-
-**示例**
-
-- `export OPENAI_API_KEY='sk-***' && box_ai_file`：交互选择语言并输入文件路径
-- `box_ai_file --source en --target zh-Hant --in en.json --out zh-hant.json`：英->繁中，翻译 json 文件
-- `box_ai_file --in Base.lproj/Localizable.strings --out zh-Hant.lproj/Localizable.strings`：翻译 iOS .strings 文件
-
-**文档**
-
-[README.md](src/box_tools/ai/file/README.md)
-
----
-
-<a id="ai-files"></a>
-
-## ai/files
-
-<a id="box_tools-ai-files-tool"></a>
-
-### box_ai_files
-
-**简介**：AI 多文件翻译测试工具：读取 YAML 配置，检查 i18nDir 与源语言文件，并将 <source_locale.code>.json 翻译为 target_locales 下的 <code>.json（多文件并发）。
-
-**命令**：`box_ai_files`
-
-**用法**
-
-```bash
-box_ai_files
-box_ai_files doctor
-box_ai_files translate
-box_ai_files --config slang_i18n.yaml
-box_ai_files translate --max-workers 4
-```
-
-**参数说明**
-
-- `--config <path>`：配置文件路径（默认 slang_i18n.yaml）
-- `--max-workers <n>`：覆盖配置 maxWorkers（0=自动）
-
-**示例**
-
-- `box_ai_files doctor`：检查 i18nDir 与源语言文件是否存在
-- `box_ai_files translate --max-workers 6`：以 6 并发翻译所有目标语言
-
-**文档**
-
-[README.md](src/box_tools/ai/files/README.md)
 
 ---
 
