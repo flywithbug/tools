@@ -26,7 +26,25 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stderr.isatty()
 
 
-def _upsert_to_bash_profile(api_key: str, profile_path: Path) -> None:
+def _pick_profile_for_shell() -> Path:
+    """
+    按 $SHELL 选择写入的 profile 文件：
+    - zsh  -> ~/.zprofile
+    - bash -> ~/.bash_profile
+    - 其他 -> ~/.profile（兜底）
+    """
+    shell = (os.getenv("SHELL") or "").strip().lower()
+    shell_name = Path(shell).name  # e.g. /bin/zsh -> zsh
+    home = Path.home()
+
+    if shell_name == "zsh":
+        return home / ".zprofile"
+    if shell_name == "bash":
+        return home / ".bash_profile"
+    return home / ".profile"
+
+
+def _upsert_to_shell_profile(api_key: str, profile_path: Path) -> None:
     profile_path.parent.mkdir(parents=True, exist_ok=True)
     line = f'export OPENAI_API_KEY="{api_key}"\n'
 
@@ -67,7 +85,7 @@ def resolve_api_key(api_key: Optional[str] = None) -> str:
             "或在调用时显式传入 api_key。"
         )
 
-    # 交互式：提示输入并写入 ~/.bash_profile
+    # 交互式：提示输入并写入 shell 对应的 profile，然后提示 source 并退出
     print("未检测到 OPENAI_API_KEY。", file=sys.stderr)
     entered = getpass("请输入 OpenAI API Key（输入不回显）： ").strip()
     if not entered:
@@ -77,16 +95,13 @@ def resolve_api_key(api_key: Optional[str] = None) -> str:
     if any(c.isspace() for c in entered):
         raise OpenAIConfigError("API Key 包含空白字符，看起来不太对；请重新输入。")
 
-    bash_profile = Path.home() / ".bash_profile"
-    _upsert_to_bash_profile(entered, bash_profile)
+    profile_path = _pick_profile_for_shell()
+    _upsert_to_shell_profile(entered, profile_path)
 
-    # 让本次进程立刻生效
-    os.environ["OPENAI_API_KEY"] = entered
-
-    print(f"已写入 {bash_profile}。新的终端会话将自动生效。", file=sys.stderr)
-    print("当前终端如需立刻生效，可执行：source ~/.bash_profile", file=sys.stderr)
-
-    return entered
+    print(f"已写入 {profile_path}", file=sys.stderr)
+    print(f"请先执行：source {profile_path}", file=sys.stderr)
+    print("然后重新运行当前命令以生效。", file=sys.stderr)
+    raise SystemExit(0)
 
 
 @dataclass(frozen=True)
