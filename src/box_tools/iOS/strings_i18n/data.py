@@ -685,14 +685,14 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
                         if not fp.exists():
                             continue
                         try:
-                            _, entries = parse_strings_file(fp)
+                            preamble, entries = parse_strings_file(fp)
                         except Exception:
                             continue
                         bad = set(keys)
                         new_entries = [e for e in entries if e.key not in bad]
                         if len(new_entries) != len(entries):
                             deleted += (len(entries) - len(new_entries))
-                            write_strings_file(fp, new_entries, group_by_prefix=False)
+                            write_strings_file(fp, preamble, new_entries, group_by_prefix=False)
                 warns.append(f"已删除冗余 key：{deleted} 条")
 
     # strict 模式：把 warns 当 errors
@@ -1062,7 +1062,7 @@ def _apply_placeholder_mismatch_delete(
             if not fp.exists():
                 continue
             try:
-                _, entries = parse_strings_file(fp)
+                preamble, entries = parse_strings_file(fp)
             except Exception:
                 continue
             bad_keys = {k for (k, _, _) in items}
@@ -1072,7 +1072,7 @@ def _apply_placeholder_mismatch_delete(
             if len(new_entries) != len(entries):
                 deleted += (len(entries) - len(new_entries))
                 # 其它语言：仅按 key 排序，不分组
-                write_strings_file(fp, new_entries, group_by_prefix=False)
+                write_strings_file(fp, preamble, new_entries, group_by_prefix=False)
     return deleted
 
 def _resolve_redundant_policy(cfg: StringsI18nConfig, report: Dict[str, List[str]]) -> str:
