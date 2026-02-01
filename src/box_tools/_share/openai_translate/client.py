@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import os
+import sys
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
+from getpass import getpass
 
 try:
     from openai import OpenAI
@@ -14,16 +18,75 @@ class OpenAIConfigError(RuntimeError):
     pass
 
 
+_EXPORT_RE = re.compile(r'^\s*export\s+OPENAI_API_KEY\s*=\s*.*$')
+
+
+def _is_interactive() -> bool:
+    # stdin / stderr 都是 TTY 才认为可交互（更稳，避免管道/重定向）
+    return sys.stdin.isatty() and sys.stderr.isatty()
+
+
+def _upsert_to_bash_profile(api_key: str, profile_path: Path) -> None:
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    line = f'export OPENAI_API_KEY="{api_key}"\n'
+
+    if profile_path.exists():
+        lines = profile_path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
+    else:
+        lines = []
+
+    replaced = False
+    out = []
+    for ln in lines:
+        if ln.lstrip().startswith("export OPENAI_API_KEY=") or _EXPORT_RE.match(ln):
+            out.append(line)
+            replaced = True
+        else:
+            out.append(ln)
+
+    if not replaced:
+        if out and not out[-1].endswith("\n"):
+            out[-1] = out[-1] + "\n"
+        out.append("\n# Added by box_tools\n")
+        out.append(line)
+
+    profile_path.write_text("".join(out), encoding="utf-8")
+
+
 def resolve_api_key(api_key: Optional[str] = None) -> str:
     key = (api_key or "").strip() or os.getenv("OPENAI_API_KEY", "").strip()
-    if not key:
+    if key:
+        return key
+
+    # 找不到 key：非交互式保持原行为，别卡死
+    if not _is_interactive():
         raise OpenAIConfigError(
             "未检测到 OpenAI API Key。\n"
             "请先在终端配置环境变量：\n"
             '  export OPENAI_API_KEY="sk-***"\n'
             "或在调用时显式传入 api_key。"
         )
-    return key
+
+    # 交互式：提示输入并写入 ~/.bash_profile
+    print("未检测到 OPENAI_API_KEY。", file=sys.stderr)
+    entered = getpass("请输入 OpenAI API Key（输入不回显）： ").strip()
+    if not entered:
+        raise OpenAIConfigError("未输入 API Key，已退出。")
+
+    # 轻量校验：避免把空白字符写进去
+    if any(c.isspace() for c in entered):
+        raise OpenAIConfigError("API Key 包含空白字符，看起来不太对；请重新输入。")
+
+    bash_profile = Path.home() / ".bash_profile"
+    _upsert_to_bash_profile(entered, bash_profile)
+
+    # 让本次进程立刻生效
+    os.environ["OPENAI_API_KEY"] = entered
+
+    print(f"已写入 {bash_profile}。新的终端会话将自动生效。", file=sys.stderr)
+    print("当前终端如需立刻生效，可执行：source ~/.bash_profile", file=sys.stderr)
+
+    return entered
 
 
 @dataclass(frozen=True)
