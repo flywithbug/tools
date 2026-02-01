@@ -600,6 +600,32 @@ def assert_config_ok(
 
 # ----------------------------
 # load_config：把 raw dict 转成 StringsI18nConfig（路径解析为绝对路径）
+
+# ----------------------------
+# 配置字段归一化（openAIModel / api_key）
+# ----------------------------
+def _cfg_openai_model(raw: Dict[str, Any]) -> Optional[str]:
+    """读取 openAIModel；空字符串/空白视为 None。"""
+    v = raw.get("openAIModel")
+    if v is None:
+        # 兼容可能的别名（如果有人手写）
+        v = raw.get("openai_model") or raw.get("openaiModel")
+    if isinstance(v, str):
+        v = v.strip()
+        return v if v else None
+    return None
+
+
+def _cfg_api_key(raw: Dict[str, Any]) -> Optional[str]:
+    """读取 api_key / apiKey；空字符串/空白视为 None。"""
+    v = raw.get("api_key")
+    if v is None:
+        v = raw.get("apiKey")
+    if isinstance(v, str):
+        v = v.strip()
+        return v if v else None
+    return None
+
 # ----------------------------
 def load_config(cfg_path: Path, *, project_root: Optional[Path] = None) -> StringsI18nConfig:
     cfg_path = cfg_path.resolve()
