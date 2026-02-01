@@ -13,6 +13,151 @@ from typing import Dict, List, Optional, Any, Tuple
 import yaml
 
 # ----------------------------
+# Swift L10n.swift 生成
+# ----------------------------
+
+
+def _swift_escape(s: str) -> str:
+    """将文本转义为 Swift 字符串字面量可用的形式。"""
+    if s is None:
+        return ""
+    # 顺序很重要：先转义反斜杠
+    s = s.replace("\\", "\\\\")
+    s = s.replace('"', "\\\"")
+    s = s.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
+    return s
+
+
+_COMMENT_STRIP_RE = re.compile(r"^\s*(?://+|/\*+|\*+|\*/+)\s*|\s*(?:\*/)?\s*$")
+
+
+def _comment_to_doc_line(comments: List[str]) -> Optional[str]:
+    """把 .strings 上方的注释块提炼成一行 /// 文档注释（尽量贴近原文件）。"""
+    if not comments:
+        return None
+    # 找“最后一行有内容”的注释（通常最贴近 key 的语义）
+    for raw in reversed(comments):
+        s = raw.strip()
+        if not s:
+            continue
+        if not _is_comment_line(s):
+            # 非标准行也允许（parse_strings_file 已经把它归到 comments 里）
+            pass
+        # 去掉 // /* * */ 等标记
+        s = _COMMENT_STRIP_RE.sub("", s).strip()
+        if s:
+            return s
+    return None
+
+
+def _to_pascal_case(s: str) -> str:
+    # 仅做最小规则：按 '_' 分词，首字母大写，其余原样保留（兼容 historyLocations 这种 camel）
+    parts = [p for p in re.split(r"[_\s]+", s) if p]
+    if not parts:
+        return "X"
+    return "".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _to_camel_case_from_key_remainder(rem: str) -> str:
+    """把 group 之后的 key remainder（可能含 '.'/'_'）转成 lowerCamelCase 属性名。"""
+    # 以 '.' 分段；每段再以 '_' 分词
+    segs: List[str] = []
+    for seg in rem.split("."):
+        seg = seg.strip()
+        if not seg:
+            continue
+        segs.extend([w for w in seg.split("_") if w])
+
+    if not segs:
+        return "value"
+
+    out = segs[0]
+    for w in segs[1:]:
+        out += w[:1].upper() + w[1:]
+    # Swift 标识符不能以数字开头；极端情况兜底
+    if out and out[0].isdigit():
+        out = "_" + out
+    return out
+
+
+def generate_l10n_swift(
+    cfg: "StringsI18nConfig",
+    *,
+    strings_filename: str = "Localizable.strings",
+    out_path: Optional[Path] = None,
+) -> Path:
+    """从 Base.lproj/<strings_filename> 生成 L10n.swift（按 key 前缀分组）。"""
+    base_dir = (cfg.lang_root / cfg.base_folder).resolve()
+    src_fp = (base_dir / strings_filename).resolve()
+    if not src_fp.exists():
+        raise FileNotFoundError(f"未找到 Base strings 文件：{src_fp}")
+
+    out_path = (out_path or (cfg.project_root / "L10n.swift")).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    _preamble, entries = parse_strings_file(src_fp)
+    # 稳定排序：先分组再按 key
+    entries = sorted(entries, key=lambda e: (_group_prefix(e.key), e.key))
+
+    # 按 group_prefix 聚合
+    groups: Dict[str, List[StringsEntry]] = {}
+    for e in entries:
+        groups.setdefault(_group_prefix(e.key), []).append(e)
+
+    lines: List[str] = []
+    lines.append(f"// Auto-generated from {cfg.base_folder}/{strings_filename}")
+    lines.append("import Foundation")
+    lines.append("")
+    lines.append("extension String {")
+    lines.append("    func callAsFunction(_ arguments: CVarArg...) -> String {")
+    lines.append("        String(format: self, locale: Locale.current, arguments: arguments)")
+    lines.append("    }")
+    lines.append("}")
+    lines.append("")
+    lines.append("enum L10n {")
+
+    for grp in sorted(groups.keys(), key=lambda x: x.lower()):
+        enum_name = _to_pascal_case(grp)
+        lines.append(f"    enum {enum_name} {{")
+
+        for e in groups[grp]:
+            # remainder：去掉 group_prefix + 分隔符
+            rem = e.key
+            if "." in e.key and e.key.startswith(grp + "."):
+                rem = e.key[len(grp) + 1 :]
+            elif "_" in e.key and e.key.startswith(grp + "_"):
+                rem = e.key[len(grp) + 1 :]
+
+            prop = _to_camel_case_from_key_remainder(rem)
+            doc = _comment_to_doc_line(e.comments)
+            if doc:
+                lines.append(f"        /// {doc}")
+
+            key_esc = _swift_escape(e.key)
+            val_esc = _swift_escape(e.value)
+            cmt_esc = _swift_escape(e.value)  # 与现有样例一致：comment 使用同文案
+
+            lines.append(
+                f"        static var {prop}: String {{ return NSLocalizedString(\"{key_esc}\", value: \"{val_esc}\", comment: \"{cmt_esc}\") }}"
+            )
+            lines.append("")
+
+        # 去掉 enum 内末尾多余空行
+        while lines and lines[-1] == "":
+            lines.pop()
+        lines.append("    }")
+        lines.append("")
+
+    # 去掉文件末尾多余空行
+    while lines and lines[-1] == "":
+        lines.pop()
+    lines.append("}")
+    lines.append("")
+
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    return out_path
+
+# ----------------------------
 # 常量 / 默认文件名
 # ----------------------------
 DEFAULT_TEMPLATE_NAME = "strings_i18n.yaml"     # 内置模板文件（带注释）
