@@ -81,12 +81,12 @@ def _to_camel_case_from_key_remainder(rem: str) -> str:
     return out
 
 
-def _swift_prop_name_for_key(key: str) -> str:
+def _swift_prop_name_for_key(key: str) -> Tuple[str, str]:
     """
-    ✅ 与 generate_l10n_swift 完全一致的属性名推导逻辑：
-    - grp = _group_prefix(key)
+    ✅ 与 generate_l10n_swift 完全一致的属性名推导逻辑，但返回 (group_prefix, prop)
+    - grp = _group_prefix(key)  -> Swift enum 名来源
     - rem = 去掉 grp + '.' 或 grp + '_'（如果存在）
-    - camel = _to_camel_case_from_key_remainder(rem)
+    - prop = _to_camel_case_from_key_remainder(rem) -> enum 内 static var 名
     """
     grp = _group_prefix(key)
     rem = key
@@ -94,7 +94,9 @@ def _swift_prop_name_for_key(key: str) -> str:
         rem = key[len(grp) + 1 :]
     elif "_" in key and key.startswith(grp + "_"):
         rem = key[len(grp) + 1 :]
-    return _to_camel_case_from_key_remainder(rem)
+    prop = _to_camel_case_from_key_remainder(rem)
+    return grp, prop
+
 
 
 def scan_camelcase_conflicts(entries: List["StringsEntry"]) -> Dict[str, List[str]]:
