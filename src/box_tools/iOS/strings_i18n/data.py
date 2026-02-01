@@ -1,3 +1,4 @@
+# data.py
 from __future__ import annotations
 
 import json
@@ -80,6 +81,49 @@ def _to_camel_case_from_key_remainder(rem: str) -> str:
     return out
 
 
+def _swift_prop_name_for_key(key: str) -> str:
+    """
+    ✅ 与 generate_l10n_swift 完全一致的属性名推导逻辑：
+    - grp = _group_prefix(key)
+    - rem = 去掉 grp + '.' 或 grp + '_'（如果存在）
+    - camel = _to_camel_case_from_key_remainder(rem)
+    """
+    grp = _group_prefix(key)
+    rem = key
+    if "." in key and key.startswith(grp + "."):
+        rem = key[len(grp) + 1 :]
+    elif "_" in key and key.startswith(grp + "_"):
+        rem = key[len(grp) + 1 :]
+    return _to_camel_case_from_key_remainder(rem)
+
+
+def scan_camelcase_conflicts(entries: List["StringsEntry"]) -> Dict[str, List[str]]:
+    """
+    扫描“驼峰化后同名，但原 key 不同”的冲突（Swift L10n 生成会撞属性名）。
+    返回：{prop_name: [key1, key2, ...]}（仅保留冲突项，且 key 列表排序去重）
+    """
+    bucket: Dict[str, List[str]] = {}
+    for e in entries:
+        prop = _swift_prop_name_for_key(e.key)
+        bucket.setdefault(prop, []).append(e.key)
+
+    out: Dict[str, List[str]] = {}
+    for prop, keys in bucket.items():
+        uniq = sorted(set(keys))
+        if len(uniq) >= 2:
+            out[prop] = uniq
+    return out
+
+
+def _format_camel_conflicts(conflicts: Dict[str, List[str]], *, header: str) -> str:
+    lines: List[str] = []
+    lines.append(header)
+    for prop in sorted(conflicts.keys()):
+        keys = conflicts[prop]
+        lines.append(f"- {prop}: {keys}")
+    return "\n".join(lines)
+
+
 def generate_l10n_swift(
     cfg: "StringsI18nConfig",
     *,
@@ -106,6 +150,15 @@ def generate_l10n_swift(
     _preamble, entries = parse_strings_file(src_fp)
     # 稳定排序：先分组再按 key
     entries = sorted(entries, key=lambda e: (_group_prefix(e.key), e.key))
+
+    # ✅ 生成前的防爆：Base 内 camelCase 冲突直接报错（否则 Swift 编译炸）
+    camel_conflicts = scan_camelcase_conflicts(entries)
+    if camel_conflicts:
+        msg = _format_camel_conflicts(
+            camel_conflicts,
+            header=f"Base/{strings_filename} 存在 Swift camelCase 属性名冲突（请先手动改 key）：",
+        )
+        raise ValueError(msg)
 
     # 按 group_prefix 聚合
     groups: Dict[str, List[StringsEntry]] = {}
@@ -164,6 +217,7 @@ def generate_l10n_swift(
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
     return out_path
+
 
 # ----------------------------
 # 常量 / 默认文件名
@@ -247,8 +301,6 @@ def _load_languages(languages_path: Path) -> List[Dict[str, str]]:
             continue
         out.append({"code": code, "name_en": name_en})
     return out
-
-
 
 
 def _all_locale_codes(cfg: StringsI18nConfig) -> List[str]:
@@ -350,6 +402,8 @@ def _doctor_print_and_write(
         print(f"\nReport 写入失败：{e}")
 
     return 1 if errors else 0
+
+
 def build_target_locales_from_languages_json(
     languages_path: Path,
     *,
@@ -651,10 +705,8 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
     - Base.lproj/其它语言 *.strings 可解析性检查
     - key 一致性（缺失/冗余）统计
     - 重复 key 检测（Base 视为错误；其它语言视为警告）
+    - Swift camelCase 冲突检测（Base 视为错误：会导致 L10n.swift 属性名冲突）
     - printf 占位符一致性（%@/%d/%1$@ ...）检查（警告）
-    输出：
-    - 控制台可读摘要
-    - 详细报告写入 <lang_root>/.box_strings_i18n_reports/doctor_YYYYMMDD-HHMMSS.txt
     """
     errors: List[str] = []
     warns: List[str] = []
@@ -681,7 +733,6 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
         errors.append(f"languages.json 读取失败：{cfg.languages_path}（{e}）")
         return _doctor_print_and_write(cfg, errors, warns)
 
-    # 配置里出现的所有 locale code 都应该在 languages.json 里（否则 init 的 target_locales 也容易失真）
     cfg_codes = _all_locale_codes(cfg)
     missing_in_languages = [c for c in cfg_codes if c not in languages]
     if missing_in_languages:
@@ -699,6 +750,10 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
     # 解析 Base 并建立“金标准 key 集合”
     base_map: Dict[str, List[StringsEntry]] = {}
     base_keys_by_file: Dict[str, set] = {}
+
+    # ✅ 新增：Swift camelCase 冲突（按文件）
+    base_camel_conflicts_by_file: Dict[str, Dict[str, List[str]]] = {}
+
     for fp in base_files:
         try:
             preamble, entries = parse_strings_file(fp)
@@ -709,6 +764,17 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
         dups = _collect_duplicates(entries)
         if dups:
             errors.append(f"Base 存在重复 key：{fp.name} -> {dups}")
+
+        # ✅ camelCase 冲突：Base 视为 ERROR（gen L10n.swift 会撞属性名）
+        camel_conflicts = scan_camelcase_conflicts(entries)
+        if camel_conflicts:
+            base_camel_conflicts_by_file[fp.name] = camel_conflicts
+            errors.append(
+                "Base 存在 Swift camelCase 属性名冲突（会导致 L10n.swift 编译/生成失败）："
+                f"{fp.name} -> { {k: v for k, v in list(camel_conflicts.items())[:10]} }"
+                + (" …" if len(camel_conflicts) > 10 else "")
+            )
+
         base_map[fp.name] = entries
         base_keys_by_file[fp.name] = {e.key for e in entries}
 
@@ -720,11 +786,9 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
     missing_files: List[str] = []
     parse_fail: List[str] = []
 
-    # 缺失/冗余统计（按 语言->文件->keys）
     missing_keys: Dict[str, Dict[str, List[str]]] = {}
     redundant_keys: Dict[str, Dict[str, List[str]]] = {}
 
-    # 占位符不一致：按 语言->文件->[(key, base_ph, loc_ph)]
     placeholder_mismatch: Dict[str, Dict[str, List[Tuple[str, List[str], List[str]]]]] = {}
 
     for loc in other_locales:
@@ -745,7 +809,6 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
                 parse_fail.append(f"{loc.code}/{bf.name}（{e}）")
                 continue
 
-            # 重复 key：其它语言仅警告（因为历史原因可能存在，但仍应收敛）
             dups = _collect_duplicates(loc_entries)
             if dups:
                 warns.append(f"重复 key（{loc.code}/{bf.name}）：{dups}")
@@ -761,7 +824,6 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
             if rk:
                 redundant_keys.setdefault(loc.code, {}).setdefault(bf.name, []).extend(rk)
 
-            # printf 占位符一致性：只对同 key 做对比
             base_entries_by_key = {e.key: e for e in base_map.get(bf.name, [])}
             loc_entries_by_key = {e.key: e for e in loc_entries}
             for k in (base_keys & loc_keys):
@@ -785,8 +847,6 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
         errors.append("以下文件解析失败（请先修复语法/引号/分号等）："
                       + "; ".join(parse_fail[:20]) + (" …" if len(parse_fail) > 20 else ""))
 
-    # ---- 摘要性建议 ----
-    # 缺失 key（翻译未覆盖）只做提示：这是最常见的问题
     miss_count = sum(len(keys) for m in missing_keys.values() for keys in m.values())
     red_count = sum(len(keys) for m in redundant_keys.values() for keys in m.values())
     ph_count = sum(len(v) for m in placeholder_mismatch.values() for v in m.values())
@@ -798,7 +858,6 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
     if ph_count:
         warns.append(f"发现占位符不一致：共 {ph_count} 项（建议人工确认，避免运行时崩溃/格式错乱）")
 
-    # ---- 交互式预览/修复（可选）----
     if ph_count:
         policy = _resolve_placeholder_mismatch_policy(cfg, placeholder_mismatch, max_items=3)
         if policy == "delete":
@@ -806,14 +865,11 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
             warns.append(f"已删除占位符不一致条目：{n} 条（建议再运行 translate 增量补齐）")
 
     if red_count:
-        # 冗余 key 预览：每个文件只展示前 4 个 key（完整列表仍在 extra_sections 报告中）
         preview_report: Dict[str, List[str]] = {}
-        shown = 0
         for lang, by_file in sorted(redundant_keys.items(), key=lambda kv: kv[0]):
             for fn, keys in sorted(by_file.items(), key=lambda kv: kv[0]):
                 for k in sorted(set(keys)):
                     preview_report.setdefault(lang, []).append(f"{fn}:{k}")
-                # 这里 preview_report 交给 _format_key_report 进行截断展示
         content = _format_key_report(preview_report, title="⚠️ 冗余 key（示例预览）：", max_keys_per_file=4)
         print(content)
         p = _write_report_file(cfg, content, name="redundant_keys_preview")
@@ -822,12 +878,10 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
 
         opt = (cfg.options or {}).get("redundant_key_policy")
         if opt in {"keep", "delete"}:
-            # doctor 阶段不自动删，交由 sort（避免误删）
             pass
         elif sys.stdin.isatty():
             ans = input("是否现在就删除这些冗余 key？(y=删除 / n=保留继续) [n]: ").strip().lower()
             if ans == "y":
-                # 复用 sort 的删除逻辑：逐语言逐文件删 key
                 deleted = 0
                 for lang, by_file in redundant_keys.items():
                     loc_dir = (cfg.lang_root / f"{lang}.lproj").resolve()
@@ -848,7 +902,6 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
                             write_strings_file(fp, preamble, new_entries, group_by_prefix=False)
                 warns.append(f"已删除冗余 key：{deleted} 条")
 
-    # strict 模式：把 warns 当 errors
     strict = bool(cfg.options.get("doctor_strict", False))
     if strict and warns:
         errors.extend([f"[STRICT] {w}" for w in warns])
@@ -862,6 +915,7 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
             "缺失 key（按语言/文件）": missing_keys,
             "冗余 key（按语言/文件）": redundant_keys,
             "占位符不一致（按语言/文件）": placeholder_mismatch,
+            "Base Swift camelCase 冲突（按文件）": base_camel_conflicts_by_file,
         },
     )
 
@@ -878,14 +932,12 @@ def ensure_strings_files_integrity(cfg: StringsI18nConfig) -> Tuple[int, int]:
 
     base_strings = sorted([p for p in base_dir.glob('*.strings') if p.is_file()])
     if not base_strings:
-        # 没有任何 .strings：这通常意味着工程结构不对或未生成本地化文件
         raise ConfigError(
             f"Base 目录下未发现任何 .strings 文件：{base_dir}\n"
             f"解决方法：确认 Xcode 是否已生成 Localizable.strings 等文件，或检查 lang_root/base_folder 配置。"
         )
 
     locales: List[Locale] = []
-    # source + core + target（Base 本身不需要对齐）
     if cfg.source_locale:
         locales.append(cfg.source_locale)
     locales.extend(cfg.core_locales or [])
@@ -895,7 +947,6 @@ def ensure_strings_files_integrity(cfg: StringsI18nConfig) -> Tuple[int, int]:
     created_files = 0
 
     for loc in locales:
-        # 约定：<code>.lproj（例如：en.lproj / zh-Hant.lproj）
         loc_dir = (cfg.lang_root / f"{loc.code}.lproj").resolve()
         if not loc_dir.exists():
             loc_dir.mkdir(parents=True, exist_ok=True)
@@ -905,12 +956,10 @@ def ensure_strings_files_integrity(cfg: StringsI18nConfig) -> Tuple[int, int]:
         for base_file in base_strings:
             if base_file.name not in existing:
                 target = loc_dir / base_file.name
-                # 创建空文件（UTF-8），后续 translate/sort 会填充/排序
                 target.write_text('', encoding='utf-8')
                 created_files += 1
 
     return created_dirs, created_files
-
 
 
 # ----------------------------
@@ -956,7 +1005,6 @@ def parse_strings_file(path: Path) -> Tuple[List[str], List[StringsEntry]]:
         if m:
             key, value = m.group(1), m.group(2)
 
-            # 清理 comments：去掉末尾多余空行，确保“注释在字段上方”
             while pending_comments and pending_comments[-1].strip() == "":
                 pending_comments.pop()
 
@@ -966,15 +1014,12 @@ def parse_strings_file(path: Path) -> Tuple[List[str], List[StringsEntry]]:
             continue
 
         if not seen_first_entry:
-            # 文件头部：完整保留（通常是版权/说明注释）
             preamble.append(line)
             continue
 
-        # entry 之间的内容：认为是“下一个 entry 的注释/空行”
         if line.strip() == "" or _is_comment_line(line):
             pending_comments.append(line)
         else:
-            # 兼容非标准行：不丢内容，归到下一个 entry 的注释块中
             pending_comments.append(line)
 
     return preamble, entries
@@ -983,25 +1028,20 @@ def parse_strings_file(path: Path) -> Tuple[List[str], List[StringsEntry]]:
 def write_strings_file(path: Path, preamble: List[str], entries: List[StringsEntry], *, group_by_prefix: bool = True) -> None:
     out_lines: List[str] = []
 
-    # 写 header/preamble（原样）
     if preamble:
-        # 去掉末尾多余空行（避免文件头太松）
         while preamble and preamble[-1].strip() == "":
             preamble.pop()
         out_lines.extend(preamble)
-        out_lines.append("")  # header 与正文之间留一空行
+        out_lines.append("")
 
-    # entries 已经排序/分组完成；写回时保证：注释紧贴在字段上方
     prev_group: Optional[str] = None
     for e in entries:
         grp = _group_prefix(e.key)
         if prev_group is not None and grp != prev_group:
-            out_lines.append("")  # 组之间空一行
+            out_lines.append("")
         prev_group = grp
 
-        # 写注释
         if e.comments:
-            # 去掉注释块首尾多余空行
             comments = list(e.comments)
             while comments and comments[0].strip() == "":
                 comments.pop(0)
@@ -1009,17 +1049,14 @@ def write_strings_file(path: Path, preamble: List[str], entries: List[StringsEnt
                 comments.pop()
             out_lines.extend(comments)
 
-        # 写 entry（统一格式化）
         out_lines.append(f"\"{e.key}\" = \"{e.value}\";")
 
     path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
 
 
 def sort_strings_entries(preamble: List[str], entries: List[StringsEntry]) -> Tuple[List[str], List[StringsEntry]]:
-    # 根据前缀分组 + key 排序
     entries_sorted = sorted(entries, key=lambda e: (_group_prefix(e.key), e.key))
     return preamble, entries_sorted
-
 
 
 def _collect_duplicates(entries: List[StringsEntry]) -> List[str]:
@@ -1056,9 +1093,7 @@ def _apply_duplicate_policy(entries: List[StringsEntry], policy: str) -> List[St
             kept.append(e)
         return kept
 
-    # delete_all
     return [e for e in entries if e.key not in dups]
-
 
 
 def _base_keys_by_file(cfg: StringsI18nConfig) -> Dict[str, set]:
@@ -1094,25 +1129,16 @@ def scan_redundant_keys(cfg: StringsI18nConfig, base_keys_map: Dict[str, set]) -
                 if e.key not in base_keys:
                     redundant.append(f"{fp.name}:{e.key}")
         if redundant:
-            # 去重 + 排序（按文件名再按 key）
             redundant = sorted(set(redundant), key=lambda s: (s.split(":",1)[0], s.split(":",1)[1]))
             report[loc.code] = redundant
     return report
 
 
-
 def _format_key_report(report: Dict[str, List[str]], *, title: str, max_keys_per_file: int = 30) -> str:
-    """
-    将 {lang: ["File.strings:key", ...]} 变成更易读的文本。
-    - 语言分块
-    - 每个语言按文件分组
-    - 每个文件最多展示 max_keys_per_file 个 key（超出会显示“还有 N 个”）
-    """
     lines: List[str] = []
     lines.append(title)
     lines.append("")
     for lang, items in sorted(report.items(), key=lambda kv: kv[0]):
-        # group by file
         by_file: Dict[str, List[str]] = {}
         for it in items:
             if ":" in it:
@@ -1130,7 +1156,6 @@ def _format_key_report(report: Dict[str, List[str]], *, title: str, max_keys_per
             preview = ", ".join(shown)
             if remain > 0:
                 preview = preview + f", …（还有 {remain} 个）"
-            # 控制单行宽度
             wrapped = textwrap.fill(preview, width=100, subsequent_indent=" " * (len(fn) + 6))
             lines.append(f"  - {fn} ({len(keys)}): {wrapped}")
         lines.append("")
@@ -1148,15 +1173,9 @@ def _resolve_placeholder_mismatch_policy(
     *,
     max_items: int = 3,
 ) -> str:
-    """
-    占位符不一致处理策略：
-    - keep: 不改文件（仅提示）
-    - delete: 删除目标语言中“占位符不一致”的条目（让后续 translate 重新生成/人工修复）
-    """
     if not mismatches:
         return "keep"
 
-    # 展示前 max_items 条样例
     flat: List[Tuple[str, str, str, List[str], List[str]]] = []
     for lang, by_file in mismatches.items():
         for fn, items in by_file.items():
@@ -1187,7 +1206,6 @@ def _resolve_placeholder_mismatch_policy(
         print(f"✅ 使用配置 placeholder_mismatch_policy={opt}")
         return opt
 
-    # 非交互环境默认 keep
     if not sys.stdin.isatty():
         return "keep"
 
@@ -1204,7 +1222,6 @@ def _apply_placeholder_mismatch_delete(
     cfg: StringsI18nConfig,
     mismatches: Dict[str, Dict[str, List[Tuple[str, List[str], List[str]]]]],
 ) -> int:
-    """删除目标语言中占位符不一致的条目，返回删除数量。"""
     deleted = 0
     for lang, by_file in mismatches.items():
         loc_dir = (cfg.lang_root / f"{lang}.lproj").resolve()
@@ -1224,12 +1241,11 @@ def _apply_placeholder_mismatch_delete(
             new_entries = [e for e in entries if e.key not in bad_keys]
             if len(new_entries) != len(entries):
                 deleted += (len(entries) - len(new_entries))
-                # 其它语言：仅按 key 排序，不分组
                 write_strings_file(fp, preamble, new_entries, group_by_prefix=False)
     return deleted
 
+
 def _resolve_redundant_policy(cfg: StringsI18nConfig, report: Dict[str, List[str]]) -> str:
-    """返回 keep / delete / cancel"""
     if not report:
         return "keep"
 
@@ -1239,7 +1255,6 @@ def _resolve_redundant_policy(cfg: StringsI18nConfig, report: Dict[str, List[str
     if p is not None:
         print(f"📄 已输出报告文件：{p}")
 
-    # 配置中可预设策略（用于 CI/非交互），否则交互询问
     opt = (cfg.options or {}).get("redundant_key_policy")
     if opt in {"keep", "delete"}:
         print(f"✅ 使用配置 redundant_key_policy={opt}")
@@ -1257,7 +1272,6 @@ def _resolve_redundant_policy(cfg: StringsI18nConfig, report: Dict[str, List[str
 
 
 def scan_duplicate_keys(cfg: StringsI18nConfig) -> Dict[str, List[str]]:
-    """扫描所有语言（含 Base）下的 *.strings，返回 {lang_label: [dup_keys...]}"""
     result: Dict[str, set] = {}
 
     def add(lang_label: str, keys: List[str]) -> None:
@@ -1269,14 +1283,12 @@ def scan_duplicate_keys(cfg: StringsI18nConfig) -> Dict[str, List[str]]:
             result[lang_label] = s
         s.update(keys)
 
-    # Base
     base_dir = (cfg.lang_root / cfg.base_folder).resolve()
     if base_dir.exists():
         for fp in sorted(base_dir.glob("*.strings")):
             _, entries = parse_strings_file(fp)
             add("Base", _collect_duplicates(entries))
 
-    # other locales
     locales: List[Locale] = []
     if cfg.source_locale:
         locales.append(cfg.source_locale)
@@ -1295,7 +1307,6 @@ def scan_duplicate_keys(cfg: StringsI18nConfig) -> Dict[str, List[str]]:
 
 
 def _resolve_duplicate_policy(cfg: StringsI18nConfig, dup_report: Dict[str, List[str]]) -> str:
-    """若存在重复 key，决定处理策略。优先读 cfg.options.duplicate_key_policy。"""
     if not dup_report:
         return "keep_first"
 
@@ -1303,7 +1314,6 @@ def _resolve_duplicate_policy(cfg: StringsI18nConfig, dup_report: Dict[str, List
     if isinstance(opt, str) and opt in {"keep_first", "delete_all"}:
         return opt
 
-    # 交互式选择（让用户“最后决定”）
     print("\n⚠️ 检测到重复 key：")
     for lang, keys in dup_report.items():
         print(f"- {lang}: {keys}")
@@ -1311,7 +1321,7 @@ def _resolve_duplicate_policy(cfg: StringsI18nConfig, dup_report: Dict[str, List
     try:
         choice = input("输入 1/2/3（默认 1）：").strip()
     except EOFError:
-        choice = ""  # 非交互环境
+        choice = ""
 
     if choice == "2":
         return "delete_all"
@@ -1321,7 +1331,6 @@ def _resolve_duplicate_policy(cfg: StringsI18nConfig, dup_report: Dict[str, List
 
 
 def sort_base_strings_files(cfg: StringsI18nConfig, *, duplicate_policy: str) -> int:
-    """对 Base.lproj 下的所有 *.strings 文件排序（保留注释，注释写在字段上方）。"""
     base_dir = cfg.lang_root / cfg.base_folder
     if not base_dir.exists():
         raise ConfigError(f"Base 目录不存在：{base_dir}")
@@ -1338,7 +1347,6 @@ def sort_base_strings_files(cfg: StringsI18nConfig, *, duplicate_policy: str) ->
         entries = _apply_duplicate_policy(entries, duplicate_policy)
         _, entries_sorted = sort_strings_entries(preamble, entries)
 
-        # 更严格：比较 key 序列 + 是否分组写回会改变内容
         old_text = fp.read_text(encoding="utf-8") if fp.exists() else ""
         tmp_path = fp.with_suffix(fp.suffix + ".__tmp__")
         write_strings_file(tmp_path, preamble, entries_sorted, group_by_prefix=True)
@@ -1353,7 +1361,6 @@ def sort_base_strings_files(cfg: StringsI18nConfig, *, duplicate_policy: str) ->
 
 
 def sort_other_locale_strings_files(cfg: StringsI18nConfig, *, duplicate_policy: str, base_keys_map: Dict[str, set], redundant_policy: str) -> int:
-    """对非 Base 语言目录下的所有 *.strings 文件排序（仅按 key 排序，不做前缀分组）。"""
     locales: List[Locale] = []
     if cfg.source_locale:
         locales.append(cfg.source_locale)
@@ -1372,7 +1379,6 @@ def sort_other_locale_strings_files(cfg: StringsI18nConfig, *, duplicate_policy:
 
             entries = _apply_duplicate_policy(entries, duplicate_policy)
 
-            # 冗余字段：Base 中没有的 key（可选删除）
             if redundant_policy == "delete":
                 base_keys = base_keys_map.get(fp.name, set())
                 entries = [e for e in entries if e.key in base_keys]
@@ -1392,10 +1398,38 @@ def sort_other_locale_strings_files(cfg: StringsI18nConfig, *, duplicate_policy:
     return changed
 
 
+def _scan_base_camelcase_conflicts_for_sort(cfg: StringsI18nConfig) -> Dict[str, Dict[str, List[str]]]:
+    """给 sort 用：按 Base 文件扫描 camelCase 冲突，返回 {filename: {prop: [keys...]}}"""
+    base_dir = (cfg.lang_root / cfg.base_folder).resolve()
+    out: Dict[str, Dict[str, List[str]]] = {}
+    if not base_dir.exists():
+        return out
+    for fp in sorted(base_dir.glob("*.strings")):
+        try:
+            _, entries = parse_strings_file(fp)
+        except Exception:
+            continue
+        conflicts = scan_camelcase_conflicts(entries)
+        if conflicts:
+            out[fp.name] = conflicts
+    return out
+
+
 def run_sort(cfg: StringsI18nConfig) -> None:
     # sort 之前需要先检测文件完整性：确保每个语言目录下的 *.strings 与 Base.lproj 一致
     if run_doctor(cfg) != 0:
         print("❌ sort 中止：doctor 未通过")
+        return
+
+    # ✅ 再额外“明确打印一次”camelCase 冲突（满足你“sort 检查时也要打印出来处理”的要求）
+    camel_conflicts_by_file = _scan_base_camelcase_conflicts_for_sort(cfg)
+    if camel_conflicts_by_file:
+        print("\n❌ sort 检测到 Base Swift camelCase 属性名冲突（请先手动处理 key；sort 不会自动修）：")
+        for fn in sorted(camel_conflicts_by_file.keys()):
+            conflicts = camel_conflicts_by_file[fn]
+            print(f"\n[{fn}]")
+            for prop in sorted(conflicts.keys()):
+                print(f"- {prop}: {conflicts[prop]}")
         return
 
     try:
@@ -1409,14 +1443,12 @@ def run_sort(cfg: StringsI18nConfig) -> None:
     else:
         print("✅ 完整性检查通过：各语言 *.strings 文件集与 Base 一致")
 
-    # 重复字段检查（语言 + list），然后让你决定策略
     dup_report = scan_duplicate_keys(cfg)
     policy = _resolve_duplicate_policy(cfg, dup_report)
     if policy == "cancel":
         print("❌ sort 已取消（未做任何修改）")
         return
 
-    # 冗余字段检查（Base 中没有，但其他语言有）
     try:
         base_keys_map = _base_keys_by_file(cfg)
     except ConfigError as e:
@@ -1429,16 +1461,19 @@ def run_sort(cfg: StringsI18nConfig) -> None:
         print("❌ sort 已取消（未做任何修改）")
         return
 
-    # 1) Base.lproj：保留注释；注释在字段上方；按 key 排序并按前缀分组
     try:
         base_changed = sort_base_strings_files(cfg, duplicate_policy=policy)
     except ConfigError as e:
         print(f"❌ sort 中止：{e}")
         return
 
-    # 2) 其他语言：仅按 key 排序（不做前缀分组）
     try:
-        other_changed = sort_other_locale_strings_files(cfg, duplicate_policy=policy, base_keys_map=base_keys_map, redundant_policy=redundant_policy)
+        other_changed = sort_other_locale_strings_files(
+            cfg,
+            duplicate_policy=policy,
+            base_keys_map=base_keys_map,
+            redundant_policy=redundant_policy,
+        )
     except ConfigError as e:
         print(f"❌ sort 中止：{e}")
         return
@@ -1452,4 +1487,3 @@ def run_sort(cfg: StringsI18nConfig) -> None:
         print(f"✅ 其他语言排序完成：更新 {other_changed} 个 .strings 文件")
     else:
         print("✅ 其他语言已是有序状态：无需改动")
-

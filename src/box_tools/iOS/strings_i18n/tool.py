@@ -1,3 +1,4 @@
+# tool.py
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -148,7 +149,6 @@ def main(argv=None) -> int:
 
     if args.command == "gen":
         try:
-            # ✅ 产物约定：默认写到 lang_root 下面；相对路径也按 lang_root
             out_arg = Path(args.swift_out)
             out_path = out_arg if out_arg.is_absolute() else (cfg.lang_root / out_arg)
             out_path = out_path.resolve()
