@@ -266,6 +266,11 @@ class StringsI18nConfig:
     core_locales: List[Locale]
     target_locales: List[Locale]
 
+
+    # OpenAI
+    openai_model: Optional[str]     # 来自配置 openAIModel（可选），为空则走 options/env 默认
+    api_key: Optional[str]          # 来自配置 api_key/apiKey（可选），空字符串视为 None
+
     # 行为开关
     options: Dict[str, Any]
     prompts: Dict[str, Any]
@@ -619,6 +624,8 @@ def load_config(cfg_path: Path, *, project_root: Optional[Path] = None) -> Strin
         source_locale=source_locale,
         core_locales=core_locales,
         target_locales=target_locales,
+        openai_model=_cfg_openai_model(raw),
+        api_key=_cfg_api_key(raw),
         options=dict(raw.get("options") or {}),
         prompts=dict(raw.get("prompts") or {}),
     )
@@ -686,6 +693,19 @@ def validate_config(raw: Dict[str, Any]) -> None:
         raise ValueError("prompts 必须是 object")
     if "default_en" not in prompts or not isinstance(prompts["default_en"], str):
         raise ValueError("prompts.default_en 必须存在且为字符串")
+
+
+    # 可选：openAIModel / api_key(apiKey)
+    m = raw.get("openAIModel")
+    if m is not None and (not isinstance(m, str) or not str(m).strip()):
+        raise ValueError("openAIModel 若配置则必须为非空字符串")
+
+    ak = raw.get("api_key")
+    if ak is not None and not isinstance(ak, str):
+        raise ValueError("api_key 必须是字符串（可为空字符串）")
+    ak2 = raw.get("apiKey")
+    if ak2 is not None and not isinstance(ak2, str):
+        raise ValueError("apiKey 必须是字符串（可为空字符串）")
 
 
 def _locale_obj(obj: Any) -> Locale:

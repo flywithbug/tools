@@ -30,6 +30,7 @@ class _Task:
     tgt_lang_name: str
     model: str
     prompt_en: Optional[str]
+    api_key: Optional[str]
     base_file: Path
     tgt_file: Path
     base_preamble: List[str]   # 仅用于复制注释（可选）
@@ -198,12 +199,30 @@ def _compute_workers(max_workers_cfg: int, total_batches: int) -> int:
 
 
 def _get_model(cfg: data.StringsI18nConfig) -> str:
-    # 兼容 options 里可能出现的 model/openai_model
+    # 1) 优先使用配置顶层 openAIModel（若存在且非空）
+    m0 = getattr(cfg, "openai_model", None)
+    if isinstance(m0, str) and m0.strip():
+        return m0.strip()
+
+    # 2) 兼容 options 里可能出现的 model/openai_model/openaiModel
     if isinstance(cfg.options, dict):
-        m = cfg.options.get("model") or cfg.options.get("openai_model") or cfg.options.get("openaiModel")
+        m = cfg.options.get("model") or cfg.options.get("openai_model") or cfg.options.get("openaiModel") or cfg.options.get("openaiModel")
         if isinstance(m, str) and m.strip():
             return m.strip()
+
+    # 3) 最后回退到环境变量/默认
     return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+
+
+
+
+def _norm_api_key(v: Any) -> Optional[str]:
+    """空字符串/空白 -> None，其余字符串 strip 后返回。"""
+    if isinstance(v, str):
+        s = v.strip()
+        return s or None
+    return None
 
 
 def _build_prompt_en(cfg: data.StringsI18nConfig, target_code: str) -> Optional[str]:
@@ -476,7 +495,7 @@ def _translate_text_map(*, t: _Task) -> Dict[str, Any]:
         src_lang=t.src_lang_name,     # ✅ name_en
         tgt_locale=t.tgt_lang_name,   # ✅ name_en
         model=t.model,
-        api_key=None,                 # ✅ 不关心 OPENAI_API_KEY
+        api_key=_norm_api_key(t.api_key),
         progress_cb=cb,
     )
 

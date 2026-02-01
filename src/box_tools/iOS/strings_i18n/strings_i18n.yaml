@@ -2,6 +2,16 @@
 # 由 strings_i18n.py --init 自動生成
 # 可手動調整，但建議保持與 languages.json 同步
 
+# OpenAI 模型（默认 gpt-4o）
+# 可选值（枚举）：
+# - gpt-4o
+# - gpt-4o-mini
+# - gpt-4.1
+# - gpt-4.1-mini
+openAIModel: gpt-4o
+
+api_key: ''
+
 options:
   cleanup_extra_keys: true       # 是否自動清理目標語言中 Base 沒有的 key
   incremental_translate: true    # 是否支援增量翻譯（僅翻譯新增/變更的 key）
