@@ -29,19 +29,12 @@ def _is_interactive() -> bool:
 def _pick_profile_for_shell() -> Path:
     """
     按 $SHELL 选择写入的 profile 文件：
-    - zsh  -> ~/.zprofile
     - bash -> ~/.bash_profile
-    - 其他 -> ~/.profile（兜底）
     """
     shell = (os.getenv("SHELL") or "").strip().lower()
-    shell_name = Path(shell).name  # e.g. /bin/zsh -> zsh
     home = Path.home()
 
-    if shell_name == "zsh":
-        return home / ".zprofile"
-    if shell_name == "bash":
-        return home / ".bash_profile"
-    return home / ".profile"
+    return home / ".bash_profile"
 
 
 def _upsert_to_shell_profile(api_key: str, profile_path: Path) -> None:
