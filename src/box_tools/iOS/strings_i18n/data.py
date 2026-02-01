@@ -92,7 +92,15 @@ def generate_l10n_swift(
     if not src_fp.exists():
         raise FileNotFoundError(f"未找到 Base strings 文件：{src_fp}")
 
-    out_path = (out_path or (cfg.project_root / "L10n.swift")).resolve()
+    # ✅ 产物约定：L10n.swift 放在 lang_root 下面
+    # - out_path 为空：默认 <lang_root>/L10n.swift
+    # - out_path 为相对路径：相对 <lang_root>
+    # - out_path 为绝对路径：按绝对路径写
+    if out_path is None:
+        out_path = (cfg.lang_root / "L10n.swift")
+    elif not out_path.is_absolute():
+        out_path = (cfg.lang_root / out_path)
+    out_path = out_path.resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     _preamble, entries = parse_strings_file(src_fp)

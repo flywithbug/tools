@@ -35,7 +35,7 @@ BOX_TOOL = tool(
         opt("--project-root", "项目根目录（默认当前目录）"),
         opt("--no-incremental", "translate：关闭增量翻译，改为全量翻译"),
         opt("--strings-file", "gen：从 Base.lproj 下的哪个 .strings 文件生成（默认 Localizable.strings）"),
-        opt("--swift-out", "gen：L10n.swift 输出路径（默认 <project_root>/L10n.swift）"),
+        opt("--swift-out", "gen：L10n.swift 输出路径（默认 <lang_root>/L10n.swift；相对路径按 lang_root 解析）"),
     ],
     examples=[
         ex(
@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project-root", default=".", help="项目根目录（默认当前目录）")
     p.add_argument("--no-incremental", action="store_true", help="translate：关闭增量翻译（全量翻译）")
     p.add_argument("--strings-file", default="Localizable.strings", help="gen：Base.lproj 下输入 .strings 文件名")
-    p.add_argument("--swift-out", default="L10n.swift", help="gen：输出 Swift 文件路径（相对 project-root）")
+    p.add_argument("--swift-out", default="L10n.swift", help="gen：输出 Swift 文件路径（默认写到 lang_root 下；相对路径按 lang_root）")
     return p
 
 
@@ -148,7 +148,10 @@ def main(argv=None) -> int:
 
     if args.command == "gen":
         try:
-            out_path = (project_root / args.swift_out).resolve()
+            # ✅ 产物约定：默认写到 lang_root 下面；相对路径也按 lang_root
+            out_arg = Path(args.swift_out)
+            out_path = out_arg if out_arg.is_absolute() else (cfg.lang_root / out_arg)
+            out_path = out_path.resolve()
             fp = data.generate_l10n_swift(
                 cfg,
                 strings_filename=args.strings_file,
