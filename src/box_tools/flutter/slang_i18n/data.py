@@ -42,6 +42,7 @@ class I18nConfig:
     source_locale: Locale
     target_locales: List[Locale]
     openai_model: str
+    api_key: Optional[str]
     max_workers: int
     prompts: Dict[str, object]
     options: Dict[str, object]
@@ -53,6 +54,7 @@ def override_i18n_dir(cfg: I18nConfig, i18n_dir: Path) -> I18nConfig:
         source_locale=cfg.source_locale,
         target_locales=cfg.target_locales,
         openai_model=cfg.openai_model,
+        api_key=cfg.api_key,
         max_workers=cfg.max_workers,
         prompts=cfg.prompts,
         options=cfg.options,
@@ -252,11 +254,18 @@ def load_config(cfg_path: Path, project_root: Optional[Path] = None) -> I18nConf
     src = raw["source_locale"]
     targets = raw["target_locales"]
 
+    # api_key：支持 api_key / apiKey；空字符串 -> None
+    ak = raw.get("api_key")
+    if ak is None:
+        ak = raw.get("apiKey")
+    api_key = str(ak).strip() if isinstance(ak, str) and ak.strip() else None
+
     return I18nConfig(
         i18n_dir=i18n_dir,
         source_locale=Locale(code=src["code"], name_en=src["name_en"]),
         target_locales=[Locale(code=t["code"], name_en=t["name_en"]) for t in targets],
         openai_model=str(raw["openAIModel"]),
+        api_key=api_key,
         max_workers=int(raw["maxWorkers"]),
         prompts=raw["prompts"],
         options=raw["options"],
@@ -271,6 +280,12 @@ def validate_config(raw: Dict) -> None:
     for k in required_top:
         if k not in raw:
             raise ValueError(f"配置缺少字段：{k}")
+
+    # 可选：api_key / apiKey（出现时必须是字符串）
+    if "api_key" in raw and not isinstance(raw["api_key"], str):
+        raise ValueError("api_key 必须是字符串（可为空字符串）")
+    if "apiKey" in raw and not isinstance(raw["apiKey"], str):
+        raise ValueError("apiKey 必须是字符串（可为空字符串）")
 
     if not isinstance(raw["openAIModel"], str) or not raw["openAIModel"].strip():
         raise ValueError("openAIModel 必须是非空字符串")

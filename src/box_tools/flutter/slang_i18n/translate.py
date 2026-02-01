@@ -202,6 +202,7 @@ class _Task:
     tgt_lang_name: str
     model: str
     prompt_en: Optional[str]
+    api_key: Optional[str]
     tgt_file: Any  # Path
     tgt_obj: Dict[str, Any]  # 含 @@*
     src_for_translate: Dict[str, str]  # 本次提交的 key->src_text（已过滤非空字符串）
@@ -475,6 +476,7 @@ def _build_tasks(
                 tgt_lang_name=tgt_lang_name,
                 model=model,
                 prompt_en=prompt_en,
+                api_key=getattr(cfg, "api_key", None),
                 tgt_file=tgt_file,
                 tgt_obj=tgt_obj,
                 src_for_translate=src_for_translate,
@@ -492,7 +494,7 @@ def _translate_one(t: _Task) -> _TaskResult:
         src_lang=t.src_lang_name,     # ✅ name_en
         tgt_locale=t.tgt_lang_name,   # ✅ name_en
         model=t.model,
-        api_key=None,                 # ✅ 不关心 OPENAI_API_KEY
+        api_key=t.api_key,            # ✅ 配置非空则用配置，否则 None（走环境变量/默认）
         progress_cb=_make_progress_cb(t),
     )
     t1 = time.perf_counter()
