@@ -9,6 +9,15 @@ from typing import Any, Dict, List, Tuple, Optional
 
 import yaml
 
+
+def _normalize_api_key(v: Optional[str]) -> Optional[str]:
+    """把空字符串/空白当作 None，避免误覆盖环境变量。"""
+    if isinstance(v, str):
+        v = v.strip()
+        return v or None
+    return None
+
+
 # ----------------------------
 # 常量 / 默认文件名
 # ----------------------------
@@ -54,7 +63,7 @@ def override_i18n_dir(cfg: I18nConfig, i18n_dir: Path) -> I18nConfig:
         source_locale=cfg.source_locale,
         target_locales=cfg.target_locales,
         openai_model=cfg.openai_model,
-        api_key=cfg.api_key,
+        api_key=_normalize_api_key(cfg.api_key),
         max_workers=cfg.max_workers,
         prompts=cfg.prompts,
         options=cfg.options,

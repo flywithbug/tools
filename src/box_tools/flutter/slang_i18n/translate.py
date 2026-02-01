@@ -8,6 +8,15 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def _normalize_api_key(v: Optional[str]) -> Optional[str]:
+    """把空字符串/空白当作 None，避免误覆盖环境变量。"""
+    if isinstance(v, str):
+        v = v.strip()
+        return v or None
+    return None
+
+
 from box_tools._share.openai_translate.translate import translate_flat_dict
 from . import data
 
@@ -476,7 +485,7 @@ def _build_tasks(
                 tgt_lang_name=tgt_lang_name,
                 model=model,
                 prompt_en=prompt_en,
-                api_key=getattr(cfg, "api_key", None),
+                api_key=_normalize_api_key(getattr(cfg, "api_key", None)),
                 tgt_file=tgt_file,
                 tgt_obj=tgt_obj,
                 src_for_translate=src_for_translate,
@@ -494,7 +503,7 @@ def _translate_one(t: _Task) -> _TaskResult:
         src_lang=t.src_lang_name,     # ✅ name_en
         tgt_locale=t.tgt_lang_name,   # ✅ name_en
         model=t.model,
-        api_key=t.api_key,            # ✅ 配置非空则用配置，否则 None（走环境变量/默认）
+        api_key=_normalize_api_key(t.api_key),            # ✅ 配置非空则用配置，否则 None（走环境变量/默认）
         progress_cb=_make_progress_cb(t),
     )
     t1 = time.perf_counter()
