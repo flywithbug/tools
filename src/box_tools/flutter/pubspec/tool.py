@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from _share.tool_spec import tool, opt, ex
+from _share.tool_spec import tool, opt, ex, run_version_check_cli
 
 BOX_TOOL = tool(
     id="flutter.box_pubspec",
@@ -292,4 +292,5 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    run_version_check_cli()
     raise SystemExit(main())

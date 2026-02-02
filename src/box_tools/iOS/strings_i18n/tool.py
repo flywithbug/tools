@@ -8,7 +8,7 @@ from pathlib import Path
 from . import data
 from . import translate
 
-from _share.tool_spec import tool, opt, ex
+from _share.tool_spec import tool, opt, ex, run_version_check_cli
 
 BOX_TOOL = tool(
     id="ios.box_strings_i18n",
@@ -177,4 +177,5 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    run_version_check_cli()
     raise SystemExit(main())

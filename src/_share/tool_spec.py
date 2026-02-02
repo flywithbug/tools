@@ -302,23 +302,21 @@ def check_new_version(dist_name: str = "box") -> dict:
         "note": note,
     }
 
+def run_version_check_cli(
+    dist_name: str = "box",
+    *,
+    print_fn=print,
+) -> None:
+    info = check_new_version(dist_name)
+    if not info:
+        return
 
-if __name__ == "__main__":
-    # 仅提示是否有新版本，不做自动更新。
-    dist = "box"
-    info = check_new_version(dist)
-    installed = info.get("installed")
-    latest = info.get("latest")
-    if info.get("has_update"):
-        print(f"⚠️ 发现新版本：{dist} {installed} -> {latest}")
-        print("建议执行：box update")
+    if info.has_update:
+        print_fn(
+            f"⚠️ 发现新版本 {info.latest}（当前 {info.installed}），"
+            f"建议执行：box update"
+        )
     else:
-        if installed and latest:
-            print(f"✅ {dist} 已是最新：{installed}")
-        elif installed:
-            print(f"ℹ️ {dist} 当前版本：{installed}（未能获取最新版本）")
-        else:
-            print(f"ℹ️ 未检测到 {dist} 已安装版本（或 dist_name 不正确）")
-    note = info.get("note")
-    if note:
-        print(f"note: {note}")
+        print_fn(f"✅ 当前已是最新版本（{info.installed}）")
+
+

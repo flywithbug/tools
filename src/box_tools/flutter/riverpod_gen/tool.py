@@ -6,7 +6,7 @@ import re
 import sys
 from pathlib import Path
 
-from _share.tool_spec import tool, opt, ex
+from _share.tool_spec import tool, opt, ex, run_version_check_cli
 
 BOX_TOOL = tool(
     id="flutter.riverpod_gen",
@@ -227,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    run_version_check_cli()
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
