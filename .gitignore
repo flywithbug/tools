@@ -91,3 +91,10 @@ secrets.*
 *.key
 *.pem
 src/box/__pycache__/tool.cpython-310.pyc
+src/_share/__pycache__/tool_spec.cpython-310.pyc
+src/box_tools/ai/chat/__pycache__/tool.cpython-310.pyc
+src/box_tools/ai/translate/__pycache__/tool.cpython-310.pyc
+src/box_tools/flutter/pubspec/__pycache__/tool.cpython-310.pyc
+src/box_tools/flutter/riverpod_gen/__pycache__/tool.cpython-310.pyc
+src/box_tools/flutter/slang_i18n/__pycache__/tool.cpython-310.pyc
+src/box_tools/iOS/strings_i18n/__pycache__/tool.cpython-310.pyc
