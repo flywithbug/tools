@@ -4,6 +4,7 @@ import json
 import re
 import time
 import threading
+import sys
 from itertools import cycle
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -51,6 +52,41 @@ def _ask_abort(ctx: Context, prompt: str) -> bool:
         return False
     return ctx.confirm(prompt)
 
+
+
+# =======================
+# Loading helpers (style aligned with pub_publish.py)
+# =======================
+def _clear_line() -> None:
+    # 清除当前行，保持单行刷新效果
+    print("\r\033[2K", end="", flush=True)
+
+
+def _loading_animation(stop_event: threading.Event, label: str, t0: float) -> None:
+    """loading 动画 + 实时耗时（秒）"""
+    spinner = cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+    while not stop_event.is_set():
+        elapsed = time.perf_counter() - t0
+        print(f"{next(spinner)} {label}  (elapsed: {elapsed:6.1f}s) ", end="", flush=True)
+        time.sleep(0.1)
+        _clear_line()
+
+
+def run_cmd_with_loading(ctx: Context, label: str, cmd: list[str], cwd: Path):
+    """执行命令；带 loading 动画，避免长时间无输出像卡死。"""
+    stop_event = threading.Event()
+    _t0 = time.perf_counter()
+    t = threading.Thread(target=_loading_animation, args=(stop_event, label, _t0))
+    t.start()
+    try:
+        r = run_cmd(cmd, cwd=cwd, capture=True)
+    finally:
+        stop_event.set()
+        t.join()
+        _clear_line()
+    if r.code == 0:
+        ctx.echo(f"✅ {label} 完成（{time.perf_counter() - _t0:.2f}s）")
+    return r
 
 # =======================
 # Git helpers
@@ -652,70 +688,4 @@ def run(ctx: Context) -> int:
         return 130
     except Exception as e:
         ctx.echo(f"\n❌ 执行失败：{e}")
-        return
-class _Loader:
-    """简单 spinner + 计时器：用于长命令执行时显示 loading 与耗时。
-
-    注意：ctx.echo 在 box_tools 的实现里不一定支持 end= 参数，因此这里直接写 stdout。
-    如果 stdout 不可用，则退化为每隔一段时间打印一行（不会崩）。
-    """
-
-    def __init__(self, ctx: Context, label: str, interval: float = 0.1):
-        self.ctx = ctx
-        self.label = label
-        self.interval = interval
-        self._stop = threading.Event()
-        self._t: Optional[threading.Thread] = None
-        self._t0 = 0.0
-        self._spinner = cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-        self._last_fallback_print = 0.0
-
-    def _write_stdout(self, s: str) -> bool:
-        try:
-            sys.stdout.write(s)
-            sys.stdout.flush()
-            return True
-        except Exception:
-            return False
-
-    def start(self) -> None:
-        self._t0 = time.perf_counter()
-
-        def _run():
-            while not self._stop.is_set():
-                elapsed = time.perf_counter() - self._t0
-                msg = f"{next(self._spinner)} {self.label}… {elapsed:0.1f}s"
-                # 优先用 stdout 做单行刷新；否则退化为定期 ctx.echo（避免刷屏）
-                if self._write_stdout("\r" + msg):
-                    time.sleep(self.interval)
-                    continue
-
-                now = time.perf_counter()
-                if now - self._last_fallback_print >= 1.0:
-                    self._last_fallback_print = now
-                    self.ctx.echo(msg)
-                time.sleep(self.interval)
-
-        self._t = threading.Thread(target=_run, daemon=True)
-        self._t.start()
-
-    def stop(self) -> float:
-        self._stop.set()
-        if self._t:
-            self._t.join(timeout=0.3)
-        elapsed = time.perf_counter() - self._t0
-        # 清掉 stdout 上残留的单行
-        self._write_stdout("\r" + (" " * 120) + "\r")
-        return elapsed
-
-
-def run_cmd_with_loading(ctx: Context, label: str, cmd: list[str], cwd: Path):
-
-    loader = _Loader(ctx, label)
-    loader.start()
-    try:
-        r = run_cmd(cmd, cwd=cwd, capture=True)
-    finally:
-        elapsed = loader.stop()
-        ctx.echo(f"✅ {label} 完成（{elapsed:.2f}s）")
-    return r
+        return 1
