@@ -117,7 +117,8 @@ def run_cmd(cmd: list[str], cwd: Path | str, capture: bool = True) -> CmdResult:
 
 
 def flutter_pub_outdated_json(ctx: Context) -> dict:
-    r = run_cmd(["flutter", "pub", "outdated", "--json"], cwd=ctx.project_root, capture=True)
+    """执行 `flutter pub outdated --show-all --json` 并解析 JSON 返回。"""
+    r = run_cmd(["flutter", "pub", "outdated", "--show-all", "--json"], cwd=ctx.project_root, capture=True)
     if r.code != 0:
         raise RuntimeError((r.err.strip() or r.out.strip() or "flutter pub outdated 执行失败"))
     return json.loads(r.out)
