@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
+import re
 
 
 # ----------------------------
@@ -197,3 +198,127 @@ def _coerce_examples(items: Sequence[Mapping[str, Any]]) -> List[Dict[str, str]]
             }
         )
     return out
+
+
+# ----------------------------
+# 版本检测（可选：用于工具集自检）
+# ----------------------------
+
+def _version_parse(v: str):
+    """尽量稳地比较版本。优先用 packaging.version；没有就退化为数字段比较。"""
+    v = (v or "").strip()
+    try:
+        from packaging.version import Version  # type: ignore
+        return Version(v)
+    except Exception:
+        nums = []
+        for part in re.split(r"[.+-]", v)[0].split("."):
+            try:
+                nums.append(int(part))
+            except Exception:
+                nums.append(0)
+        return tuple(nums)
+
+
+def _get_installed_version(dist_name: str) -> str | None:
+    try:
+        import importlib.metadata as md  # py3.8+
+        return md.version(dist_name)
+    except Exception:
+        return None
+
+
+def _pick_pip() -> list[str] | None:
+    """优先用当前 python 对应的 pip，避免找错环境。"""
+    import sys
+    return [sys.executable, "-m", "pip"]
+
+
+def _get_latest_version_via_pip_index(dist_name: str) -> str | None:
+    """使用 `pip index versions` 获取最新版本（需要网络 + pip 支持该子命令）。"""
+    import subprocess
+
+    pip_cmd = _pick_pip()
+    if not pip_cmd:
+        return None
+
+    # pip index versions <dist>
+    p = subprocess.run([*pip_cmd, "index", "versions", dist_name], text=True, capture_output=True)
+    out = (p.stdout or "") + "\n" + (p.stderr or "")
+    if p.returncode != 0:
+        return None
+
+    # 常见输出：
+    #   <dist> (X.Y.Z)
+    #   Available versions: X.Y.Z, X.Y.(Z-1), ...
+    m = re.search(r"^\s*Available versions:\s*(.+?)\s*$", out, re.M)
+    if not m:
+        return None
+
+    versions = [x.strip() for x in m.group(1).split(",") if x.strip()]
+    return versions[0] if versions else None
+
+
+def check_new_version(dist_name: str = "box") -> dict:
+    """
+    检测是否存在更新版本（尽力而为）：
+      - installed: 本地已安装版本（importlib.metadata）
+      - latest: 通过 pip index versions 获取的最新版本（若不可用则为 None）
+      - has_update: bool
+      - note: 提示信息
+    """
+    installed = _get_installed_version(dist_name)
+    latest = _get_latest_version_via_pip_index(dist_name)
+
+    if not installed:
+        return {
+            "dist": dist_name,
+            "installed": None,
+            "latest": latest,
+            "has_update": False,
+            "note": "未检测到已安装版本（可能当前环境未安装该发行包，或 dist_name 不正确）。",
+        }
+
+    if not latest:
+        return {
+            "dist": dist_name,
+            "installed": installed,
+            "latest": None,
+            "has_update": False,
+            "note": "无法获取远端最新版本（可能离线/无 pip index 支持/被代理拦截）。",
+        }
+
+    try:
+        has_update = _version_parse(latest) > _version_parse(installed)
+    except Exception:
+        has_update = latest != installed
+
+    note = "有新版本可用。" if has_update else "已是最新版本。"
+    return {
+        "dist": dist_name,
+        "installed": installed,
+        "latest": latest,
+        "has_update": bool(has_update),
+        "note": note,
+    }
+
+
+if __name__ == "__main__":
+    # 仅提示是否有新版本，不做自动更新。
+    dist = "box"
+    info = check_new_version(dist)
+    installed = info.get("installed")
+    latest = info.get("latest")
+    if info.get("has_update"):
+        print(f"⚠️ 发现新版本：{dist} {installed} -> {latest}")
+        print("建议执行：box update")
+    else:
+        if installed and latest:
+            print(f"✅ {dist} 已是最新：{installed}")
+        elif installed:
+            print(f"ℹ️ {dist} 当前版本：{installed}（未能获取最新版本）")
+        else:
+            print(f"ℹ️ 未检测到 {dist} 已安装版本（或 dist_name 不正确）")
+    note = info.get("note")
+    if note:
+        print(f"note: {note}")
