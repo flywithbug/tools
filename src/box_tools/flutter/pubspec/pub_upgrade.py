@@ -344,6 +344,7 @@ def build_private_upgrade_plan_from_pubspec(
     plan: list[UpgradeItem] = []
     for name, dep in private_deps.items():
         pkg = index.get(name)
+        print(pkg)
         if not pkg:
             # pubspec 里有，但 outdated 没有（极少见）：提示即可
             continue
@@ -408,6 +409,7 @@ def run(ctx: Context) -> int:
 
         with step_scope(ctx, 4, "读取 pubspec.yaml 的私有依赖（dependencies）", "解析 dependencies hosted/url ..."):
             private_deps = read_pubspec_private_dependencies(ctx, PRIVATE_HOST_KEYWORDS)
+            print('private_deps',private_deps)
             if not private_deps:
                 ctx.echo("ℹ️ 在 pubspec.yaml 的 dependencies 未发现 private hosted 依赖。")
 
