@@ -206,6 +206,7 @@ def _coerce_examples(items: Sequence[Mapping[str, Any]]) -> List[Dict[str, str]]
 import re
 import time
 import urllib.request
+from pathlib import Path
 from importlib import metadata
 from typing import Callable, Optional as _Optional
 
@@ -233,6 +234,27 @@ def _get_installed_version(dist_name: str) -> _Optional[str]:
         return metadata.version(dist_name)
     except metadata.PackageNotFoundError:
         return None
+
+
+def _find_local_pyproject(start: Path | None = None) -> Path | None:
+    """从当前文件位置向上查找 pyproject.toml（用于源码运行时获取本地版本）。"""
+    p = start or Path(__file__).resolve()
+    for parent in [p.parent, *p.parents]:
+        cand = parent / "pyproject.toml"
+        if cand.exists() and cand.is_file():
+            return cand
+    return None
+
+
+def _get_local_version_from_pyproject() -> _Optional[str]:
+    pyproject = _find_local_pyproject()
+    if not pyproject:
+        return None
+    try:
+        text = pyproject.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    return _parse_project_version_from_pyproject_toml(text)
 
 
 def _version_lt(a: str, b: str) -> bool:
@@ -272,9 +294,30 @@ def check_tool_update_against_github_raw(
     - url: 远端 pyproject.toml 的 raw 地址
     """
     installed = _get_installed_version(dist_name)
+    installed_from = "dist"
+
+    # 源码方式运行（例如 `python3 src/_share/tool_spec.py`）时，本机未必安装了 dist。
+    # 这时尝试从仓库内的 pyproject.toml 读取本地版本，避免永远提示“未安装”。
+    if installed is None:
+        local_v = _get_local_version_from_pyproject()
+        if local_v:
+            installed = local_v
+            installed_from = "local"
+
+    # cache bust：避免公司代理/CDN 缓存返回旧版本
+    ts = int(time.time() * 1000)
+    url_fetch = url + ("&" if "?" in url else "?") + f"ts={ts}"
 
     try:
-        with urllib.request.urlopen(url, timeout=timeout_sec) as resp:
+        req = urllib.request.Request(
+            url_fetch,
+            headers={
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+                "User-Agent": f"{dist_name}/{installed or 'unknown'} (box-tools version-check)",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             text = resp.read().decode("utf-8", errors="replace")
         latest = _parse_project_version_from_pyproject_toml(text)
         if not latest:
@@ -300,7 +343,7 @@ def check_tool_update_against_github_raw(
             installed=None,
             latest=latest,
             has_update=False,
-            note=f"本机未安装 {dist_name}（无法对比）。",
+            note=f"本机未安装 {dist_name} 且未找到本地 pyproject.toml（无法对比）。",
         )
 
     has_update = _version_lt(installed, latest)
@@ -309,7 +352,7 @@ def check_tool_update_against_github_raw(
         installed=installed,
         latest=latest,
         has_update=has_update,
-        note="ok",
+        note=f"ok (installed_from={installed_from})",
     )
 
 def run_version_check(
@@ -335,8 +378,15 @@ def run_version_check(
         print_fn(f"ℹ️ 无法获取最新版本：{r.note}")
         return r
 
+    # 关键：无论是否有更新，都先把本地/远端版本打印出来，避免黑盒。
+    print_fn(f"ℹ️ 当前版本：{r.installed}；远端最新：{r.latest}")
+
     if not r.has_update:
-        print_fn(f"✅ 已是最新版本：{r.dist_name} {r.installed}")
+        # 区分“本地==远端”和“本地>远端”
+        if _version_lt(r.latest, r.installed):
+            print_fn("✅ 本地版本高于远端（可能是未发布/未合并到 master 的版本）。")
+        else:
+            print_fn("✅ 已是最新版本。")
         return r
 
     # 有更新：同时给出两种升级方式
