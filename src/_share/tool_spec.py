@@ -355,6 +355,8 @@ def check_tool_update_against_github_raw(
         note=f"ok (installed_from={installed_from})",
     )
 
+
+
 def run_version_check(
     *,
     dist_name: str = "box",

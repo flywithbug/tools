@@ -8,6 +8,7 @@
       <excludeFolder url="file://$MODULE_DIR$/tests/.dart_tool" />
       <excludeFolder url="file://$MODULE_DIR$/tests/.pub" />
       <excludeFolder url="file://$MODULE_DIR$/tests/build" />
+      <excludeFolder url="file://$MODULE_DIR$/.venv/include" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.12" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
