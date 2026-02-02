@@ -151,12 +151,13 @@ def compare_versions(v1: str, v2: str) -> int:
     b += [0] * (m - len(b))
     return (a > b) - (a < b)
 
-
 def _major_minor(v: str) -> tuple[int, int]:
     parts = _version_parts(v)
     major = parts[0] if len(parts) > 0 else 0
     minor = parts[1] if len(parts) > 1 else 0
     return major, minor
+
+
 
 
 def major_of(v: str) -> int:
@@ -232,60 +233,15 @@ def _parse_release_branch_version(branch: str) -> Optional[str]:
 
 def ensure_release_branch_version_guard(ctx: Context) -> None:
     """
-    upgrade 执行时的 release 分支版本守门（只比较 major.minor）：
+    upgrade 执行时的 release 分支版本守门：
     - 非 release-* 分支：跳过
-    - pubspec major.minor < release：提示用户 y/yes 则改版本并自动提交；n 则不改继续
-    - pubspec major.minor > release：抛异常中断
-    - patch 永远不作为阻断条件
+    - pubspec version < release 版本：提示用户 y/yes 则改版本并自动 git commit；n 则不改继续
+    - pubspec version > release 版本：抛异常中断
     """
     branch = _git_current_branch(ctx)
     release_v = _parse_release_branch_version(branch)
     if not release_v:
-        return
-
-    pubspec_text = read_text(ctx.pubspec_path)
-    current_v = read_pubspec_app_version(pubspec_text)
-    if not current_v:
-        raise RuntimeError("在 release 分支上未能读取 pubspec.yaml 顶层 version")
-
-    cur_mm = _major_minor(current_v)
-    rel_mm = _major_minor(release_v)
-
-    if cur_mm == rel_mm:
-        ctx.echo(
-            f"✅ release 分支版本校验通过：{branch} "
-            f"vs pubspec version={current_v}（minor 对齐）"
-        )
-        return
-
-    if cur_mm > rel_mm:
-        raise RuntimeError(
-            f"❌ 版本不一致：当前分支 {branch}（{release_v}）"
-            f" 但 pubspec.yaml version={current_v} 的 minor 更高。"
-        )
-
-    ctx.echo(
-        f"⚠️ pubspec.yaml version={current_v} "
-        f"低于 release 分支 {branch}（{release_v}）"
-    )
-
-    do_upgrade = ctx.yes or ctx.confirm(
-        f"是否将 version 升级到 {release_v} 并自动提交到 git？（y/yes 提交；n/no 跳过修改继续）"
-    )
-
-    if not do_upgrade:
-        ctx.echo("选择不修改 version，继续原 upgrade 流程。")
-        return
-
-    new_text, changed = write_pubspec_app_version(pubspec_text, release_v)
-    if not changed:
-        ctx.echo("version 已是目标值，无需修改。")
-        return
-
-    write_text_atomic(ctx.pubspec_path, new_text)
-    git_add_commit(ctx, [f"🔼 bump app version: {current_v} -> {release_v}"])
-    ctx.echo("✅ 已自动提交版本号变更，继续原 upgrade 流程。")
-
+        return  # 非 release 分支，直接放行
 
     pubspec_text = read_text(ctx.pubspec_path)
     current_v = read_pubspec_app_version(pubspec_text)
@@ -657,10 +613,9 @@ def build_private_upgrade_plan(
 
         current = _extract_current_version(pkg) or ""
         target = _extract_target_version(pkg) or ""
-        if not target:
+        if not current or not target:
             continue
-        # 无论当前是否已解析到新版本，只要声明下界 < latest 就 bump
-        if current and compare_versions(_strip_meta(current), _strip_meta(target)) >= 0:
+        if compare_versions(_strip_meta(current), _strip_meta(target)) >= 0:
             continue
 
         section = "dependencies"
