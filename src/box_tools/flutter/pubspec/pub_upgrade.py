@@ -654,17 +654,18 @@ def build_private_upgrade_plan(
             continue
         if name in skip_packages:
             continue
-
+        print('name: ', name)
         kind = pkg.get("kind")  # direct/dev/override/transitive
         if kind == "transitive":
             continue
-
+        print('kind: ', kind)
         dep = pkg.get("dependency") or {}
+        print('dependency: ', dep)
         if not isinstance(dep, dict):
             continue
         if not _is_private_dep(dep, private_host_keywords):
             continue
-        print(name)
+        print('name: ', name)
         section = "dependencies"
         if kind == "dev":
             section = "dev_dependencies"
