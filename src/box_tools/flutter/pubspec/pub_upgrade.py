@@ -649,6 +649,8 @@ def build_private_upgrade_plan(
 
     for pkg in pkgs:
         name = pkg.get("package")
+        print('--------------------------------------------')
+        print('--------------------------------------------')
         print(pkg)
         if not isinstance(name, str) or not name:
             continue
