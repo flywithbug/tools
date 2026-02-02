@@ -540,7 +540,13 @@ def flutter_pub_get(ctx: Context) -> None:
     if r.code != 0:
         raise RuntimeError((r.err or r.out).strip() or "flutter pub get 失败")
 
+@dataclass(frozen=True)
 class AnalyzeResult:
+    """flutter analyze 结果。
+
+    注意：必须是 dataclass，否则无法用 AnalyzeResult(ok=..., ...) 这种方式构造。
+    """
+
     ok: bool
     errors: list[str]
     warnings: list[str]
