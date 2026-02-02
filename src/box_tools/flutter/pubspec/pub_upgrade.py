@@ -649,6 +649,7 @@ def build_private_upgrade_plan(
 
     for pkg in pkgs:
         name = pkg.get("package")
+        print(pkg)
         if not isinstance(name, str) or not name:
             continue
         if name in skip_packages:
@@ -663,7 +664,7 @@ def build_private_upgrade_plan(
             continue
         if not _is_private_dep(dep, private_host_keywords):
             continue
-
+        print(name)
         section = "dependencies"
         if kind == "dev":
             section = "dev_dependencies"
