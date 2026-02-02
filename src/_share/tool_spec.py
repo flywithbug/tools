@@ -204,6 +204,7 @@ def _coerce_examples(items: Sequence[Mapping[str, Any]]) -> List[Dict[str, str]]
 # ----------------------------
 
 import re
+import time
 import urllib.request
 from importlib import metadata
 from typing import Callable, Optional as _Optional
