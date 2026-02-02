@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import threading
 import time
 from contextlib import contextmanager
@@ -81,15 +82,13 @@ def _git_has_remote_branch(ctx: Context, branch: str) -> bool:
     return bool((r.out or "").strip())
 
 
-def git_add_commit(ctx: Context, summary_lines: list[str], subject: str = "chore(pub): upgrade private deps") -> None:
+def git_add_commit(ctx: Context, summary_lines: list[str]) -> None:
     """
     统一提交（用于依赖升级/版本号升级）
-    - 明确、可预期：只 add pubspec.yaml / pubspec.lock（若存在）
-    - 自动 commit
-    - push 失败不静默
     """
+    subject = "chore(pub): upgrade private deps"
     body = "\n".join(summary_lines) if summary_lines else ""
-    msg = subject + ("\n\n" + body if body else "")
+    msg = subject + "\n\n" + body
 
     paths = ["pubspec.yaml"]
     if (ctx.project_root / "pubspec.lock").exists():
@@ -103,12 +102,16 @@ def git_add_commit(ctx: Context, summary_lines: list[str], subject: str = "chore
     if r.code != 0:
         raise RuntimeError(f"git commit 失败：{(r.err or r.out).strip()}")
 
-    # 如果有 remote 分支，则 push（且 push 失败要抛出）
-    br = _git_current_branch(ctx)
-    if _git_has_remote_branch(ctx, br):
-        r = run_cmd(["git", "push"], cwd=ctx.project_root, capture=True)
-        if r.code != 0:
-            raise RuntimeError(f"git push 失败：{(r.err or r.out).strip()}")
+    # 如果有 remote 分支，则 push（沿用原逻辑）
+    try:
+        br = _git_current_branch(ctx)
+        if _git_has_remote_branch(ctx, br):
+            r = run_cmd(["git", "push"], cwd=ctx.project_root, capture=True)
+            if r.code != 0:
+                raise RuntimeError(f"git push 失败：{(r.err or r.out).strip()}")
+    except Exception:
+        # push 失败不应静默吞掉：抛出给上层
+        raise
 
 
 # =======================
@@ -148,21 +151,9 @@ def compare_versions(v1: str, v2: str) -> int:
     return (a > b) - (a < b)
 
 
-def compare_major_minor(v1: str, v2: str) -> int:
-    """
-    release 守门规则：只比较 major.minor，忽略 patch / pre / build
-    """
-    a, b = _version_parts(v1), _version_parts(v2)
-    a_mm = (a[0] if len(a) > 0 else 0, a[1] if len(a) > 1 else 0)
-    b_mm = (b[0] if len(b) > 0 else 0, b[1] if len(b) > 1 else 0)
-    return (a_mm > b_mm) - (a_mm < b_mm)
-
-
-def major_minor_str(v: str) -> str:
+def major_of(v: str) -> int:
     parts = _version_parts(v)
-    major = parts[0] if len(parts) > 0 else 0
-    minor = parts[1] if len(parts) > 1 else 0
-    return f"{major}.{minor}"
+    return parts[0] if parts else 0
 
 
 def read_pubspec_app_version(pubspec_text: str) -> Optional[str]:
@@ -204,6 +195,7 @@ def write_pubspec_app_version(pubspec_text: str, new_version: str) -> tuple[str,
             if m:
                 prefix, old_v, suffix = m.group(1), m.group(2), m.group(3) or ""
                 if old_v != new_version:
+                    # 保留原始换行符风格
                     newline = "\n"
                     if raw.endswith("\r\n"):
                         newline = "\r\n"
@@ -232,16 +224,10 @@ def _parse_release_branch_version(branch: str) -> Optional[str]:
 
 def ensure_release_branch_version_guard(ctx: Context) -> None:
     """
-    upgrade 执行时的 release 分支版本守门（只比较 major.minor，忽略 patch）：
-
-    行为规则：
-      pubspec major.minor < release -> 提示，可 y/yes 自动修并提交
-      pubspec major.minor == release -> 直接通过
-      pubspec major.minor > release -> 直接报错
-
-    自动修复策略：
-      将 pubspec.yaml 顶层 version bump 到 release 的版本号（按分支名，通常是 X.Y.0）
-      并自动 git commit
+    upgrade 执行时的 release 分支版本守门：
+    - 非 release-* 分支：跳过
+    - pubspec version < release 版本：提示用户 y/yes 则改版本并自动 git commit；n 则不改继续
+    - pubspec version > release 版本：抛异常中断
     """
     branch = _git_current_branch(ctx)
     release_v = _parse_release_branch_version(branch)
@@ -253,29 +239,27 @@ def ensure_release_branch_version_guard(ctx: Context) -> None:
     if not current_v:
         raise RuntimeError("在 release 分支上未能读取 pubspec.yaml 顶层 version:，请先补齐后再执行 upgrade。")
 
-    cmp_mm = compare_major_minor(current_v, release_v)
-    if cmp_mm == 0:
-        ctx.echo(
-            f"✅ release 分支版本校验通过：{branch}（{major_minor_str(release_v)}）"
-            f" 与 pubspec version={current_v}（{major_minor_str(current_v)}）major.minor 一致（忽略 patch）"
-        )
+    # 比较时忽略 +meta / -pre 等
+    cmp = compare_versions(_strip_meta(current_v), _strip_meta(release_v))
+    if cmp == 0:
+        ctx.echo(f"✅ release 分支版本校验通过：{branch} 与 pubspec version={current_v} 一致")
         return
 
-    if cmp_mm > 0:
+    if cmp > 0:
         raise RuntimeError(
-            f"❌ 版本不一致（major.minor）：当前分支 {branch}（{major_minor_str(release_v)}）"
-            f" 但 pubspec.yaml version={current_v}（{major_minor_str(current_v)}）更高。"
-            f" 请切到正确的 release 分支或修正 version 后再升级。"
+            f"❌ 版本不一致：当前分支 {branch}（{release_v}）"
+            f" 但 pubspec.yaml version={current_v} 更高。请切到正确的 release 分支或修正 version 后再升级。"
         )
 
-    # cmp_mm < 0 ：pubspec major.minor 低于 release major.minor
-    ctx.echo(
-        f"⚠️ 检测到 release 分支 {branch}（{major_minor_str(release_v)}），"
-        f"但 pubspec.yaml version={current_v}（{major_minor_str(current_v)}）更低。"
-    )
-    do_upgrade = True if ctx.yes else ctx.confirm(
-        f"是否将 pubspec.yaml version 升级到 {release_v} 并自动提交到 git？（y/yes 提交；n/no 跳过修改继续）"
-    )
+    # cmp < 0 ：pubspec 低于 release 版本
+    ctx.echo(f"⚠️ 检测到 release 分支 {branch}（{release_v}），但 pubspec.yaml version={current_v} 更低。")
+    if ctx.yes:
+        do_upgrade = True
+    else:
+        # 这里语义是：y/yes => 升级并提交；n/no => 不改继续
+        do_upgrade = ctx.confirm(
+            f"是否将 version 升级到 {release_v} 并自动提交到 git？（y/yes 提交；n/no 跳过修改继续）"
+        )
 
     if not do_upgrade:
         ctx.echo("选择不修改 version，继续原 upgrade 流程。")
@@ -289,13 +273,24 @@ def ensure_release_branch_version_guard(ctx: Context) -> None:
     write_text_atomic(ctx.pubspec_path, new_text)
     ctx.echo(f"✅ 已更新 pubspec.yaml version：{current_v} -> {release_v}")
 
-    # 自动提交（不静默）
-    git_add_commit(
-        ctx,
-        [f"🔼 bump app version: {current_v} -> {release_v}"],
-        subject="chore(release): align pubspec version with release branch",
-    )
+    # 自动提交
+    git_add_commit(ctx, [f"🔼 bump app version: {current_v} -> {release_v}"])
     ctx.echo("✅ 已自动提交版本号变更，继续原 upgrade 流程。")
+
+
+def upper_bound_of_minor(app_version: str) -> Optional[str]:
+    """
+    app_version=3.46.0 -> 3.47.0 （用于 pub constraints 生成上界）
+    """
+    if not app_version:
+        return None
+    parts = _version_parts(app_version)
+    if len(parts) < 2:
+        return None
+    parts[1] += 1
+    for i in range(2, len(parts)):
+        parts[i] = 0
+    return ".".join(str(x) for x in parts[:3])
 
 
 # =======================
@@ -379,46 +374,75 @@ def _apply_version_in_block(block_lines: list[str], new_version: str) -> tuple[l
       foo:
         hosted: xxx
         version: ^1.2.3
-    ）
+
+    规则（按你的要求“别自作聪明”）：
+      - 只升级到 latest（传入的 new_version 必须是裸版本号，如 3.46.0）
+      - 如果原 token 以 '^' 开头，则保留 '^'：^old -> ^new
+      - 如果原 token 没有 '^'，则写成裸版本：old -> new
+      - 对复杂约束（如 ">=... <..."）不做推导，保持不改
     """
+
+    def _match_simple_token(tok: str) -> Optional[bool]:
+        """
+        返回：
+          - True  : tok 是 '^<semver>' 形式
+          - False : tok 是 '<semver>' 形式
+          - None  : 其它复杂形式（不改）
+        """
+        tok = tok.strip()
+        # 允许 semver 的 -pre / +build
+        semver = r"\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
+        if re.match(rf"^\^{semver}$", tok):
+            return True
+        if re.match(rf"^{semver}$", tok):
+            return False
+        return None
+
     changed = False
     out: list[str] = []
+    bare_new = new_version.lstrip("^").strip()
+
     for raw in block_lines:
         m = _VERSION_LINE_RE.match(raw.rstrip("\n\r"))
-        if m:
-            indent, name, ver, comment = m.group(1), m.group(2), m.group(3), m.group(4) or ""
-            # 只替换 "version:" 行 or 顶层 "foo:" 行里像版本号/约束的 token
-            if name == "version":
-                if ver != new_version:
-                    newline = "\n"
-                    if raw.endswith("\r\n"):
-                        newline = "\r\n"
-                    out.append(
-                        f"{indent}version: {new_version}"
-                        f"{(' ' if comment and not comment.startswith(' ') else '')}{comment}{newline}"
-                    )
-                    changed = True
-                else:
-                    out.append(raw)
-            else:
-                # 依赖名行：foo: ^1.2.3
-                # 允许 token: ^1.2.3 / 1.2.3 / >=1.2.3 <2.0.0 等（这里主要覆盖 caret 场景）
-                if re.match(r"^[\^<>=~]?\d+\.\d+(\.\d+)?", ver):
-                    if ver != new_version:
-                        newline = "\n"
-                        if raw.endswith("\r\n"):
-                            newline = "\r\n"
-                        out.append(
-                            f"{indent}{name}: {new_version}"
-                            f"{(' ' if comment and not comment.startswith(' ') else '')}{comment}{newline}"
-                        )
-                        changed = True
-                    else:
-                        out.append(raw)
-                else:
-                    out.append(raw)
-        else:
+        if not m:
             out.append(raw)
+            continue
+
+        indent, name, ver, comment = m.group(1), m.group(2), m.group(3), m.group(4) or ""
+
+        def _emit_replaced(line_key: str, old_tok: str) -> str:
+            keep_caret = _match_simple_token(old_tok)
+            if keep_caret is None:
+                # 复杂约束，不改
+                return raw
+            new_tok = ("^" + bare_new) if keep_caret else bare_new
+            if old_tok == new_tok:
+                return raw
+
+            newline = "\n"
+            if raw.endswith("\r\n"):
+                newline = "\r\n"
+            spacer = (" " if comment and not comment.startswith(" ") else "")
+            if line_key == "version":
+                return f"{indent}version: {new_tok}{spacer}{comment}{newline}"
+            return f"{indent}{name}: {new_tok}{spacer}{comment}{newline}"
+
+        if name == "version":
+            replaced = _emit_replaced("version", ver)
+            if replaced is not raw:
+                changed = True
+            out.append(replaced)
+        else:
+            # 依赖名行：foo: <token>
+            # 只处理简单 token（^semver / semver），避免碰到 map / git / path / 复杂 range
+            if _match_simple_token(ver) is None:
+                out.append(raw)
+            else:
+                replaced = _emit_replaced("dep", ver)
+                if replaced is not raw:
+                    changed = True
+                out.append(replaced)
+
     return out, changed
 
 
@@ -451,6 +475,7 @@ def apply_upgrades_to_pubspec(ctx: Context, upgrades: list[UpgradeItem]) -> tupl
         if current_dep and current_section and current_dep in upgrade_map:
             u = upgrade_map[current_dep]
             if u.section != current_section:
+                # 不是目标 section，直接原样输出
                 new_lines.extend(current_block)
             else:
                 out, ch = _apply_version_in_block(current_block, u.target)
@@ -468,6 +493,7 @@ def apply_upgrades_to_pubspec(ctx: Context, upgrades: list[UpgradeItem]) -> tupl
         raw = lines[i]
         header = _is_section_header(raw)
         if header:
+            # flush 前一个 block
             flush_block()
             in_section = True
             current_section = header
@@ -497,6 +523,8 @@ def apply_upgrades_to_pubspec(ctx: Context, upgrades: list[UpgradeItem]) -> tupl
                     current_dep_indent = len(indent)
                     current_block = [raw]
                 else:
+                    # 是否进入下一个依赖 block？
+                    # 新行缩进 <= 当前 dep 缩进 且不是空行/注释，视为新 block
                     this_indent = len(indent)
                     if raw.strip() and this_indent <= (current_dep_indent or 0):
                         flush_block()
@@ -520,14 +548,18 @@ def apply_upgrades_to_pubspec(ctx: Context, upgrades: list[UpgradeItem]) -> tupl
         new_lines.append(raw)
         i += 1
 
+    # flush last
     flush_block()
 
-    # 校验：目标包必须都能被处理到（按你的要求：定位不到就报错）
+    # 校验：目标包必须都能被处理到（如果完全没改到，且确实存在升级目标，也认为是错误）
     for u in upgrades:
         if any(s.startswith(f"{u.name}: ") for s in summary_lines):
             continue
+        # 如果这个包本身不在 pubspec 里（比如被删了），这里不强制报错
+        # 但你原需求是“有问题就抛出”，所以这里保守记 error
         errors.append(f"未能在 pubspec.yaml 中定位并替换依赖：{u.name}（section={u.section}）")
 
+    # 写回
     if changed:
         write_text_atomic(ctx.pubspec_path, "".join(new_lines))
 
@@ -554,6 +586,30 @@ def _parse_pub_outdated(ctx: Context) -> dict:
     return flutter_pub_outdated_json(ctx)
 
 
+def _extract_current_version(item: dict) -> Optional[str]:
+    cur = item.get("current")
+    if isinstance(cur, dict):
+        v = cur.get("version")
+        return v if isinstance(v, str) else None
+    return None
+
+
+def _extract_target_version(item: dict) -> Optional[str]:
+    # 优先 latest.version
+    latest = item.get("latest")
+    if isinstance(latest, dict):
+        v = latest.get("version")
+        if isinstance(v, str):
+            return v
+    # fallback resolvable
+    res = item.get("resolvable")
+    if isinstance(res, dict):
+        v = res.get("version")
+        if isinstance(v, str):
+            return v
+    return None
+
+
 def _extract_latest_version(item: dict) -> Optional[str]:
     """
     latest.version 优先；否则 fallback 到 resolvable.version
@@ -571,130 +627,26 @@ def _extract_latest_version(item: dict) -> Optional[str]:
     return None
 
 
-def _read_current_constraint_from_pubspec_block(block_lines: list[str]) -> Optional[str]:
-    """
-    从一个依赖 block 中读出当前约束（尽量不“猜”）：
-      - foo: ^1.2.3     -> ^1.2.3
-      - foo:
-          version: ^1.2.3 -> ^1.2.3
-    找不到则返回 None
-    """
-    # case 1: foo: <token>
-    m = re.match(r"^\s*[A-Za-z0-9_]+\s*:\s*([^\s#]+)\s*(?:#.*)?$", block_lines[0].rstrip("\n\r"))
-    if m:
-        tok = m.group(1)
-        # 如果是 map block（例如 hosted/path/git），tok 可能是空/或看起来不是版本
-        if re.match(r"^[\^<>=~]?\d+\.\d+(\.\d+)?", tok):
-            return tok
-
-    # case 2: version: <token> in subsequent lines
-    for raw in block_lines[1:]:
-        m2 = re.match(r"^\s*version\s*:\s*([^\s#]+)\s*(?:#.*)?$", raw.rstrip("\n\r"))
-        if m2:
-            tok = m2.group(1)
-            if re.match(r"^[\^<>=~]?\d+\.\d+(\.\d+)?", tok):
-                return tok
-            return tok  # 即便不是简单数字（例如 range），也原样返回，交给替换逻辑做最小改动
-    return None
-
-
-def _collect_dep_blocks_with_sections(pubspec_text: str) -> dict[str, dict]:
-    """
-    扫描 pubspec.yaml，收集三个 section 中每个 direct 依赖的 block 原文（保留行）
-    返回：{dep_name: {"section": section, "lines": [..block..]}}
-    """
-    lines = pubspec_text.splitlines(keepends=True)
-    result: dict[str, dict] = {}
-
-    in_section = False
-    current_section: Optional[str] = None
-    current_dep: Optional[str] = None
-    current_dep_indent: Optional[int] = None
-    current_block: list[str] = []
-
-    def flush():
-        nonlocal current_dep, current_block
-        if current_dep and current_section and current_block:
-            result[current_dep] = {"section": current_section, "lines": current_block[:] }
-        current_dep = None
-        current_block = []
-
-    i = 0
-    while i < len(lines):
-        raw = lines[i]
-        header = _is_section_header(raw)
-        if header:
-            flush()
-            in_section = True
-            current_section = header
-            current_dep_indent = None
-            i += 1
-            continue
-
-        if in_section:
-            # section end
-            if raw.strip() and _block_indent(raw) == 0 and not raw.lstrip().startswith("#"):
-                flush()
-                in_section = False
-                current_section = None
-                current_dep_indent = None
-                i += 1
-                continue
-
-            m = re.match(r"^(\s*)([A-Za-z0-9_]+)\s*:\s*(.*)$", raw.rstrip("\n\r"))
-            if m and m.group(2) != "version":
-                indent = m.group(1)
-                dep = m.group(2)
-
-                if current_dep is None:
-                    current_dep = dep
-                    current_dep_indent = len(indent)
-                    current_block = [raw]
-                else:
-                    this_indent = len(indent)
-                    if raw.strip() and this_indent <= (current_dep_indent or 0):
-                        flush()
-                        current_dep = dep
-                        current_dep_indent = this_indent
-                        current_block = [raw]
-                    else:
-                        current_block.append(raw)
-                i += 1
-                continue
-
-            if current_dep is not None:
-                current_block.append(raw)
-
-            i += 1
-            continue
-
-        i += 1
-
-    flush()
-    return result
-
-
 def build_private_upgrade_plan(
     ctx: Context,
     private_host_keywords: tuple[str, ...],
     skip_packages: set[str],
 ) -> list[UpgradeItem]:
     """
-    私有依赖升级策略（优化版）：
-      - 对所有私有 hosted（hosted.url 存在）direct/dev/override 依赖：
-          统一把 pubspec 中的版本下界 bump 到 latest（写成 ^latest）
-      - 不管 lockfile 是否已经解析到新版本
-      - 只改 pubspec.yaml 的约束声明
-      - transitive 不处理
-      - dev/overrides 默认关闭（可通过开关打开）
-    """
-    pubspec_text = read_text(ctx.pubspec_path)
-    blocks = _collect_dep_blocks_with_sections(pubspec_text)
+    私有依赖升级策略（去掉“自作聪明”版）：
 
+    在 release / upgrade 时：
+      - 仅处理“私有 hosted 依赖”（dependency.hosted.url 存在，且可选命中关键词）
+      - 版本一律升级到 pub outdated 的 latest.version（fallback resolvable.version）
+      - 不扫描 pubspec.yaml 推导写回形式
+      - 是否保留 '^' 由写回时根据原 token 决定：
+          有 '^' -> 保留 '^'，仅替换版本号
+          无 '^' -> 写成裸版本号
+    """
     data = _parse_pub_outdated(ctx)
     pkgs = data.get("packages") or []
-
     plan: list[UpgradeItem] = []
+
     for pkg in pkgs:
         name = pkg.get("package")
         if not isinstance(name, str) or not name:
@@ -709,11 +661,9 @@ def build_private_upgrade_plan(
         dep = pkg.get("dependency") or {}
         if not isinstance(dep, dict):
             continue
-
         if not _is_private_dep(dep, private_host_keywords):
             continue
 
-        # section gating
         section = "dependencies"
         if kind == "dev":
             section = "dev_dependencies"
@@ -724,30 +674,14 @@ def build_private_upgrade_plan(
             if not UPGRADE_DEPENDENCY_OVERRIDES:
                 continue
 
-        # 必须能在 pubspec 中定位到 block，否则按“有问题就抛出”的要求交给后续 errors
-        b = blocks.get(name)
-        current_constraint = None
-        if b and b.get("section") == section:
-            current_constraint = _read_current_constraint_from_pubspec_block(b.get("lines") or [])
-
-        latest_v = _extract_latest_version(pkg)
+        current_v = _extract_current_version(pkg) or ""
+        latest_v = _extract_latest_version(pkg) or ""
         if not latest_v:
             continue
-
-        target_constraint = f"^{latest_v}"
-
-        # 如果已经是目标值，就不入 plan
-        if current_constraint == target_constraint:
+        if current_v and compare_versions(_strip_meta(current_v), _strip_meta(latest_v)) >= 0:
             continue
 
-        plan.append(
-            UpgradeItem(
-                name=name,
-                current=current_constraint or "(unknown)",
-                target=target_constraint,
-                section=section,
-            )
-        )
+        plan.append(UpgradeItem(name=name, current=current_v or "(unknown)", target=latest_v, section=section))
 
     plan.sort(key=lambda x: x.name.lower())
     return plan
@@ -779,7 +713,7 @@ def run(ctx: Context) -> int:
         with step_scope(ctx, 2, "拉取最新代码（git pull --ff-only）", "拉取远程更新..."):
             _git_pull_ff_only(ctx)
 
-        with step_scope(ctx, 3, "release 分支版本校验（只比较 major.minor）", "检查 release 分支版本..."):
+        with step_scope(ctx, 3, "release 分支版本校验（pubspec version 对齐）", "检查 release 分支版本..."):
             ensure_release_branch_version_guard(ctx)
 
         with step_scope(ctx, 4, "执行 flutter pub get（预检查）", "正在执行 pub get..."):
@@ -795,7 +729,7 @@ def run(ctx: Context) -> int:
         with step_scope(
             ctx,
             5,
-            f"分析待升级私有依赖（统一下界 bump 到 latest；dev={UPGRADE_DEV_DEPENDENCIES}, overrides={UPGRADE_DEPENDENCY_OVERRIDES})",
+            f"分析待升级私有依赖（latest.version；dev={UPGRADE_DEV_DEPENDENCIES}, overrides={UPGRADE_DEPENDENCY_OVERRIDES})",
             "分析待升级依赖...",
         ):
             plan = build_private_upgrade_plan(
@@ -808,13 +742,14 @@ def run(ctx: Context) -> int:
             ctx.echo("ℹ️ 未发现需要升级的私有依赖。")
             return 0
 
-        ctx.echo("将升级以下私有依赖（仅改 pubspec 约束下界到 ^latest）：")
+        ctx.echo("将升级以下私有依赖：")
         for u in plan:
-            ctx.echo(f"  - {u.name}: {u.current} -> {u.target}（section={u.section}）")
+            ctx.echo(f"  - {u.name}: {u.current} -> {u.target}")
 
         with step_scope(ctx, 6, "执行依赖升级（写入 pubspec.yaml，保留注释与结构）", "写入 pubspec.yaml..."):
             changed, summary, errors = apply_upgrades_to_pubspec(ctx, plan)
             if errors:
+                # 你原需求：有问题就抛出
                 raise RuntimeError("pubspec 依赖替换失败：\n" + "\n".join(errors))
             if not changed:
                 ctx.echo("ℹ️ 未发生实际修改。")
@@ -833,7 +768,7 @@ def run(ctx: Context) -> int:
             ctx.echo("✅ flutter analyze 通过")
 
         with step_scope(ctx, 9, "自动提交（git add + git commit）", "正在提交代码..."):
-            git_add_commit(ctx, summary, subject="chore(pub): bump private hosted deps lower bounds to latest")
+            git_add_commit(ctx, summary)
             ctx.echo("✅ 已提交")
 
         total_dt = time.perf_counter() - total_t0
