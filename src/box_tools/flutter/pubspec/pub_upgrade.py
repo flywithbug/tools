@@ -1,46 +1,46 @@
 from __future__ import annotations
 
+import json
 import re
-import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from itertools import cycle
+from pathlib import Path
 from typing import Optional
 
-from .tool import Context, read_text, write_text_atomic, run_cmd, flutter_pub_outdated_json
-
-
-# =======================
-# Config switches (top-level)
-# =======================
-# 本阶段只读取 pubspec.yaml 的 dependencies 私有依赖（不含 dev_dependencies / overrides）
-PRIVATE_HOST_KEYWORDS: tuple[str, ...] = tuple()  # 为空表示不做域名过滤（只要有 hosted url 就算私有）
-SKIP_PACKAGES: set[str] = {"ap_recaptcha"}
-
+from .tool import Context, read_text, write_text_atomic, run_cmd
 
 # =======================
-# Small UI helpers
+# Behavior switches
+# =======================
+UPGRADE_DEV_DEPENDENCIES = False        # 本次仍只处理 dependencies（你后续要扩展再开）
+UPGRADE_DEPENDENCY_OVERRIDES = False
+
+# Analyze 输出：最多展示前 N 条 info/warning
+MAX_SHOW_INFOS = 3
+MAX_SHOW_WARNINGS = 3
+MAX_SHOW_ERRORS = 20  # 错误展示上限（避免刷屏）
+
+# =======================
+# Step UI
 # =======================
 @contextmanager
-def step_scope(ctx: Context, idx: int, title: str, msg: str):
+def step_scope(ctx: Context, idx: int, title: str, msg: str = ""):
     t0 = time.perf_counter()
     ctx.echo(f"\n========== Step {idx}: {title} ==========")
     if msg:
         ctx.echo(msg)
     try:
         yield
-        dt = time.perf_counter() - t0
-        ctx.echo(f"✅ Step {idx} 完成（{dt:.2f}s）")
+        ctx.echo(f"✅ Step {idx} 完成（{time.perf_counter() - t0:.2f}s）")
     except Exception as e:
-        dt = time.perf_counter() - t0
-        ctx.echo(f"❌ Step {idx} 失败（{dt:.2f}s）：{e}")
+        ctx.echo(f"❌ Step {idx} 失败（{time.perf_counter() - t0:.2f}s）：{e}")
         raise
 
 
-def _ask_continue(ctx: Context, prompt: str) -> bool:
+def _ask_abort(ctx: Context, prompt: str) -> bool:
     """
-    返回 True 表示“中断”，False 表示“继续”
+    返回 True 表示中断
     """
     if ctx.yes:
         return False
@@ -69,11 +69,165 @@ def _git_pull_ff_only(ctx: Context) -> None:
         raise RuntimeError(f"git pull --ff-only 失败：{(r.err or r.out).strip()}")
 
 
+def _git_current_branch(ctx: Context) -> str:
+    r = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(f"获取当前分支失败：{(r.err or r.out).strip()}")
+    return (r.out or "").strip()
+
+
+def _git_has_remote_branch(ctx: Context, branch: str) -> bool:
+    r = run_cmd(["git", "ls-remote", "--heads", "origin", branch], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(f"git ls-remote 失败：{(r.err or r.out).strip()}")
+    return bool((r.out or "").strip())
+
+
+def _git_add_commit_push(ctx: Context, summary_lines: list[str]) -> None:
+    subject = "chore(pub): upgrade private deps"
+    body = "\n".join(summary_lines) if summary_lines else ""
+    msg = subject + ("\n\n" + body if body else "")
+
+    paths = ["pubspec.yaml"]
+    if (ctx.project_root / "pubspec.lock").exists():
+        paths.append("pubspec.lock")
+
+    r = run_cmd(["git", "add", *paths], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(f"git add 失败：{(r.err or r.out).strip()}")
+
+    r = run_cmd(["git", "commit", "-m", msg], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError(f"git commit 失败：{(r.err or r.out).strip()}")
+
+    br = _git_current_branch(ctx)
+    if _git_has_remote_branch(ctx, br):
+        r = run_cmd(["git", "push"], cwd=ctx.project_root, capture=True)
+        if r.code != 0:
+            raise RuntimeError(f"git push 失败：{(r.err or r.out).strip()}")
+    else:
+        ctx.echo(f"ℹ️ 远端不存在 origin/{br}，跳过 push。")
+
+
 # =======================
-# Version compare (resolved versions only)
+# Pubspec private deps (dependencies only)
 # =======================
+@dataclass(frozen=True)
+class PubspecPrivateDep:
+    name: str
+    constraint: str
+    hosted_url: str
+
+
+def _is_section_header(line: str, section: str) -> bool:
+    return bool(re.match(rf"^\s*{re.escape(section)}\s*:\s*(#.*)?$", line))
+
+
+def _indent(s: str) -> int:
+    return len(s) - len(s.lstrip(" "))
+
+
+def read_pubspec_private_dependencies(pubspec_text: str) -> dict[str, PubspecPrivateDep]:
+    """
+    只读取 dependencies 区块内的私有 hosted 依赖。
+    通过文本扫描尽量保留样式，不使用 YAML parser。
+    识别形态（示例）：
+      foo:
+        hosted:
+          url: https://...
+          name: foo
+        version: ^0.0.11
+    也兼容 hosted: https://... 这种简写（如果存在的话）。
+    """
+    lines = pubspec_text.splitlines(keepends=False)
+    in_deps = False
+    deps_indent = None  # type: Optional[int]
+
+    result: dict[str, PubspecPrivateDep] = {}
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if _is_section_header(line, "dependencies"):
+            in_deps = True
+            deps_indent = _indent(line)
+            i += 1
+            continue
+
+        # 离开 dependencies 区块：遇到同级 header（缩进<=deps_indent 且像 "xxx:"）
+        if in_deps:
+            if line.strip() and deps_indent is not None:
+                if _indent(line) <= deps_indent and re.match(r"^\s*[A-Za-z0-9_]+\s*:\s*(#.*)?$", line):
+                    in_deps = False
+                    deps_indent = None
+                    continue
+
+            # 识别包名起点：两空格缩进 + name:
+            m = re.match(r"^(\s*)([A-Za-z0-9_]+)\s*:\s*(#.*)?$", line)
+            if m:
+                name_indent = len(m.group(1))
+                name = m.group(2)
+
+                # block 可能是单行版本：  foo: ^1.2.3
+                # 但这种写法没有 hosted url，不算“私有 hosted”，所以这里只处理 block
+                # 扫描 block 直到缩进回退 <= name_indent
+                hosted_url: Optional[str] = None
+                constraint: Optional[str] = None
+
+                j = i + 1
+                while j < len(lines):
+                    l = lines[j]
+                    if l.strip() and _indent(l) <= name_indent:
+                        break
+
+                    # hosted 简写： hosted: https://...
+                    m_hosted_short = re.match(r"^\s*hosted\s*:\s*([^\s#]+)\s*(#.*)?$", l)
+                    if m_hosted_short and not hosted_url:
+                        hosted_url = m_hosted_short.group(1).strip()
+
+                    # hosted: 下的 url:
+                    m_url = re.match(r"^\s*url\s*:\s*([^\s#]+)\s*(#.*)?$", l)
+                    # 注意：url: 可能出现在别处，但通常在 hosted block 内；这里用“就近”策略
+                    if m_url and not hosted_url:
+                        hosted_url = m_url.group(1).strip()
+
+                    # version:
+                    m_ver = re.match(r"^\s*version\s*:\s*(.+?)\s*(#.*)?$", l)
+                    if m_ver:
+                        raw = m_ver.group(1).strip()
+                        # 去掉包裹引号
+                        if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+                            raw = raw[1:-1].strip()
+                        constraint = raw
+
+                    j += 1
+
+                if hosted_url and constraint:
+                    result[name] = PubspecPrivateDep(name=name, constraint=constraint, hosted_url=hosted_url)
+
+                i = j
+                continue
+
+        i += 1
+
+    return result
+
+
+# =======================
+# Outdated (show-all) + plan
+# =======================
+def flutter_pub_outdated_show_all_json(ctx: Context) -> dict:
+    r = run_cmd(["flutter", "pub", "outdated", "--show-all", "--json"], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError((r.err or r.out or "").strip() or "flutter pub outdated 失败")
+    try:
+        return json.loads(r.out or "{}")
+    except Exception as e:
+        raise RuntimeError(f"解析 outdated json 失败：{e}")
+
+
 def _strip_meta(v: str) -> str:
-    v = (v or "").strip()
+    v = v.strip()
     v = v.split("+", 1)[0]
     v = v.split("-", 1)[0]
     return v.strip()
@@ -81,7 +235,7 @@ def _strip_meta(v: str) -> str:
 
 def _parse_nums(v: str) -> list[int]:
     base = _strip_meta(v)
-    parts = base.split(".") if base else []
+    parts = base.split(".")
     nums: list[int] = []
     for p in parts:
         try:
@@ -92,13 +246,6 @@ def _parse_nums(v: str) -> list[int]:
 
 
 def compare_versions(a: str, b: str) -> int:
-    """
-    返回:
-      -1: a < b
-       0: a == b
-      +1: a > b
-    仅比较数字段（忽略 -pre / +build）
-    """
     na = _parse_nums(a)
     nb = _parse_nums(b)
     n = max(len(na), len(nb))
@@ -112,174 +259,11 @@ def compare_versions(a: str, b: str) -> int:
     return 0
 
 
-# =======================
-# Flutter / Pub helpers
-# =======================
-def flutter_pub_get(ctx: Context, *, with_loading: bool = True) -> None:
-    cmd = ["flutter", "pub", "get"]
-    if not with_loading:
-        r = run_cmd(cmd, cwd=ctx.project_root, capture=True)
-        if r.code != 0:
-            raise RuntimeError((r.err or r.out or "").strip())
-        return
-
-    stop = threading.Event()
-    spinner = cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-
-    def _spin():
-        while not stop.is_set():
-            ctx.echo(next(spinner), end="\r")
-            time.sleep(0.08)
-
-    t = threading.Thread(target=_spin, daemon=True)
-    t.start()
-    try:
-        r = run_cmd(cmd, cwd=ctx.project_root, capture=True)
-        if r.code != 0:
-            raise RuntimeError((r.err or r.out or "").strip())
-    finally:
-        stop.set()
-        t.join(timeout=0.3)
-        ctx.echo(" " * 30, end="\r")
-
-
-# =======================
-# pubspec.yaml parsing (dependencies only, private hosted)
-# =======================
-_PKG_HEADER_RE = re.compile(r"^  ([A-Za-z0-9_]+):\s*(.*)$")
-_SECTION_RE = re.compile(r"^([A-Za-z0-9_]+):\s*(#.*)?$")  # 顶层 key:（0 缩进）
-_HOSTED_INLINE_RE = re.compile(r"^\s{4}hosted:\s*([^\s#]+)\s*(#.*)?$")
-_KV_RE = re.compile(r"^\s{4}([A-Za-z0-9_]+):\s*(.*?)\s*(#.*)?$")  # 4 缩进 key: value
-_URL_KV_RE = re.compile(r"^\s{6}url:\s*(.*?)\s*(#.*)?$")          # 6 缩进 url: value
-
-
-def _is_top_level_section(line: str) -> Optional[str]:
-    """返回顶层 section 名称（如 dependencies / dev_dependencies），否则 None"""
-    if line.startswith(" "):
-        return None
-    m = _SECTION_RE.match(line.rstrip("\n"))
-    if not m:
-        return None
-    return m.group(1)
-
-
-def _strip_quotes(s: str) -> str:
-    s = (s or "").strip()
-    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
-        return s[1:-1].strip()
-    return s
-
-
-@dataclass(frozen=True)
-class PubspecPrivateDep:
-    name: str
-    constraint: str  # pubspec 里的版本约束（如 ^0.0.11），可能为空
-    hosted_url: str
-
-
-def read_pubspec_private_dependencies(ctx: Context, private_host_keywords: tuple[str, ...]) -> dict[str, PubspecPrivateDep]:
-    """
-    读取 pubspec.yaml 的 dependencies 区块，找出 private hosted 依赖：
-      - 只要 hosted url 存在就算 hosted
-      - 若配置了关键词，则 hosted url 需命中关键词之一
-    返回：name -> PubspecPrivateDep
-    """
-    text = read_text(ctx.pubspec_path)
-    lines = text.splitlines(keepends=False)
-
-    in_deps = False
-    out: dict[str, PubspecPrivateDep] = {}
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-
-        sec = _is_top_level_section(line)
-        if sec is not None:
-            in_deps = (sec == "dependencies")
-            i += 1
-            continue
-
-        if not in_deps:
-            i += 1
-            continue
-
-        m = _PKG_HEADER_RE.match(line)
-        if not m:
-            i += 1
-            continue
-
-        name = m.group(1)
-        if name in SKIP_PACKAGES:
-            i += 1
-            continue
-
-        remainder = (m.group(2) or "").strip()
-        # inline 形式：foo: ^1.2.3（通常不是 hosted，直接跳过）
-        if remainder and not remainder.startswith("#"):
-            i += 1
-            continue
-
-        hosted_url: str | None = None
-        constraint: str = ""
-
-        j = i + 1
-        while j < len(lines):
-            ln = lines[j]
-
-            sec2 = _is_top_level_section(ln)
-            if sec2 is not None:
-                break
-            if _PKG_HEADER_RE.match(ln):
-                break
-
-            mh = _HOSTED_INLINE_RE.match(ln)
-            if mh and not hosted_url:
-                hosted_url = _strip_quotes(mh.group(1))
-                j += 1
-                continue
-
-            mkv = _KV_RE.match(ln)
-            if mkv:
-                key = mkv.group(1)
-                val = _strip_quotes(mkv.group(2) or "")
-                if key == "version" and val:
-                    constraint = val
-                if key == "hosted":
-                    if val and not hosted_url:
-                        hosted_url = val
-                j += 1
-                continue
-
-            mu = _URL_KV_RE.match(ln)
-            if mu and not hosted_url:
-                hosted_url = _strip_quotes(mu.group(1) or "")
-                j += 1
-                continue
-
-            j += 1
-
-        if hosted_url:
-            if private_host_keywords:
-                u = hosted_url.lower()
-                if not any(k.lower() in u for k in private_host_keywords):
-                    i = j
-                    continue
-            out[name] = PubspecPrivateDep(name=name, constraint=constraint, hosted_url=hosted_url)
-
-        i = j
-
-    return out
-
-
-# =======================
-# outdated json parsing
-# =======================
 def _extract_current_version(pkg: dict) -> Optional[str]:
     cur = pkg.get("current")
     if isinstance(cur, dict):
         v = cur.get("version")
-        if isinstance(v, str):
+        if isinstance(v, str) and v.strip():
             return v.strip()
     return None
 
@@ -303,47 +287,44 @@ class UpgradeItem:
     name: str
     pubspec_constraint: str
     resolved_current: str
-    target_latest: str
+    latest: str
 
 
 def build_private_upgrade_plan_from_pubspec(
     ctx: Context,
-    private_deps: dict[str, PubspecPrivateDep],
+    pubspec_privates: dict[str, PubspecPrivateDep],
 ) -> list[UpgradeItem]:
-    """
-    使用 pubspec.yaml 中解析出来的“私有依赖 name 集合”来做判定，
-    然后去 flutter pub outdated --json 里找对应包，比较 resolved current vs latest，
-    如需要升级则列出。
-    """
-    data = flutter_pub_outdated_json(ctx)
+    data = flutter_pub_outdated_show_all_json(ctx)
     pkgs = data.get("packages") or []
-
-    index: dict[str, dict] = {}
-    for p in pkgs:
-        n = p.get("package")
-        if isinstance(n, str) and n:
-            index[n] = p
+    idx: dict[str, dict] = {}
+    for pkg in pkgs:
+        name = pkg.get("package")
+        if isinstance(name, str) and name:
+            idx[name] = pkg
 
     plan: list[UpgradeItem] = []
-    for name, dep in private_deps.items():
-        pkg = index.get(name)
+    for name, dep in pubspec_privates.items():
+        pkg = idx.get(name)
         if not pkg:
+            # outdated 里没有（可能没解析出来/被 override 影响），跳过但提示
+            ctx.echo(f"⚠️ outdated 输出中找不到包 {name}，跳过比对。")
             continue
 
-        cur = _extract_current_version(pkg) or ""
-        latest = _extract_latest_version(pkg) or ""
+        cur = _extract_current_version(pkg) or "(unknown)"
+        latest = _extract_latest_version(pkg)
         if not latest:
             continue
 
-        if cur and compare_versions(cur, latest) >= 0:
+        # 只要 latest > current 才算需要升级
+        if cur != "(unknown)" and compare_versions(cur, latest) >= 0:
             continue
 
         plan.append(
             UpgradeItem(
                 name=name,
-                pubspec_constraint=dep.constraint or "(no version field)",
-                resolved_current=cur or "(unknown)",
-                target_latest=latest,
+                pubspec_constraint=dep.constraint,
+                resolved_current=cur,
+                latest=latest,
             )
         )
 
@@ -352,148 +333,215 @@ def build_private_upgrade_plan_from_pubspec(
 
 
 # =======================
-# pubspec.yaml patch (preserve comments/styles)
+# Apply upgrades to pubspec (preserve style)
 # =======================
-_VERSION_LINE_RE = re.compile(r"^(\s{4}version:\s*)([^#\n]+?)(\s*)(#.*)?$", re.UNICODE)
+_SIMPLE_CONSTRAINT_RE = re.compile(
+    r"""^\s*
+    (?P<quote>['"]?)               # optional quote
+    (?P<prefix>\^|~)?              # optional prefix
+    (?P<ver>\d+(?:\.\d+){1,3})     # x.y or x.y.z(.w)
+    (?P<quote2>['"]?)              # optional closing quote
+    \s*$""",
+    re.VERBOSE,
+)
 
 
-def _format_constraint_keep_style(old_constraint: str, latest: str) -> str | None:
+def _is_complex_constraint(s: str) -> bool:
+    s = s.strip()
+    # 粗略判定复杂范围：含空格、比较符、逻辑或/and 等
+    return any(tok in s for tok in [">", "<", "=", "||", "&&", " - ", " "])
+
+
+def apply_upgrades_to_pubspec(
+    ctx: Context,
+    pubspec_path: Path,
+    plan: list[UpgradeItem],
+) -> tuple[list[str], list[str]]:
     """
-    把旧约束替换成最新版本，但尽量保留旧的风格（如 ^ 前缀 / 引号）。
-    只支持：
-      - ^1.2.3
-      - ~1.2.3
-      - 1.2.3
-      - "^1.2.3" / '1.2.3'
-    对复杂范围（>=, <, 空格, || 等）返回 None（表示跳过）。
-    """
-    s = (old_constraint or "").strip()
-    if not s:
-        return None
-
-    quote = ""
-    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
-        quote = s[0]
-        inner = s[1:-1].strip()
-    else:
-        inner = s
-
-    # 复杂约束：含空格、比较符号、逗号等，直接跳过避免改坏
-    if any(ch in inner for ch in [" ", ">", "<", "=", ",", "||"]):
-        return None
-
-    m = re.match(r"^(\^|~)?\s*(\d+(?:\.\d+){1,3})\s*$", inner)
-    if not m:
-        return None
-
-    prefix = m.group(1) or ""
-    new_inner = f"{prefix}{latest}"
-    return f"{quote}{new_inner}{quote}" if quote else new_inner
-
-
-def apply_upgrades_to_pubspec(ctx: Context, plan: list[UpgradeItem]) -> list[str]:
-    """
-    把 plan 中的包，在 pubspec.yaml 的 dependencies 区块里更新 version 行。
-    目标：保留注释/缩进/其余字段不动。
-    返回：变更摘要行（用于日志）。
+    只在 dependencies 区块里按包名定位 block，替换 block 内第一条 version: 行。
+    返回：(applied_summaries, skipped_summaries)
     """
     if not plan:
-        return []
+        return ([], [])
 
-    wanted: dict[str, UpgradeItem] = {u.name: u for u in plan}
+    content = read_text(pubspec_path)
+    lines = content.splitlines(keepends=True)
 
-    text = read_text(ctx.pubspec_path)
-    lines = text.splitlines(keepends=True)
+    # 建索引：name -> UpgradeItem
+    plan_map = {u.name: u for u in plan}
 
     in_deps = False
-    i = 0
-    changed: list[str] = []
+    deps_indent: Optional[int] = None
 
+    applied: list[str] = []
+    skipped: list[str] = []
+
+    i = 0
     while i < len(lines):
         line = lines[i]
-        sec = _is_top_level_section(line.rstrip("\n"))
-        if sec is not None:
-            in_deps = (sec == "dependencies")
+
+        if _is_section_header(line, "dependencies"):
+            in_deps = True
+            deps_indent = _indent(line)
             i += 1
             continue
 
-        if not in_deps:
-            i += 1
-            continue
+        if in_deps:
+            # 离开区块：同级 header
+            if line.strip() and deps_indent is not None:
+                if _indent(line) <= deps_indent and re.match(r"^\s*[A-Za-z0-9_]+\s*:\s*(#.*)?$", line):
+                    in_deps = False
+                    deps_indent = None
+                    continue
 
-        m = _PKG_HEADER_RE.match(line.rstrip("\n"))
-        if not m:
-            i += 1
-            continue
+            # 包 block 起点
+            m = re.match(r"^(\s*)([A-Za-z0-9_]+)\s*:\s*(#.*)?$", line)
+            if m:
+                name_indent = len(m.group(1))
+                name = m.group(2)
+                u = plan_map.get(name)
+                if not u:
+                    i += 1
+                    continue
 
-        name = m.group(1)
-        if name not in wanted:
-            i += 1
-            continue
+                # 在该 block 内找 version:
+                j = i + 1
+                replaced = False
+                while j < len(lines):
+                    l = lines[j]
+                    if l.strip() and _indent(l) <= name_indent:
+                        break
 
-        # 进入该包的 block，寻找 version: 行
-        u = wanted[name]
-        j = i + 1
-        updated = False
-        while j < len(lines):
-            ln = lines[j]
-            # 离开 dependencies 或进入下一个包
-            sec2 = _is_top_level_section(ln.rstrip("\n"))
-            if sec2 is not None:
-                break
-            if _PKG_HEADER_RE.match(ln.rstrip("\n")):
-                break
+                    m_ver = re.match(r"^(\s*version\s*:\s*)(.+?)(\s*(#.*)?)\r?\n?$", l)
+                    if m_ver and not replaced:
+                        prefix = m_ver.group(1)
+                        raw_val = (m_ver.group(2) or "").strip()
+                        suffix = m_ver.group(3) or ""
 
-            mver = _VERSION_LINE_RE.match(ln.rstrip("\n"))
-            if mver and not updated:
-                prefix, old_val, spaces, comment = mver.group(1), mver.group(2), mver.group(3), mver.group(4)
-                new_val = _format_constraint_keep_style(old_val, u.target_latest)
-                if new_val is None:
-                    # 复杂约束不改，给出提示
-                    ctx.echo(f"⚠️ 跳过 {name}：不支持的 version 约束写法：{old_val.strip()}")
-                    updated = True  # 视为处理过，避免重复警告
-                    break
+                        # 去引号后判断复杂度
+                        val = raw_val
+                        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                            val_unquoted = val[1:-1].strip()
+                        else:
+                            val_unquoted = val
 
-                new_line = prefix + new_val + (spaces or "") + (comment or "") + ("\n" if ln.endswith("\n") else "")
-                if new_line != ln:
-                    lines[j] = new_line
-                    changed.append(f"{name}: {old_val.strip()} -> {new_val.strip()}")
-                updated = True
-                break
+                        if _is_complex_constraint(val_unquoted):
+                            skipped.append(f"{name}: 复杂约束 '{val_unquoted}'，跳过修改（latest={u.latest}）")
+                            replaced = True  # 标记为处理过，避免重复提示
+                            break
 
-            j += 1
+                        m_simple = _SIMPLE_CONSTRAINT_RE.match(val_unquoted)
+                        if not m_simple:
+                            skipped.append(f"{name}: 无法识别约束 '{val_unquoted}'，跳过修改（latest={u.latest}）")
+                            replaced = True
+                            break
 
-        if not updated:
-            ctx.echo(f"⚠️ 未找到 {name} 的 version: 行，未做修改（请检查 pubspec 写法）。")
+                        # 保留前缀符号 ^ 或 ~
+                        keep_prefix = m_simple.group("prefix") or ""
+                        new_val_unquoted = f"{keep_prefix}{u.latest}"
 
-        i = j
+                        # 保留原引号样式
+                        if raw_val.startswith('"') and raw_val.endswith('"'):
+                            new_val = f"\"{new_val_unquoted}\""
+                        elif raw_val.startswith("'") and raw_val.endswith("'"):
+                            new_val = f"'{new_val_unquoted}'"
+                        else:
+                            new_val = new_val_unquoted
 
-    if changed:
-        write_text_atomic(ctx.pubspec_path, "".join(lines))
+                        # 写回该行，保留行尾注释
+                        newline = "\n" if l.endswith("\n") else ""
+                        lines[j] = f"{prefix}{new_val}{suffix}{newline}"
+                        applied.append(f"{name}: {u.pubspec_constraint} -> {keep_prefix}{u.latest}")
+                        replaced = True
+                        break
 
-    return changed
+                    j += 1
+
+                if not replaced:
+                    skipped.append(f"{name}: 未找到 version: 行，跳过（latest={u.latest}）")
+
+                i = j
+                continue
+
+        i += 1
+
+    new_content = "".join(lines)
+    if new_content != content:
+        write_text_atomic(pubspec_path, new_content)
+    return (applied, skipped)
 
 
 # =======================
-# Entry (Stage 2: apply changes to pubspec)
+# Flutter commands (post-apply)
+# =======================
+def flutter_pub_get(ctx: Context) -> None:
+    r = run_cmd(["flutter", "pub", "get"], cwd=ctx.project_root, capture=True)
+    if r.code != 0:
+        raise RuntimeError((r.err or r.out or "").strip() or "flutter pub get 失败")
+
+
+@dataclass(frozen=True)
+class AnalyzeResult:
+    ok: bool
+    errors: list[str]
+    warnings: list[str]
+    infos: list[str]
+    raw_exit_code: int
+
+
+_ANALYZE_DIAG_RE = re.compile(r"^\s*(info|warning|error)\s*•\s*(.+?)\s*•\s*(.+?)\s*•\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def flutter_analyze(ctx: Context) -> AnalyzeResult:
+    """
+    你的规则：
+      - 有 info / warning：列出前两三条，然后继续
+      - 有 error：列出来，中断
+    实现策略：
+      - 使用 --no-fatal-warnings --no-fatal-infos，避免因 warning/info 导致非 0 exit
+      - 同时解析输出内容，识别 error/warning/info 列表
+    """
+    r = run_cmd(
+        ["flutter", "analyze", "--no-fatal-warnings", "--no-fatal-infos"],
+        cwd=ctx.project_root,
+        capture=True,
+    )
+    out = (r.out or "") + ("\n" + r.err if r.err else "")
+    errors: list[str] = []
+    warnings: list[str] = []
+    infos: list[str] = []
+
+    for line in out.splitlines():
+        m = _ANALYZE_DIAG_RE.match(line.strip())
+        if not m:
+            continue
+        level = m.group(1).lower()
+        message = m.group(2).strip()
+        file_ = m.group(3).strip()
+        location = m.group(4).strip()
+        formatted = f"{message}  ({file_} • {location})"
+        if level == "error":
+            errors.append(formatted)
+        elif level == "warning":
+            warnings.append(formatted)
+        elif level == "info":
+            infos.append(formatted)
+
+    ok = (len(errors) == 0)
+    return AnalyzeResult(ok=ok, errors=errors, warnings=warnings, infos=infos, raw_exit_code=r.code)
+
+
+# =======================
+# Entry
 # =======================
 def run(ctx: Context) -> int:
     """
-    阶段 2：在阶段 1 的基础上，新增“写回 pubspec.yaml 中待升级依赖的版本号”。
-
-    本阶段包含：
-      0) 环境检查（git 仓库）
-      1) 检查是否有未提交变更
-      2) 同步远端（git pull --ff-only）
-      3) 执行 flutter pub get（预检查）
-      4) 从 pubspec.yaml 的 dependencies 读取私有依赖（name + constraint + hosted url）
-      5) 跟 flutter pub outdated --json 对比，列出需要升级的私有依赖
-      6) 修改 pubspec.yaml 中这些依赖的 version: 行（保留注释和样式）
-
-    注意：本阶段仍不执行 pub get/analyze/commit（你下一步再加）。
+    阶段 3：写回升级 + pub get + analyze + git commit + push
+    规则：
+      - analyze 有 warning/info：展示前 2~3 条，继续
+      - analyze 有 error：展示并中断（不提交）
     """
-    total_t0 = time.perf_counter()
-
+    t0 = time.perf_counter()
     try:
         with step_scope(ctx, 0, "环境检查（git 仓库）", "检查 git 仓库..."):
             _git_check_repo(ctx)
@@ -501,10 +549,10 @@ def run(ctx: Context) -> int:
         with step_scope(ctx, 1, "检查是否有未提交变更", "检查工作区状态..."):
             if _git_is_dirty(ctx):
                 ctx.echo("⚠️ 检测到未提交变更（working tree dirty）。")
-                if _ask_continue(ctx, "检测到未提交变更，是否中断本次执行？"):
+                if _ask_abort(ctx, "检测到未提交变更，是否中断本次执行？"):
                     ctx.echo("已中断。")
                     return 0
-                ctx.echo("继续执行（注意：后续步骤可能依赖干净工作区的可重复性）。")
+                ctx.echo("继续执行。")
             else:
                 ctx.echo("✅ 工作区干净")
 
@@ -512,38 +560,76 @@ def run(ctx: Context) -> int:
             _git_pull_ff_only(ctx)
 
         with step_scope(ctx, 3, "执行 flutter pub get（预检查）", "正在执行 pub get..."):
-            flutter_pub_get(ctx, with_loading=False)
+            flutter_pub_get(ctx)
             ctx.echo("✅ pub get 通过")
 
-        with step_scope(ctx, 4, "读取 pubspec.yaml 的私有依赖（dependencies）", "解析 dependencies hosted/url ..."):
-            private_deps = read_pubspec_private_dependencies(ctx, PRIVATE_HOST_KEYWORDS)
-            if not private_deps:
-                ctx.echo("ℹ️ 在 pubspec.yaml 的 dependencies 未发现 private hosted 依赖。") 
+        with step_scope(ctx, 4, "读取 pubspec.yaml 私有依赖（dependencies）", "扫描 dependencies 区块中的 hosted 私有依赖..."):
+            pubspec_text = read_text(ctx.pubspec_path)
+            privates = read_pubspec_private_dependencies(pubspec_text)
+            if not privates:
+                ctx.echo("ℹ️ dependencies 中未发现 hosted 私有依赖。")
+            else:
+                ctx.echo(f"✅ 发现 {len(privates)} 个私有依赖（dependencies）")
 
-        with step_scope(ctx, 5, "对比 flutter pub outdated --json", "生成待升级清单..."):
-            plan = build_private_upgrade_plan_from_pubspec(ctx, private_deps)
+        with step_scope(ctx, 5, "分析待升级私有依赖", "执行 flutter pub outdated --show-all --json 并比对..."):
+            plan = build_private_upgrade_plan_from_pubspec(ctx, privates)
 
-        if not plan:
-            ctx.echo("ℹ️ 未发现需要升级的私有依赖。")
-            return 0
+            if not plan:
+                ctx.echo("ℹ️ 未发现需要升级的私有依赖。")
+                return 0
 
-        ctx.echo("\n待升级私有依赖清单（pubspec constraint / resolved -> latest）：")
-        for u in plan:
-            ctx.echo(f"  - {u.name}: {u.pubspec_constraint} / {u.resolved_current} -> {u.target_latest}")
+            ctx.echo("\n待升级私有依赖清单（resolved_current -> latest）：")
+            for u in plan:
+                ctx.echo(f"  - {u.name}: {u.resolved_current} -> {u.latest}   (pubspec: {u.pubspec_constraint})")
 
-        with step_scope(ctx, 6, "修改 pubspec.yaml（仅更新 version 行）", "写回 dependencies 中待升级依赖版本..."):
-            changed = apply_upgrades_to_pubspec(ctx, plan)
+        with step_scope(ctx, 6, "写回 pubspec.yaml（只改 version，保留样式/注释）", "应用升级计划到 pubspec.yaml ..."):
+            applied, skipped = apply_upgrades_to_pubspec(ctx, ctx.pubspec_path, plan)
+            if applied:
+                ctx.echo("✅ 已应用：")
+                for s in applied:
+                    ctx.echo(f"  - {s}")
+            if skipped:
+                ctx.echo("⚠️ 已跳过：")
+                for s in skipped[:20]:
+                    ctx.echo(f"  - {s}")
+                if len(skipped) > 20:
+                    ctx.echo(f"  ... 另有 {len(skipped) - 20} 条跳过原因未展示")
 
-        if not changed:
-            ctx.echo("ℹ️ 未产生任何文件修改（可能是约束格式不支持或未找到 version 行）。")
-            return 0
+            if not applied:
+                ctx.echo("ℹ️ 没有可写回的改动（可能都是复杂约束或没找到 version 行）。停止后续步骤。")
+                return 0
 
-        ctx.echo("\n已写回 pubspec.yaml，修改摘要：")
-        for s in changed:
-            ctx.echo(f"  - {s}")
+        with step_scope(ctx, 7, "执行 flutter pub get", "更新 lockfile ..."):
+            flutter_pub_get(ctx)
 
-        dt = time.perf_counter() - total_t0
-        ctx.echo(f"\n✅ 完成（已修改 pubspec.yaml，尚未执行后续 pub get/analyze/commit）。总耗时 {dt:.2f}s")
+        with step_scope(ctx, 8, "执行 flutter analyze", "进行静态检查..."):
+            ar = flutter_analyze(ctx)
+
+            # 展示 info / warning（前几条）
+            if ar.infos:
+                ctx.echo(f"ℹ️ analyze info 共 {len(ar.infos)} 条，展示前 {min(MAX_SHOW_INFOS, len(ar.infos))} 条：")
+                for s in ar.infos[:MAX_SHOW_INFOS]:
+                    ctx.echo(f"  - {s}")
+
+            if ar.warnings:
+                ctx.echo(f"⚠️ analyze warning 共 {len(ar.warnings)} 条，展示前 {min(MAX_SHOW_WARNINGS, len(ar.warnings))} 条：")
+                for s in ar.warnings[:MAX_SHOW_WARNINGS]:
+                    ctx.echo(f"  - {s}")
+
+            if not ar.ok:
+                ctx.echo(f"❌ analyze error 共 {len(ar.errors)} 条，展示前 {min(MAX_SHOW_ERRORS, len(ar.errors))} 条：")
+                for s in ar.errors[:MAX_SHOW_ERRORS]:
+                    ctx.echo(f"  - {s}")
+                ctx.echo("⛔ 存在 error，按规则中断，不提交。")
+                return 1
+
+            ctx.echo("✅ analyze 无 error（info/warning 不阻断）")
+
+        with step_scope(ctx, 9, "提交到 git 并推送到远端", "git add/commit/push ..."):
+            summary_lines = [f"{u.name}: {u.resolved_current} -> {u.latest}" for u in plan]
+            _git_add_commit_push(ctx, summary_lines)
+
+        ctx.echo(f"\n✅ 全流程完成，总耗时 {time.perf_counter() - t0:.2f}s")
         return 0
 
     except KeyboardInterrupt:
