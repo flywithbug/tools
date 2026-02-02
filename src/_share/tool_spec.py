@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
-import re
 
 
 # ----------------------------
@@ -201,122 +200,152 @@ def _coerce_examples(items: Sequence[Mapping[str, Any]]) -> List[Dict[str, str]]
 
 
 # ----------------------------
-# 版本检测（可选：用于工具集自检）
+# 版本检测：对比 GitHub raw 的 pyproject.toml
 # ----------------------------
 
-def _version_parse(v: str):
-    """尽量稳地比较版本。优先用 packaging.version；没有就退化为数字段比较。"""
-    v = (v or "").strip()
+import re
+import urllib.request
+from importlib import metadata
+from typing import Callable, Optional as _Optional
+
+
+REMOTE_PYPROJECT_URL = "https://raw.githubusercontent.com/flywithbug/tools/refs/heads/master/pyproject.toml"
+
+
+@dataclass(frozen=True)
+class VersionCheckResult:
+    dist_name: str
+    installed: _Optional[str]
+    latest: _Optional[str]
+    has_update: bool
+    note: str
+
+
+def _parse_project_version_from_pyproject_toml(text: str) -> _Optional[str]:
+    """从 pyproject.toml 里提取 version = "x.y.z"（容忍文件是一行或多行）。"""
+    m = re.search(r'(?m)\bversion\s*=\s*"([^"]+)"', text)
+    return m.group(1).strip() if m else None
+
+
+def _get_installed_version(dist_name: str) -> _Optional[str]:
+    try:
+        return metadata.version(dist_name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def _version_lt(a: str, b: str) -> bool:
+    """a < b ? 优先用 packaging.version，缺失则降级为数字段比较。"""
     try:
         from packaging.version import Version  # type: ignore
-        return Version(v)
+        return Version(a) < Version(b)
     except Exception:
-        nums = []
-        for part in re.split(r"[.+-]", v)[0].split("."):
-            try:
-                nums.append(int(part))
-            except Exception:
-                nums.append(0)
-        return tuple(nums)
+        def nums(v: str) -> list[int]:
+            v = v.split("+", 1)[0].split("-", 1)[0]
+            parts = v.split(".")
+            out: list[int] = []
+            for p in parts:
+                try:
+                    out.append(int(p))
+                except Exception:
+                    out.append(0)
+            return out
+
+        na, nb = nums(a), nums(b)
+        n = max(len(na), len(nb))
+        na += [0] * (n - len(na))
+        nb += [0] * (n - len(nb))
+        return na < nb
 
 
-def _get_installed_version(dist_name: str) -> str | None:
-    try:
-        import importlib.metadata as md  # py3.8+
-        return md.version(dist_name)
-    except Exception:
-        return None
-
-
-def _pick_pip() -> list[str] | None:
-    """优先用当前 python 对应的 pip，避免找错环境。"""
-    import sys
-    return [sys.executable, "-m", "pip"]
-
-
-def _get_latest_version_via_pip_index(dist_name: str) -> str | None:
-    """使用 `pip index versions` 获取最新版本（需要网络 + pip 支持该子命令）。"""
-    import subprocess
-
-    pip_cmd = _pick_pip()
-    if not pip_cmd:
-        return None
-
-    # pip index versions <dist>
-    p = subprocess.run([*pip_cmd, "index", "versions", dist_name], text=True, capture_output=True)
-    out = (p.stdout or "") + "\n" + (p.stderr or "")
-    if p.returncode != 0:
-        return None
-
-    # 常见输出：
-    #   <dist> (X.Y.Z)
-    #   Available versions: X.Y.Z, X.Y.(Z-1), ...
-    m = re.search(r"^\s*Available versions:\s*(.+?)\s*$", out, re.M)
-    if not m:
-        return None
-
-    versions = [x.strip() for x in m.group(1).split(",") if x.strip()]
-    return versions[0] if versions else None
-
-
-def check_new_version(dist_name: str = "box") -> dict:
-    """
-    检测是否存在更新版本（尽力而为）：
-      - installed: 本地已安装版本（importlib.metadata）
-      - latest: 通过 pip index versions 获取的最新版本（若不可用则为 None）
-      - has_update: bool
-      - note: 提示信息
-    """
-    installed = _get_installed_version(dist_name)
-    latest = _get_latest_version_via_pip_index(dist_name)
-
-    if not installed:
-        return {
-            "dist": dist_name,
-            "installed": None,
-            "latest": latest,
-            "has_update": False,
-            "note": "未检测到已安装版本（可能当前环境未安装该发行包，或 dist_name 不正确）。",
-        }
-
-    if not latest:
-        return {
-            "dist": dist_name,
-            "installed": installed,
-            "latest": None,
-            "has_update": False,
-            "note": "无法获取远端最新版本（可能离线/无 pip index 支持/被代理拦截）。",
-        }
-
-    try:
-        has_update = _version_parse(latest) > _version_parse(installed)
-    except Exception:
-        has_update = latest != installed
-
-    note = "有新版本可用。" if has_update else "已是最新版本。"
-    return {
-        "dist": dist_name,
-        "installed": installed,
-        "latest": latest,
-        "has_update": bool(has_update),
-        "note": note,
-    }
-
-def run_version_check_cli(
+def check_tool_update_against_github_raw(
     dist_name: str = "box",
     *,
-    print_fn=print,
-) -> None:
-    info = check_new_version(dist_name)
-    if not info:
-        return
+    url: str = REMOTE_PYPROJECT_URL,
+    timeout_sec: float = 5.0,
+) -> VersionCheckResult:
+    """
+    读取 GitHub raw 的 pyproject.toml，提取其中的 version，并与本地已安装版本对比。
 
-    if info.has_update:
-        print_fn(
-            f"⚠️ 发现新版本 {info.latest}（当前 {info.installed}），"
-            f"建议执行：box update"
+    - dist_name: 本地 distribution 名称（默认 box）
+    - url: 远端 pyproject.toml 的 raw 地址
+    """
+    installed = _get_installed_version(dist_name)
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_sec) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+        latest = _parse_project_version_from_pyproject_toml(text)
+        if not latest:
+            return VersionCheckResult(
+                dist_name=dist_name,
+                installed=installed,
+                latest=None,
+                has_update=False,
+                note=f"读取远端成功，但未解析到 version 字段：{url}",
+            )
+    except Exception as e:
+        return VersionCheckResult(
+            dist_name=dist_name,
+            installed=installed,
+            latest=None,
+            has_update=False,
+            note=f"读取远端版本失败：{e}",
         )
-    else:
-        print_fn(f"✅ 当前已是最新版本（{info.installed}）")
+
+    if installed is None:
+        return VersionCheckResult(
+            dist_name=dist_name,
+            installed=None,
+            latest=latest,
+            has_update=False,
+            note=f"本机未安装 {dist_name}（无法对比）。",
+        )
+
+    has_update = _version_lt(installed, latest)
+    return VersionCheckResult(
+        dist_name=dist_name,
+        installed=installed,
+        latest=latest,
+        has_update=has_update,
+        note="ok",
+    )
+
+def run_version_check(
+    *,
+    dist_name: str = "box",
+    url: str = REMOTE_PYPROJECT_URL,
+    timeout_sec: float = 5.0,
+    print_fn: Callable[[str], None] = print,
+) -> VersionCheckResult:
+    """
+    供其它工具集调用的版本检查入口：
+    - 读取 GitHub raw 的 pyproject.toml version
+    - 对比本地已安装版本
+    - 如有新版本，只提示，不自动更新
+    """
+    r = check_tool_update_against_github_raw(dist_name, url=url, timeout_sec=timeout_sec)
+
+    if r.installed is None:
+        print_fn(f"ℹ️ {r.note}")
+        return r
+
+    if r.latest is None:
+        print_fn(f"ℹ️ 无法获取最新版本：{r.note}")
+        return r
+
+    if not r.has_update:
+        print_fn(f"✅ 已是最新版本：{r.dist_name} {r.installed}")
+        return r
+
+    # 有更新：同时给出两种升级方式
+    print_fn(f"⚠️ 发现新版本：{r.dist_name} {r.latest}（当前 {r.installed}）")
+    print_fn("建议升级（两种方式任选其一）：")
+    print_fn('  1) pipx install --force "git+https://github.com/flywithbug/tools.git"')
+    print_fn("  2) box update")
+
+    return r
 
 
+if __name__ == "__main__":
+    run_version_check()
