@@ -21,6 +21,9 @@ MAX_SHOW_INFOS = 3
 MAX_SHOW_WARNINGS = 3
 MAX_SHOW_ERRORS = 20  # 错误展示上限（避免刷屏）
 
+# 默认跳过的包（即使是私有 hosted 也不参与升级/写回）
+DEFAULT_SKIP_PACKAGES: set[str] = {"ap_recaptcha"}
+
 # =======================
 # Step UI
 # =======================
@@ -167,6 +170,17 @@ def read_pubspec_private_dependencies(pubspec_text: str) -> dict[str, PubspecPri
             if m:
                 name_indent = len(m.group(1))
                 name = m.group(2)
+
+                # 默认跳过：不参与私有依赖识别/升级
+                if name in DEFAULT_SKIP_PACKAGES:
+                    j = i + 1
+                    while j < len(lines):
+                        l = lines[j]
+                        if l.strip() and _indent(l) <= name_indent:
+                            break
+                        j += 1
+                    i = j
+                    continue
 
                 # block 可能是单行版本：  foo: ^1.2.3
                 # 但这种写法没有 hosted url，不算“私有 hosted”，所以这里只处理 block
