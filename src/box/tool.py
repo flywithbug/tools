@@ -132,6 +132,7 @@ def check_update_and_hint(
       1 = 有新版本可升级
     """
     local = (__version__ or "0.0.0").strip()
+    print('__version__', __version__)
 
     try:
         remote = _fetch_remote_version(timeout_sec=timeout_sec)
@@ -146,6 +147,7 @@ def check_update_and_hint(
             print("ℹ️ 版本检测失败：远端未解析到 version 字段。")
         return 0
 
+    print('__version__', __version__)
     # 为了可观测性：可选输出对比值
     if not quiet_when_latest:
         print(f"ℹ️ 当前版本：{local}；远端最新：{remote}")
@@ -673,7 +675,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 启动即检查更新（非致命；网络失败不影响使用）
     # quiet_when_latest=True：已是最新则不输出
-    check_update_and_hint(quiet_when_latest=True)
+    check_update_and_hint(quiet_when_latest=False)
 
     parser = build_parser()
 
