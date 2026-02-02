@@ -18,7 +18,7 @@ try:
 except Exception:
     __version__ = "0.0.0"
 
-from _share.tool_spec import tool, opt, ex 
+from _share.tool_spec import tool, opt, ex
 
 BOX_TOOL = tool(
     id="core.box",
@@ -46,6 +46,123 @@ BOX_TOOL = tool(
     ],
     docs="README.md",  # 也可以省略（tool() 默认就是 README.md）
 )
+
+
+# ----------------------------
+# 启动时版本检查（对比 GitHub raw pyproject.toml）
+# ----------------------------
+
+import time as _time
+import re as _re
+import urllib.request as _urllib_request
+
+_REMOTE_PYPROJECT_URL = "https://raw.githubusercontent.com/flywithbug/tools/refs/heads/master/pyproject.toml"
+
+
+def _parse_project_version_from_pyproject_toml(text: str) -> str | None:
+    m = _re.search(r'(?m)\bversion\s*=\s*"([^"]+)"', text)
+    return m.group(1).strip() if m else None
+
+
+def _version_lt(a: str, b: str) -> bool:
+    """
+    a < b ?
+    优先使用 packaging.version，缺失则降级数字段比较（忽略 -pre / +build）。
+    """
+    try:
+        from packaging.version import Version  # type: ignore
+        return Version(a) < Version(b)
+    except Exception:
+        def nums(v: str) -> list[int]:
+            v = (v or "").strip()
+            v = v.split("+", 1)[0].split("-", 1)[0]
+            parts = v.split(".")
+            out: list[int] = []
+            for p in parts:
+                try:
+                    out.append(int(p))
+                except Exception:
+                    out.append(0)
+            return out
+
+        na, nb = nums(a), nums(b)
+        n = max(len(na), len(nb))
+        na += [0] * (n - len(na))
+        nb += [0] * (n - len(nb))
+        return na < nb
+
+
+def _fetch_remote_version(timeout_sec: float = 5.0) -> str | None:
+    """
+    从 GitHub raw 读取 pyproject.toml，解析 version。
+    - 追加 ts= 绕缓存
+    - 加 no-cache header 尽量避开代理/CDN 缓存
+    """
+    ts = int(_time.time())
+    url = f"{_REMOTE_PYPROJECT_URL}?ts={ts}"
+
+    req = _urllib_request.Request(
+        url,
+        headers={
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "User-Agent": f"box/{(__version__ or '0.0.0')}",
+        },
+        method="GET",
+    )
+    with _urllib_request.urlopen(req, timeout=timeout_sec) as resp:
+        text = resp.read().decode("utf-8", errors="replace")
+    return _parse_project_version_from_pyproject_toml(text)
+
+
+def check_update_and_hint(
+    *,
+    timeout_sec: float = 3.0,
+    quiet_when_latest: bool = True,
+) -> int:
+    """
+    启动时检查更新（非致命）：
+    - 用 __version__ 作为当前版本
+    - 读取远端 master 的 pyproject.toml version 做对比
+    - 有新版本：提示两种升级方式（pipx / box update）
+    - 无更新：默认静默（quiet_when_latest=True）
+
+    返回码：
+      0 = 已是最新 / 无法判断
+      1 = 有新版本可升级
+    """
+    local = (__version__ or "0.0.0").strip()
+
+    try:
+        remote = _fetch_remote_version(timeout_sec=timeout_sec)
+    except Exception as e:
+        # 网络/代理问题不影响 box 主功能
+        if not quiet_when_latest:
+            print(f"ℹ️ 版本检测失败：{type(e).__name__}: {e}")
+        return 0
+
+    if not remote:
+        if not quiet_when_latest:
+            print("ℹ️ 版本检测失败：远端未解析到 version 字段。")
+        return 0
+
+    # 为了可观测性：可选输出对比值
+    if not quiet_when_latest:
+        print(f"ℹ️ 当前版本：{local}；远端最新：{remote}")
+
+    if _version_lt(local, remote):
+        print(f"⚠️ 发现新版本：box {remote}（当前 {local}）")
+        print("建议升级（两种方式任选其一）：")
+        print('  1) pipx install --force "git+https://github.com/flywithbug/tools.git"')
+        print("  2) box update")
+        return 1
+
+    if not quiet_when_latest:
+        if _version_lt(remote, local):
+            print("✅ 本机版本高于远端（可能是未发布/未合并到 master 的版本）。")
+        else:
+            print("✅ 已是最新版本。")
+    return 0
 
 
 # ----------------------------
@@ -553,6 +670,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+
+    # 启动即检查更新（非致命；网络失败不影响使用）
+    # quiet_when_latest=True：已是最新则不输出
+    check_update_and_hint(quiet_when_latest=True)
+
     parser = build_parser()
 
     # box（无参数）时，等同 --help

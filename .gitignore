@@ -90,3 +90,4 @@ site/
 secrets.*
 *.key
 *.pem
+src/box/__pycache__/tool.cpython-310.pyc
