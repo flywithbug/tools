@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from box_tools._share.openai_translate.models import OpenAIModel
 from box_tools._share.openai_translate.chat import OpenAIChat, ChatOptions, ChatSession
 
-from _share.tool_spec import tool, opt, ex, run_version_check_cli
+from _share.tool_spec import tool, opt, ex, run_version_check
 
 BOX_TOOL = tool(
     id="ai.chat",
@@ -563,5 +563,5 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    run_version_check_cli()
+    run_version_check()
     raise SystemExit(main())

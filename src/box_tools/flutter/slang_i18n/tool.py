@@ -8,7 +8,7 @@ from pathlib import Path
 from . import data
 from . import translate  # 如果你暂时没实现 translate.py，可先注释掉相关分支
 
-from _share.tool_spec import tool, opt, ex, run_version_check_cli
+from _share.tool_spec import tool, opt, ex, run_version_check
 
 BOX_TOOL = tool(
     id="flutter.box_slang_i18n",
@@ -166,5 +166,5 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    run_version_check_cli()
+    run_version_check()
     raise SystemExit(main())
