@@ -17,6 +17,8 @@ DEFAULT_EXCLUDES = {
 def is_hidden(name: str) -> bool:
     return name.startswith(".")
 
+
+
 def should_exclude(name: str, exclude_set: set[str], exclude_patterns: list[str]) -> bool:
     # ✅ 不展示隐藏文件/目录
     if is_hidden(name):
