@@ -49,14 +49,15 @@ BOX_TOOL = tool(
 
 
 # ----------------------------
-# 启动时版本检查（对比 GitHub raw pyproject.toml）
+# 启动时版本检查（对比 GitHub Contents API 的 pyproject.toml）
 # ----------------------------
 
-import time as _time
 import re as _re
 import urllib.request as _urllib_request
+import base64 as _base64
 
-_REMOTE_PYPROJECT_URL = "https://raw.githubusercontent.com/flywithbug/tools/refs/heads/master/pyproject.toml"
+# ✅ 改为 GitHub Contents API（结构化：type/encoding/content/sha/size）
+_REMOTE_PYPROJECT_URL = "https://api.github.com/repos/flywithbug/tools/contents/pyproject.toml"
 
 
 def _parse_project_version_from_pyproject_toml(text: str) -> str | None:
@@ -94,16 +95,16 @@ def _version_lt(a: str, b: str) -> bool:
 
 def _fetch_remote_version(timeout_sec: float = 5.0) -> str | None:
     """
-    从 GitHub raw 读取 pyproject.toml，解析 version。
-    - 追加 ts= 绕缓存
-    - 加 no-cache header 尽量避开代理/CDN 缓存
+    从 GitHub Contents API 读取 pyproject.toml，解析 version。
+    - 使用 Accept: application/vnd.github.v3+json
+    - 返回内容为 base64，需要解码
     """
-    ts = int(_time.time())
-    url = f"{_REMOTE_PYPROJECT_URL}?ts={ts}"
+    url = f"{_REMOTE_PYPROJECT_URL}?ref=master"
 
     req = _urllib_request.Request(
         url,
         headers={
+            "Accept": "application/vnd.github.v3+json",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
             "User-Agent": f"box/{(__version__ or '0.0.0')}",
@@ -111,7 +112,25 @@ def _fetch_remote_version(timeout_sec: float = 5.0) -> str | None:
         method="GET",
     )
     with _urllib_request.urlopen(req, timeout=timeout_sec) as resp:
-        text = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    if not isinstance(data, dict):
+        return None
+
+    # Contents API 既可能返回 file，也可能返回 dir（列表）
+    if data.get("type") != "file":
+        return None
+
+    content = data.get("content")
+    encoding = data.get("encoding")
+    if not content or encoding != "base64":
+        return None
+
+    try:
+        text = _base64.b64decode(content).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
     return _parse_project_version_from_pyproject_toml(text)
 
 
