@@ -9,7 +9,11 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional
+
+import re as _re
+import urllib.request as _urllib_request
+import base64 as _base64
 
 
 try:
@@ -37,7 +41,9 @@ BOX_TOOL = tool(
     ],
     options=[
         opt("--help", "显示帮助（等同 box help）"),
-        opt("tools --full", "显示工具的详细信息（options/examples），并显示导入失败原因"),
+        opt(
+            "tools --full", "显示工具的详细信息（options/examples），并显示导入失败原因"
+        ),
     ],
     examples=[
         ex("box doctor", "诊断环境（python/pipx/PATH）"),
@@ -52,12 +58,10 @@ BOX_TOOL = tool(
 # 启动时版本检查（对比 GitHub Contents API 的 pyproject.toml）
 # ----------------------------
 
-import re as _re
-import urllib.request as _urllib_request
-import base64 as _base64
-
 # ✅ 改为 GitHub Contents API（结构化：type/encoding/content/sha/size）
-_REMOTE_PYPROJECT_URL = "https://api.github.com/repos/flywithbug/tools/contents/pyproject.toml"
+_REMOTE_PYPROJECT_URL = (
+    "https://api.github.com/repos/flywithbug/tools/contents/pyproject.toml"
+)
 
 
 def _parse_project_version_from_pyproject_toml(text: str) -> str | None:
@@ -72,8 +76,10 @@ def _version_lt(a: str, b: str) -> bool:
     """
     try:
         from packaging.version import Version  # type: ignore
+
         return Version(a) < Version(b)
     except Exception:
+
         def nums(v: str) -> list[int]:
             v = (v or "").strip()
             v = v.split("+", 1)[0].split("-", 1)[0]
@@ -188,6 +194,7 @@ def check_update_and_hint(
 # 基础工具函数
 # ----------------------------
 
+
 def which(cmd: str) -> str | None:
     return shutil.which(cmd)
 
@@ -233,6 +240,7 @@ def _safe_get(d: dict, key: str, default=None):
 # pipx 探测（用于避免“升级错包”）
 # ----------------------------
 
+
 def _pipx_list_json(pipx_bin: str) -> Optional[dict]:
     """
     尝试读取 `pipx list --json` 输出。
@@ -246,7 +254,9 @@ def _pipx_list_json(pipx_bin: str) -> Optional[dict]:
         return None
 
 
-def _pipx_find_package_for_app(app_name: str, pipx_bin: Optional[str] = None) -> Optional[str]:
+def _pipx_find_package_for_app(
+    app_name: str, pipx_bin: Optional[str] = None
+) -> Optional[str]:
     """
     在 pipx 管理的 venv 列表中，找到提供 app_name（如 box）的那个 package 名（distribution name）。
     这能显著降低“pyenv shim 抢占导致升级/卸载错包”的概率。
@@ -282,6 +292,7 @@ def _pipx_find_package_for_app(app_name: str, pipx_bin: Optional[str] = None) ->
 # ----------------------------
 # Distribution name 探测（非 pipx 的兜底）
 # ----------------------------
+
 
 def _find_dist_name_by_console_script(script_name: str = "box") -> Optional[str]:
     """
@@ -340,6 +351,7 @@ def get_dist_name() -> str:
 # 输出格式
 # ----------------------------
 
+
 def _format_tool_card(tool: dict, full: bool) -> str:
     category = _safe_get(tool, "category", "").strip()
     name = _safe_get(tool, "name", "").strip()
@@ -365,18 +377,18 @@ def _format_tool_card(tool: dict, full: bool) -> str:
         options = _safe_get(tool, "options", [])
         if options:
             lines.append("  options:")
-            for opt in options:
-                flag = _safe_get(opt, "flag", "").strip()
-                desc = _safe_get(opt, "desc", "").strip()
+            for opt_item in options:
+                flag = _safe_get(opt_item, "flag", "").strip()
+                desc = _safe_get(opt_item, "desc", "").strip()
                 if flag:
                     lines.append(f"    {flag:<14} {desc}".rstrip())
 
         examples = _safe_get(tool, "examples", [])
         if examples:
             lines.append("  examples:")
-            for ex in examples:
-                cmd = _safe_get(ex, "cmd", "").strip()
-                desc = _safe_get(ex, "desc", "").strip()
+            for ex_item in examples:
+                cmd = _safe_get(ex_item, "cmd", "").strip()
+                desc = _safe_get(ex_item, "desc", "").strip()
                 if cmd:
                     if desc:
                         lines.append(f"    {cmd}    # {desc}")
@@ -392,6 +404,7 @@ def _format_tool_card(tool: dict, full: bool) -> str:
 # ----------------------------
 # PATH 诊断
 # ----------------------------
+
 
 def _path_entries() -> list[str]:
     path = os.environ.get("PATH", "") or ""
@@ -430,6 +443,7 @@ def _print_which_a(cmd: str) -> None:
 # 子命令
 # ----------------------------
 
+
 def cmd_help(parser: argparse.ArgumentParser, _args: argparse.Namespace) -> int:
     parser.print_help()
     return 0
@@ -465,7 +479,9 @@ def cmd_doctor(_parser: argparse.ArgumentParser, _args: argparse.Namespace) -> i
     pyenv_shims = str(Path.home() / ".pyenv" / "shims")
 
     # 1) PATH 缺失提示（pipx 常用目录）
-    missing = [local_bin] if Path(local_bin).exists() and local_bin not in entries else []
+    missing = (
+        [local_bin] if Path(local_bin).exists() and local_bin not in entries else []
+    )
     if missing:
         print("warn: PATH 可能缺少以下目录（可能导致 pipx 安装的命令找不到）：")
         for m in missing:
@@ -483,8 +499,12 @@ def cmd_doctor(_parser: argparse.ArgumentParser, _args: argparse.Namespace) -> i
     i_shims = _index_of(entries, pyenv_shims)
     if i_local is not None and i_shims is not None and i_shims < i_local:
         print("warn: PATH 顺序可能导致 pyenv shims 抢占 pipx 命令：")
-        print(f"  - {pyenv_shims} (index={i_shims}) 在 {local_bin} (index={i_local}) 之前")
-        print("hint: 建议把 ~/.local/bin 放在 ~/.pyenv/shims 之前（并执行 `hash -r` 刷新缓存）。")
+        print(
+            f"  - {pyenv_shims} (index={i_shims}) 在 {local_bin} (index={i_local}) 之前"
+        )
+        print(
+            "hint: 建议把 ~/.local/bin 放在 ~/.pyenv/shims 之前（并执行 `hash -r` 刷新缓存）。"
+        )
 
     # pipx 维度信息：提供 box 的包是谁
     if pipx_bin:
@@ -499,10 +519,16 @@ def cmd_doctor(_parser: argparse.ArgumentParser, _args: argparse.Namespace) -> i
         md.distribution(dist_name)
         print("dist(metadata): OK")
     except md.PackageNotFoundError:
-        print("dist(metadata): NOT FOUND (可能是发行包名不一致，或当前 python 环境不是 pipx venv)")
-        print("hint: 检查 pyproject.toml 的 [project].name，并可用环境变量 BOX_DIST_NAME 强制指定。")
+        print(
+            "dist(metadata): NOT FOUND (可能是发行包名不一致，或当前 python 环境不是 pipx venv)"
+        )
+        print(
+            "hint: 检查 pyproject.toml 的 [project].name，并可用环境变量 BOX_DIST_NAME 强制指定。"
+        )
         if pipx_bin:
-            print("hint: 也可用 `pipx list --json` 确认 pipx 管理的包名，再设置 BOX_DIST_NAME。")
+            print(
+                "hint: 也可用 `pipx list --json` 确认 pipx 管理的包名，再设置 BOX_DIST_NAME。"
+            )
 
     print("doctor: OK")
     return 0
@@ -536,7 +562,9 @@ def cmd_update(_parser: argparse.ArgumentParser, _args: argparse.Namespace) -> i
         return 1
 
     print("pipx not found.")
-    print("建议：重新运行 install.sh（首次安装脚本）来修复/安装 pipx，然后再执行 box update。")
+    print(
+        "建议：重新运行 install.sh（首次安装脚本）来修复/安装 pipx，然后再执行 box update。"
+    )
     print("如果你是用 pip 安装的，可以尝试：")
     print(f"  python3 -m pip install -U {dist_name}")
     return 2
@@ -588,9 +616,13 @@ def cmd_tools(_parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
         dist = md.distribution(dist_name)
     except md.PackageNotFoundError:
         print(f"❌ 找不到已安装包元数据：{dist_name}")
-        print("hint: 检查 pyproject.toml 的 [project].name，并可用环境变量 BOX_DIST_NAME 强制指定。")
+        print(
+            "hint: 检查 pyproject.toml 的 [project].name，并可用环境变量 BOX_DIST_NAME 强制指定。"
+        )
         if pipx_bin:
-            print("hint: 也可用 `pipx list --json` 确认 pipx 管理的包名，再设置 BOX_DIST_NAME。")
+            print(
+                "hint: 也可用 `pipx list --json` 确认 pipx 管理的包名，再设置 BOX_DIST_NAME。"
+            )
         return 2
 
     eps = list(dist.entry_points)
@@ -650,13 +682,16 @@ def cmd_tools(_parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
                 print(f"  - {tid}: {', '.join(names)}")
 
     if not full:
-        print("\n提示：使用 `box tools --full` 查看 options / examples 等详细信息，并显示导入失败原因。")
+        print(
+            "\n提示：使用 `box tools --full` 查看 options / examples 等详细信息，并显示导入失败原因。"
+        )
     return 0
 
 
 # ----------------------------
 # CLI 组装
 # ----------------------------
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -680,8 +715,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("uninstall", help="卸载工具集（优先使用 pipx）")
     sp.set_defaults(handler=cmd_uninstall)
 
-    sp = sub.add_parser("tools", help="列出工具集中的工具与简介（读取 BOX_TOOL 标准信息）")
-    sp.add_argument("--full", action="store_true", help="显示 options/examples 等详细信息，并显示导入失败原因")
+    sp = sub.add_parser(
+        "tools", help="列出工具集中的工具与简介（读取 BOX_TOOL 标准信息）"
+    )
+    sp.add_argument(
+        "--full",
+        action="store_true",
+        help="显示 options/examples 等详细信息，并显示导入失败原因",
+    )
     sp.set_defaults(handler=cmd_tools)
 
     return p

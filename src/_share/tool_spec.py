@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 # 主结构：ToolSpec
 # ----------------------------
 
+
 @dataclass(frozen=True)
 class ToolSpec:
     id: str
@@ -18,8 +19,12 @@ class ToolSpec:
     usage: List[str] = field(default_factory=list)
 
     # ✅ 直接用 dict 作为结构，和最终 BOX_TOOL 输出一致
-    options: List[Dict[str, str]] = field(default_factory=list)   # [{"flag": "...", "desc": "..."}]
-    examples: List[Dict[str, str]] = field(default_factory=list)  # [{"cmd": "...", "desc": "..."}]
+    options: List[Dict[str, str]] = field(
+        default_factory=list
+    )  # [{"flag": "...", "desc": "..."}]
+    examples: List[Dict[str, str]] = field(
+        default_factory=list
+    )  # [{"cmd": "...", "desc": "..."}]
 
     dependencies: List[str] = field(default_factory=list)
 
@@ -40,6 +45,7 @@ class ToolSpec:
 # 便捷构造器：opt / ex / tool
 # ----------------------------
 
+
 def opt(flag: str, desc: str) -> Dict[str, str]:
     return {"flag": flag, "desc": desc}
 
@@ -49,16 +55,16 @@ def ex(cmd: str, desc: str) -> Dict[str, str]:
 
 
 def tool(
-        *,
-        id: str,
-        name: str,
-        category: str,
-        summary: str,
-        usage: Optional[Sequence[str]] = None,
-        options: Optional[Sequence[Mapping[str, Any]]] = None,
-        examples: Optional[Sequence[Mapping[str, Any]]] = None,
-        dependencies: Optional[Sequence[str]] = None,
-        docs: Optional[str] = None,
+    *,
+    id: str,
+    name: str,
+    category: str,
+    summary: str,
+    usage: Optional[Sequence[str]] = None,
+    options: Optional[Sequence[Mapping[str, Any]]] = None,
+    examples: Optional[Sequence[Mapping[str, Any]]] = None,
+    dependencies: Optional[Sequence[str]] = None,
+    docs: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     用最短方式生成标准 BOX_TOOL dict（保持模块导出 BOX_TOOL = dict）。
@@ -94,7 +100,9 @@ def normalize_tool(obj: ToolLike) -> Dict[str, Any]:
         return d
 
     if not isinstance(obj, Mapping):
-        raise TypeError(f"BOX_TOOL 必须是 dict/Mapping 或 ToolSpec，实际是：{type(obj).__name__}")
+        raise TypeError(
+            f"BOX_TOOL 必须是 dict/Mapping 或 ToolSpec，实际是：{type(obj).__name__}"
+        )
 
     d = dict(obj)
 
@@ -127,7 +135,9 @@ def validate_tool(d: Mapping[str, Any]) -> List[str]:
     _req_str("summary")
 
     usage = d.get("usage")
-    if not isinstance(usage, list) or any(not isinstance(x, str) or not x.strip() for x in usage):
+    if not isinstance(usage, list) or any(
+        not isinstance(x, str) or not x.strip() for x in usage
+    ):
         errors.append("字段 usage 必须是字符串列表（list[str]），且每项非空")
 
     docs = d.get("docs")
@@ -135,7 +145,9 @@ def validate_tool(d: Mapping[str, Any]) -> List[str]:
         errors.append("字段 docs 必须为非空字符串（例如 README.md）")
 
     deps = d.get("dependencies")
-    if not isinstance(deps, list) or any(not isinstance(x, str) or not x.strip() for x in deps):
+    if not isinstance(deps, list) or any(
+        not isinstance(x, str) or not x.strip() for x in deps
+    ):
         errors.append("字段 dependencies 必须是字符串列表（list[str]）")
 
     options = d.get("options")
@@ -174,6 +186,7 @@ def validate_tool(d: Mapping[str, Any]) -> List[str]:
 # ----------------------------
 # 内部：把 options/examples 统一成 list[dict[str,str]]
 # ----------------------------
+
 
 def _coerce_options(items: Sequence[Mapping[str, Any]]) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
