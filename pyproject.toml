@@ -1,6 +1,6 @@
 [project]
 name = "box"
-version = "0.1.133"
+version = "0.1.135"
 requires-python = ">=3.9"
 dependencies = ["packaging", "PyYAML>=6.0", "openai>=1.0.0", "rich", "httpx", "socksio", "pyperclip"]
 
