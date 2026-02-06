@@ -8,12 +8,13 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Union, Literal, Tuple
 
 from .models import OpenAIModel, load_map
-from .translate_file import translate_from_to, FileProgress, ProgressCallback
+from .translate_file import translate_from_to, FileProgress
 
 
 # =========================================================
 # Public API: multi-file translation pool
 # =========================================================
+
 
 @dataclass(frozen=True)
 class TranslateJob:
@@ -24,6 +25,7 @@ class TranslateJob:
     - source/target file paths can be .json or .strings
     - per-file translation is still internally serial (chunked) in translate_from_to
     """
+
     source_file_path: str
     target_file_path: str
     src_locale: str
@@ -86,6 +88,7 @@ class PoolResult:
 # Internal: plan/todo (mirror translate_file._incremental_jobs)
 # =========================================================
 
+
 def _count_incremental_todo(source_file_path: str, target_file_path: str) -> int:
     """
     Mirror translate_file._incremental_jobs rules to compute 'todo' without importing private helpers.
@@ -107,6 +110,7 @@ def _count_incremental_todo(source_file_path: str, target_file_path: str) -> int
 # =========================================================
 # Internal: time utils
 # =========================================================
+
 
 def _fmt_hms(seconds: float) -> str:
     s = max(0, int(seconds))
@@ -156,13 +160,14 @@ class _LinearLogger:
     - 不要求 _WorkerLine 具备 tgt_locale 字段
     - logger 自己维护 job_id -> tgt_locale 映射，避免版本不一致导致 TypeError
     """
+
     def __init__(
-            self,
-            *,
-            total_workers: int,
-            progress_every_keys: int = 40,
-            progress_every_seconds: float = 1.5,
-            stream=None,
+        self,
+        *,
+        total_workers: int,
+        progress_every_keys: int = 40,
+        progress_every_seconds: float = 1.5,
+        stream=None,
     ) -> None:
         self.total_workers = total_workers
         self.progress_every_keys = max(1, int(progress_every_keys))
@@ -203,7 +208,9 @@ class _LinearLogger:
                 self._last_print_at[job_id] = self._t0
 
             start_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self._t0))
-            self._w(f"[translate_pool] start={start_str} workers={self.total_workers} files={len(jobs)}")
+            self._w(
+                f"[translate_pool] start={start_str} workers={self.total_workers} files={len(jobs)}"
+            )
             self._w("[translate_pool] plan (first 8): name | target | todo")
             for job_id, job, todo in jobs[:8]:
                 name = job.name or _basename(job.target_file_path)
@@ -286,11 +293,14 @@ class _LinearLogger:
                 total_elapsed = max(0.0, end - start)
 
             self._w("")
-            self._w(f"[translate_pool] summary ok={ok} fail={fail} total_elapsed={_fmt_hms(total_elapsed)}")
+            self._w(
+                f"[translate_pool] summary ok={ok} fail={fail} total_elapsed={_fmt_hms(total_elapsed)}"
+            )
             for r in results:
                 status = "OK" if r.ok else "FAIL"
                 name = r.job.name or _basename(r.job.target_file_path)
-                msg = f"  {status:<4} {name:<18} | {r.job.tgt_locale:<16} | {r.translated:>5}/{r.todo:<5} | {_fmt_hms(r.elapsed_s)}"
+                msg = f"  {status:<4} {name:<18} | {r.job.tgt_locale:<16} | "
+                f"{r.translated:>5}/{r.todo:<5} | {_fmt_hms(r.elapsed_s)}"
                 if r.error:
                     msg += f" | error={self._short(r.error)}"
                 self._w(msg)
@@ -331,7 +341,9 @@ class _LinearLogger:
         extra = self._short(err) if err else None
         self._w(self._fmt_line(slot, job_id, tag, line, extra=extra))
 
-    def _fmt_line(self, slot: int, job_id: str, tag: str, line: _WorkerLine, extra: Optional[str]) -> str:
+    def _fmt_line(
+        self, slot: int, job_id: str, tag: str, line: _WorkerLine, extra: Optional[str]
+    ) -> str:
         t = _fmt_hms(_now() - self._t0)
         el = _fmt_hms(line.elapsed_s(_now()))
         w = f"W{slot}" if slot else "W?"
@@ -358,14 +370,15 @@ class _LinearLogger:
 # Public function: translate_files
 # =========================================================
 
+
 def translate_files(
-        *,
-        jobs: List[TranslateJob],
-        api_key: Optional[str] = None,
-        model: Optional[Union[OpenAIModel, str]] = None,
-        max_workers: int = 4,
-        pending_brief_lines: int = 3,  # kept for backwards compat (unused in linear logger)
-        fail_fast: bool = False,
+    *,
+    jobs: List[TranslateJob],
+    api_key: Optional[str] = None,
+    model: Optional[Union[OpenAIModel, str]] = None,
+    max_workers: int = 4,
+    pending_brief_lines: int = 3,  # kept for backwards compat (unused in linear logger)
+    fail_fast: bool = False,
 ) -> PoolResult:
     """
     Translate many files concurrently (file-level parallelism).
@@ -383,7 +396,9 @@ def translate_files(
         todo = _count_incremental_todo(j.source_file_path, j.target_file_path)
         planned.append((job_id, j, todo))
 
-    logger = _LinearLogger(total_workers=max_workers, progress_every_keys=40, progress_every_seconds=1.5)
+    logger = _LinearLogger(
+        total_workers=max_workers, progress_every_keys=40, progress_every_seconds=1.5
+    )
     logger.init_jobs(planned)
 
     from concurrent.futures import ThreadPoolExecutor, Future, wait, FIRST_COMPLETED
@@ -416,6 +431,7 @@ def translate_files(
         logger.mark_running(job_id)
 
         try:
+
             def cb(p: FileProgress) -> None:
                 nonlocal translated
                 if p.stage in ("progress", "done"):

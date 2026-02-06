@@ -18,7 +18,7 @@ class OpenAIConfigError(RuntimeError):
     pass
 
 
-_EXPORT_RE = re.compile(r'^\s*export\s+OPENAI_API_KEY\s*=\s*.*$')
+_EXPORT_RE = re.compile(r"^\s*export\s+OPENAI_API_KEY\s*=\s*.*$")
 
 
 def _is_interactive() -> bool:
@@ -29,11 +29,21 @@ def _is_interactive() -> bool:
 def _pick_profile_for_shell() -> Path:
     """
     按 $SHELL 选择写入的 profile 文件：
+    - zsh  -> ~/.zshrc
     - bash -> ~/.bash_profile
+    - fish -> ~/.config/fish/config.fish
     """
     shell = (os.getenv("SHELL") or "").strip().lower()
     home = Path.home()
 
+    if shell.endswith("zsh"):
+        return home / ".zshrc"
+    if shell.endswith("bash"):
+        return home / ".bash_profile"
+    if shell.endswith("fish"):
+        return home / ".config" / "fish" / "config.fish"
+
+    # Fallback for unknown shells
     return home / ".bash_profile"
 
 
@@ -42,7 +52,9 @@ def _upsert_to_shell_profile(api_key: str, profile_path: Path) -> None:
     line = f'export OPENAI_API_KEY="{api_key}"\n'
 
     if profile_path.exists():
-        lines = profile_path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
+        lines = profile_path.read_text(encoding="utf-8", errors="ignore").splitlines(
+            keepends=True
+        )
     else:
         lines = []
 
@@ -101,7 +113,7 @@ def resolve_api_key(api_key: Optional[str] = None) -> str:
 class OpenAIClientFactory:
     timeout: float = 30.0
 
-    def create(self, api_key: Optional[str] = None) -> "OpenAI":
+    def create(self, api_key: Optional[str] = None) -> "OpenAI":  # type: ignore
         if not OpenAI:
             raise SystemExit("OpenAI SDK 未安装，请先 pip install openai>=1.0.0")
         key = resolve_api_key(api_key)

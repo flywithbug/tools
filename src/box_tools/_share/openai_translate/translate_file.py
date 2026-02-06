@@ -113,7 +113,12 @@ def _resolve_model(model: Optional[Union[OpenAIModel, str]]) -> OpenAIModel:
         return OpenAIModel.GPT_4O_MINI
     if isinstance(model, OpenAIModel):
         return model
-    return OpenAIModel(model)
+    # Allow arbitrary model strings (pass-through elsewhere)
+    try:
+        return OpenAIModel(str(model))
+    except Exception:
+        # Type: ignore to allow str return at call sites
+        return str(model)  # type: ignore[return-value]
 
 
 def translate_from_to(
