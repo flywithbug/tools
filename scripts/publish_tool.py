@@ -49,12 +49,13 @@ TESTS_DIR = REPO_ROOT / "tests"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from _share.tool_spec import normalize_tool, validate_tool
+from _share.tool_spec import normalize_tool, validate_tool  # noqa: E402
 
 
 # -------------------------
 # Data models
 # -------------------------
+
 
 @dataclass(frozen=True)
 class Tool:
@@ -84,17 +85,24 @@ class Tool:
 # File discovery & BOX_TOOL extraction
 # -------------------------
 
+
 def iter_tool_entry_files() -> List[Path]:
     """只扫描入口文件 tool.py（避免误扫 core.py/utils.py）。"""
     if not SRC_DIR.exists():
         raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
-    return sorted([p for p in SRC_DIR.rglob("tool.py") if p.is_file()], key=lambda p: p.as_posix().lower())
+    return sorted(
+        [p for p in SRC_DIR.rglob("tool.py") if p.is_file()],
+        key=lambda p: p.as_posix().lower(),
+    )
 
 
 def iter_all_py_files() -> List[Path]:
     if not SRC_DIR.exists():
         raise SystemExit("未找到 src/ 目录，请在仓库根目录执行。")
-    return sorted([p for p in SRC_DIR.rglob("*.py") if p.is_file()], key=lambda p: p.as_posix().lower())
+    return sorted(
+        [p for p in SRC_DIR.rglob("*.py") if p.is_file()],
+        key=lambda p: p.as_posix().lower(),
+    )
 
 
 def extract_box_tool_literal(py_file: Path) -> Optional[Dict[str, Any]]:
@@ -157,13 +165,17 @@ def validate_structure_or_exit() -> None:
 
     if offenders_has_box_tool:
         print("❌ 工具结构校验失败：")
-        print("\n[发现 BOX_TOOL 但文件名不是 tool.py]（请重命名为 tool.py 或移除 BOX_TOOL）")
+        print(
+            "\n[发现 BOX_TOOL 但文件名不是 tool.py]（请重命名为 tool.py 或移除 BOX_TOOL）"
+        )
         for p in offenders_has_box_tool:
             print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
         raise SystemExit(2)
 
     if warn_missing_box_tool:
-        print("⚠️ 发现 tool.py 缺少 BOX_TOOL，将跳过这些入口（不会写入 pyproject.toml / README）：")
+        print(
+            "⚠️ 发现 tool.py 缺少 BOX_TOOL，将跳过这些入口（不会写入 pyproject.toml / README）："
+        )
         for p in warn_missing_box_tool:
             print(f"  - {p.relative_to(REPO_ROOT).as_posix()}")
 
@@ -289,7 +301,9 @@ def build_tool(py_file: Path, meta: Dict[str, Any]) -> Optional[Tool]:
 
     tool_id = norm_str(meta.get("id"))
     category = norm_str(meta.get("category") or "")
-    summary = norm_str(meta.get("summary") or meta.get("desc") or meta.get("description") or "")
+    summary = norm_str(
+        meta.get("summary") or meta.get("desc") or meta.get("description") or ""
+    )
 
     usage = norm_list_str(meta.get("usage"))
     options = norm_list_dict(meta.get("options"))
@@ -344,13 +358,20 @@ def collect_tools() -> List[Tool]:
         if t:
             tools.append(t)
 
-    tools.sort(key=lambda t: (0, "") if _is_box_tool(t) else (1, t.sort_key[0].lower(), t.sort_key[1].lower()))
+    tools.sort(
+        key=lambda t: (
+            (0, "")
+            if _is_box_tool(t)
+            else (1, t.sort_key[0].lower(), t.sort_key[1].lower())
+        )
+    )
     return tools
 
 
 # -------------------------
 # README rendering
 # -------------------------
+
 
 def _slugify_anchor(s: str) -> str:
     s = (s or "").strip().lower()
@@ -373,7 +394,9 @@ def render_readme_toc(tools: List[Tool]) -> str:
     for t in tools:
         groups.setdefault(t.dir_key, []).append(t)
 
-    group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
+    group_keys = sorted(
+        groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower())
+    )
 
     out: List[str] = []
     out.append("## 目录\n\n")
@@ -383,7 +406,10 @@ def render_readme_toc(tools: List[Tool]) -> str:
     for gk in group_keys:
         title = make_group_title(gk)
         out.append(f"- [{title}](#{section_anchor_id(title)})\n")
-        for t in sorted(groups[gk], key=lambda x: (0, "") if _is_box_tool(x) else (1, x.py_path.stem.lower())):
+        for t in sorted(
+            groups[gk],
+            key=lambda x: (0, "") if _is_box_tool(x) else (1, x.py_path.stem.lower()),
+        ):
             a = tool_anchor_id(t)
             out.append(f"  - [`{t.name}`](#{a})\n")
 
@@ -396,7 +422,9 @@ def render_overview(tools: List[Tool]) -> str:
     for t in tools:
         groups.setdefault(t.dir_key, []).append(t)
 
-    group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
+    group_keys = sorted(
+        groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower())
+    )
 
     out: List[str] = []
     out.append(f'<a id="{section_anchor_id("工具总览")}"></a>\n\n')
@@ -408,7 +436,7 @@ def render_overview(tools: List[Tool]) -> str:
 
         group_tools_sorted = sorted(
             groups[gk],
-            key=lambda t: (0, "") if _is_box_tool(t) else (1, t.py_path.stem.lower())
+            key=lambda t: (0, "") if _is_box_tool(t) else (1, t.py_path.stem.lower()),
         )
         for t in group_tools_sorted:
             a = tool_anchor_id(t)
@@ -433,7 +461,9 @@ def render_docs_index(tools: List[Tool]) -> str:
     for t in tools:
         groups.setdefault(t.dir_key, []).append(t)
 
-    group_keys = sorted(groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower()))
+    group_keys = sorted(
+        groups.keys(), key=lambda k: (0, "") if k == "box" else (1, k.lower())
+    )
 
     out: List[str] = []
     out.append(f'<a id="{section_anchor_id("工具集文档索引")}"></a>\n\n')
@@ -443,11 +473,16 @@ def render_docs_index(tools: List[Tool]) -> str:
         title = make_group_title(gk)
         out.append(f"### {title}\n\n")
 
-        for t in sorted(groups[gk], key=lambda x: (0, "") if _is_box_tool(x) else (1, x.py_path.stem.lower())):
+        for t in sorted(
+            groups[gk],
+            key=lambda x: (0, "") if _is_box_tool(x) else (1, x.py_path.stem.lower()),
+        ):
             if t.md_path.exists():
                 out.append(f"- **{t.name}**：[README.md]({t.rel_md})\n")
             else:
-                out.append(f"- **{t.name}**：未找到文档 `{t.rel_md}`（请创建该文件或在 BOX_TOOL['docs'] 指定）\n")
+                out.append(
+                    f"- **{t.name}**：未找到文档 `{t.rel_md}`（请创建该文件或在 BOX_TOOL['docs'] 指定）\n"
+                )
 
         out.append("\n")
 
@@ -565,12 +600,14 @@ def replace_table_block(text: str, header: str, body_lines: List[str]) -> str:
 
     m = pattern.search(text)
     if m:
-        return text[:m.start()] + new_block + text[m.end():]
+        return text[: m.start()] + new_block + text[m.end() :]
     return text.rstrip() + "\n\n" + new_block
 
 
 def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
-    table_pat = re.compile(r"(?ms)^\[tool\.hatch\.build\.targets\.wheel\]\s*\n.*?(?=^\[|\Z)")
+    table_pat = re.compile(
+        r"(?ms)^\[tool\.hatch\.build\.targets\.wheel\]\s*\n.*?(?=^\[|\Z)"
+    )
     m = table_pat.search(text)
 
     quoted = ", ".join([f'"{p}"' for p in packages])
@@ -580,7 +617,7 @@ def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
         block = "[tool.hatch.build.targets.wheel]\n" + new_line + "\n\n"
         return text.rstrip() + "\n\n" + block
 
-    block = text[m.start():m.end()]
+    block = text[m.start() : m.end()]
     if re.search(r"(?m)^packages\s*=\s*\[.*\]\s*$", block):
         block2 = re.sub(r"(?m)^packages\s*=\s*\[.*\]\s*$", new_line, block, count=1)
     else:
@@ -589,7 +626,7 @@ def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
     if not block2.endswith("\n\n"):
         block2 = block2.rstrip() + "\n\n"
 
-    return text[:m.start()] + block2 + text[m.end():]
+    return text[: m.start()] + block2 + text[m.end() :]
 
 
 # -------------------------
@@ -598,11 +635,38 @@ def replace_wheel_packages_line(text: str, packages: List[str]) -> str:
 
 _STDLIB_NAMES: Set[str] = set(getattr(sys, "stdlib_module_names", set()))
 _STDLIB_FALLBACK = {
-    "argparse", "ast", "datetime", "os", "re", "subprocess", "pathlib",
-    "typing", "dataclasses", "json", "time", "sys", "textwrap", "shlex",
-    "collections", "itertools", "functools", "logging", "math", "random",
-    "traceback", "inspect", "types", "enum", "copy", "hashlib", "base64",
-    "threading", "multiprocessing", "signal", "tempfile", "contextlib",
+    "argparse",
+    "ast",
+    "datetime",
+    "os",
+    "re",
+    "subprocess",
+    "pathlib",
+    "typing",
+    "dataclasses",
+    "json",
+    "time",
+    "sys",
+    "textwrap",
+    "shlex",
+    "collections",
+    "itertools",
+    "functools",
+    "logging",
+    "math",
+    "random",
+    "traceback",
+    "inspect",
+    "types",
+    "enum",
+    "copy",
+    "hashlib",
+    "base64",
+    "threading",
+    "multiprocessing",
+    "signal",
+    "tempfile",
+    "contextlib",
 }
 _STDLIB_NAMES |= _STDLIB_FALLBACK
 
@@ -697,7 +761,12 @@ def collect_tool_dependencies(tools: List[Tool]) -> List[str]:
 
     for t in tools:
         meta = t.extra_meta or {}
-        raw = (meta.get("dependencies") or meta.get("depends") or meta.get("deps") or meta.get("requires"))
+        raw = (
+            meta.get("dependencies")
+            or meta.get("depends")
+            or meta.get("deps")
+            or meta.get("requires")
+        )
         explicit = _norm_dep_list(raw)
         inferred = infer_deps_from_imports(t.py_path)
 
@@ -714,7 +783,7 @@ def _read_project_block(text: str) -> Optional[str]:
     m = project_pat.search(text)
     if not m:
         return None
-    return text[m.start():m.end()]
+    return text[m.start() : m.end()]
 
 
 def _replace_project_block(text: str, new_block: str) -> str:
@@ -722,11 +791,11 @@ def _replace_project_block(text: str, new_block: str) -> str:
     m = project_pat.search(text)
     if not m:
         return text.rstrip() + "\n\n" + new_block.rstrip() + "\n\n"
-    return text[:m.start()] + new_block.rstrip() + "\n\n" + text[m.end():]
+    return text[: m.start()] + new_block.rstrip() + "\n\n" + text[m.end() :]
 
 
 def _parse_single_line_dependencies(project_block: str) -> List[str]:
-    dep_pat = re.compile(r'(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$')
+    dep_pat = re.compile(r"(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$")
     m = dep_pat.search(project_block)
     if not m:
         return []
@@ -735,7 +804,7 @@ def _parse_single_line_dependencies(project_block: str) -> List[str]:
 
 
 def _write_single_line_dependencies(project_block: str, deps: List[str]) -> str:
-    dep_pat = re.compile(r'(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$')
+    dep_pat = re.compile(r"(?m)^\s*dependencies\s*=\s*\[(?P<body>.*)\]\s*$")
     deps_line = "dependencies = [" + ", ".join([f'"{d}"' for d in deps]) + "]"
     if dep_pat.search(project_block):
         block2 = dep_pat.sub(deps_line, project_block, count=1)
@@ -746,7 +815,9 @@ def _write_single_line_dependencies(project_block: str, deps: List[str]) -> str:
     return block2
 
 
-def ensure_project_dependencies_exact(text: str, desired_raw: List[str]) -> Tuple[str, List[str]]:
+def ensure_project_dependencies_exact(
+    text: str, desired_raw: List[str]
+) -> Tuple[str, List[str]]:
     project_block = _read_project_block(text)
     if project_block is None:
         deps_bases = []
@@ -760,7 +831,9 @@ def ensure_project_dependencies_exact(text: str, desired_raw: List[str]) -> Tupl
             deps_bases.append(base)
         for base in deps_bases:
             final_deps.append(_DEFAULT_DEP_SPECS.get(base, base))
-        new_block = "[project]\n" + _write_single_line_dependencies("", final_deps).lstrip()
+        new_block = (
+            "[project]\n" + _write_single_line_dependencies("", final_deps).lstrip()
+        )
         return _replace_project_block(text, new_block), final_deps
 
     existing = _parse_single_line_dependencies(project_block)
@@ -794,6 +867,7 @@ def ensure_project_dependencies_exact(text: str, desired_raw: List[str]) -> Tupl
 # scripts: 自动增减 + box 置顶 + box_ 前缀
 # -------------------------
 
+
 def _command_with_prefix(name: str) -> str:
     n = (name or "").strip()
     if not n:
@@ -824,6 +898,7 @@ def update_project_scripts(text: str, scripts: List[Tuple[str, str]]) -> str:
 # wheel packages
 # -------------------------
 
+
 def collect_src_packages() -> List[str]:
     if not SRC_DIR.exists():
         return []
@@ -831,13 +906,16 @@ def collect_src_packages() -> List[str]:
     for p in SRC_DIR.iterdir():
         if p.is_dir() and (p / "__init__.py").exists():
             pkgs.append(f"src/{p.name}")
-    pkgs = sorted(pkgs, key=lambda s: (0, "") if s.lower() == "src/box" else (1, s.lower()))
+    pkgs = sorted(
+        pkgs, key=lambda s: (0, "") if s.lower() == "src/box" else (1, s.lower())
+    )
     return pkgs
 
 
 # -------------------------
 # tests generation + pytest config
 # -------------------------
+
 
 def _snake(s: str) -> str:
     s = (s or "").strip().lower()
@@ -861,7 +939,7 @@ def ensure_tests_skeleton(tools: List[Tool]) -> List[Path]:
             "    sys.path.insert(0, str(SRC_DIR))\n\n\n"
             "@pytest.fixture\n"
             "def chdir_tmp(tmp_path, monkeypatch):\n"
-            "    \"\"\"切到临时目录执行（避免污染仓库）。\"\"\"\n"
+            '    """切到临时目录执行（避免污染仓库）。"""\n'
             "    monkeypatch.chdir(tmp_path)\n"
             "    return tmp_path\n",
             encoding="utf-8",
@@ -927,26 +1005,25 @@ def ensure_dev_pytest_dependency(text: str) -> str:
     dev = ["pytest>=8.0.0", ...]
     仅做字符串级增补（避免引入 TOML parser 依赖）。
     """
-    block_pat = re.compile(r"(?ms)^\[project\.optional-dependencies\]\s*\n.*?(?=^\[|\Z)")
+    block_pat = re.compile(
+        r"(?ms)^\[project\.optional-dependencies\]\s*\n.*?(?=^\[|\Z)"
+    )
     m = block_pat.search(text)
 
     pytest_spec = "pytest>=8.0.0"
 
     if not m:
-        block = (
-            "[project.optional-dependencies]\n"
-            f'dev = ["{pytest_spec}"]\n\n'
-        )
+        block = "[project.optional-dependencies]\n" f'dev = ["{pytest_spec}"]\n\n'
         return text.rstrip() + "\n\n" + block
 
-    block = text[m.start():m.end()]
+    block = text[m.start() : m.end()]
 
-    dev_line_pat = re.compile(r'(?m)^\s*dev\s*=\s*\[(?P<body>.*)\]\s*$')
+    dev_line_pat = re.compile(r"(?m)^\s*dev\s*=\s*\[(?P<body>.*)\]\s*$")
     dm = dev_line_pat.search(block)
 
     if not dm:
         block2 = block.rstrip() + f'\ndev = ["{pytest_spec}"]\n\n'
-        return text[:m.start()] + block2 + text[m.end():]
+        return text[: m.start()] + block2 + text[m.end() :]
 
     body = dm.group("body")
     items = [s.strip() for s in re.findall(r"""["']([^"']+)["']""", body)]
@@ -961,14 +1038,17 @@ def ensure_dev_pytest_dependency(text: str) -> str:
     if not block2.endswith("\n\n"):
         block2 = block2.rstrip() + "\n\n"
 
-    return text[:m.start()] + block2 + text[m.end():]
+    return text[: m.start()] + block2 + text[m.end() :]
 
 
 # -------------------------
 # update pyproject
 # -------------------------
 
-def update_pyproject(tools: List[Tool], do_bump: bool, ensure_tests: bool) -> Tuple[str, int, List[str], List[str], List[Path]]:
+
+def update_pyproject(
+    tools: List[Tool], do_bump: bool, ensure_tests: bool
+) -> Tuple[str, int, List[str], List[str], List[Path]]:
     if not PYPROJECT.exists():
         raise SystemExit("未找到 pyproject.toml，请在仓库根目录执行。")
 
@@ -1008,6 +1088,7 @@ def update_pyproject(tools: List[Tool], do_bump: bool, ensure_tests: bool) -> Tu
 # git helpers (stage/validate/commit)
 # -------------------------
 
+
 def _run_git(args: List[str], check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args],
@@ -1022,7 +1103,9 @@ def _run_git(args: List[str], check: bool = False) -> subprocess.CompletedProces
 def _git_ok_or_exit() -> None:
     p = _run_git(["rev-parse", "--is-inside-work-tree"])
     if p.returncode != 0 or "true" not in (p.stdout or "").strip().lower():
-        raise SystemExit("未检测到 git 仓库（git rev-parse 失败），无法执行自动 git 提交。")
+        raise SystemExit(
+            "未检测到 git 仓库（git rev-parse 失败），无法执行自动 git 提交。"
+        )
 
 
 def _git_is_repo() -> bool:
@@ -1047,7 +1130,11 @@ def git_push_current_branch() -> None:
     stderr = (p_push.stderr or "").lower()
     stdout = (p_push.stdout or "").lower()
     hint = stderr + "\n" + stdout
-    if ("no upstream" in hint) or ("set the remote as upstream" in hint) or ("have no upstream branch" in hint):
+    if (
+        ("no upstream" in hint)
+        or ("set the remote as upstream" in hint)
+        or ("have no upstream branch" in hint)
+    ):
         p_push2 = _run_git(["push", "-u", "origin", branch])
         if p_push2.returncode != 0:
             raise SystemExit(f"git push -u 失败：{p_push2.stderr.strip()}")
@@ -1138,12 +1225,12 @@ def _is_path_expected(path: str, expected: Set[str]) -> bool:
 
 
 def git_validate_changes_or_prompt(
-        *,
-        no_readme: bool,
-        no_toml: bool,
-        no_tests: bool,
-        allow_extra: bool,
-        assume_yes: bool,
+    *,
+    no_readme: bool,
+    no_toml: bool,
+    no_tests: bool,
+    allow_extra: bool,
+    assume_yes: bool,
 ) -> Tuple[bool, bool]:
     """
     校验当前仓库变更是否符合预期。
@@ -1158,7 +1245,9 @@ def git_validate_changes_or_prompt(
     problems: List[str] = []
 
     if untracked:
-        problems.append("存在未跟踪文件（untracked）：\n  - " + "\n  - ".join(sorted(untracked)))
+        problems.append(
+            "存在未跟踪文件（untracked）：\n  - " + "\n  - ".join(sorted(untracked))
+        )
 
     unexpected = sorted([p for p in tracked if not _is_path_expected(p, expected)])
     if unexpected and not allow_extra:
@@ -1170,7 +1259,9 @@ def git_validate_changes_or_prompt(
 
     expected_touched = sorted([p for p in tracked if _is_path_expected(p, expected)])
     if not expected_touched:
-        problems.append("未检测到任何“预期文件”的改动（README/pyproject/tests）。这次提交可能是空的或参数组合不符合预期。")
+        problems.append(
+            "未检测到任何“预期文件”的改动（README/pyproject/tests）。这次提交可能是空的或参数组合不符合预期。"
+        )
 
     if problems:
         print("⚠️ git 提交校验发现问题：")
@@ -1193,11 +1284,11 @@ def git_validate_changes_or_prompt(
 
 
 def git_stage_and_commit(
-        *,
-        no_readme: bool,
-        no_toml: bool,
-        no_tests: bool,
-        message: str,
+    *,
+    no_readme: bool,
+    no_toml: bool,
+    no_tests: bool,
+    message: str,
 ) -> bool:
     expected = _expected_git_paths(no_readme, no_toml, no_tests)
 
@@ -1212,7 +1303,9 @@ def git_stage_and_commit(
     p_cached = _run_git(["diff", "--cached", "--name-only"])
     if p_cached.returncode != 0:
         raise SystemExit(f"git diff --cached 失败：{p_cached.stderr.strip()}")
-    staged_files = [ln.strip() for ln in (p_cached.stdout or "").splitlines() if ln.strip()]
+    staged_files = [
+        ln.strip() for ln in (p_cached.stdout or "").splitlines() if ln.strip()
+    ]
     if not staged_files:
         print("ℹ️ 暂存区没有内容（staged empty），跳过 git commit。")
         return False
@@ -1229,18 +1322,39 @@ def git_stage_and_commit(
 # main
 # -------------------------
 
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-readme", action="store_true", help="不生成 README.md")
     ap.add_argument("--no-toml", action="store_true", help="不更新 pyproject.toml")
-    ap.add_argument("--no-bump", action="store_true", help="不升级 version（仍会更新 scripts / wheel packages / dependencies）")
-    ap.add_argument("--no-tests", action="store_true", help="不生成 tests/ 与 pytest 配置")
+    ap.add_argument(
+        "--no-bump",
+        action="store_true",
+        help="不升级 version（仍会更新 scripts / wheel packages / dependencies）",
+    )
+    ap.add_argument(
+        "--no-tests", action="store_true", help="不生成 tests/ 与 pytest 配置"
+    )
 
     # git commit options（默认开启自动提交/推送）
-    ap.add_argument("--no-git", action="store_true", help="禁用 git 校验/提交/推送（默认会自动执行）")
-    ap.add_argument("--git-message", default="chore: update release artifacts", help="git commit 提交信息")
-    ap.add_argument("--git-allow-extra", action="store_true", help="允许提交超出预期文件范围的变更")
-    ap.add_argument("--yes", action="store_true", help="遇到校验问题不询问，直接继续执行（危险但适合 CI）")
+    ap.add_argument(
+        "--no-git",
+        action="store_true",
+        help="禁用 git 校验/提交/推送（默认会自动执行）",
+    )
+    ap.add_argument(
+        "--git-message",
+        default="chore: update release artifacts",
+        help="git commit 提交信息",
+    )
+    ap.add_argument(
+        "--git-allow-extra", action="store_true", help="允许提交超出预期文件范围的变更"
+    )
+    ap.add_argument(
+        "--yes",
+        action="store_true",
+        help="遇到校验问题不询问，直接继续执行（危险但适合 CI）",
+    )
 
     args = ap.parse_args()
 
@@ -1253,7 +1367,9 @@ def main() -> None:
 
     tools = collect_tools()
     if not tools:
-        print("⚠️ 未发现任何可用的 BOX_TOOL 工具入口（tool.py）。将跳过 scripts/dependencies 自动维护与 README 工具汇总。")
+        print(
+            "⚠️ 未发现任何可用的 BOX_TOOL 工具入口（tool.py）。将跳过 scripts/dependencies 自动维护与 README 工具汇总。"
+        )
 
     if not args.no_readme:
         header = TEMP_MD.read_text(encoding="utf-8", errors="ignore")
@@ -1262,14 +1378,18 @@ def main() -> None:
         print(f"[ok] README.md 已生成：{README_MD}")
 
     if not args.no_toml:
-        new_version, n_scripts, wheel_pkgs, final_deps, written_tests = update_pyproject(
-            tools,
-            do_bump=not args.no_bump,
-            ensure_tests=not args.no_tests,
+        new_version, n_scripts, wheel_pkgs, final_deps, written_tests = (
+            update_pyproject(
+                tools,
+                do_bump=not args.no_bump,
+                ensure_tests=not args.no_tests,
+            )
         )
         if new_version:
             print(f"[ok] pyproject.toml version -> {new_version}")
-        print(f"[ok] [project.scripts] -> {n_scripts} 项（box 置顶，其余自动加 box_ 前缀）")
+        print(
+            f"[ok] [project.scripts] -> {n_scripts} 项（box 置顶，其余自动加 box_ 前缀）"
+        )
         print(f"[ok] wheel packages -> {wheel_pkgs}")
         print(f"[ok] project.dependencies -> {final_deps}")
 
