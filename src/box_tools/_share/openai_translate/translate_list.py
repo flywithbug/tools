@@ -16,6 +16,7 @@ from .models import OpenAIModel
 # Errors
 # =========================================================
 
+
 class TranslationError(RuntimeError):
     pass
 
@@ -23,6 +24,7 @@ class TranslationError(RuntimeError):
 # =========================================================
 # Internal options
 # =========================================================
+
 
 @dataclass(frozen=True)
 class _Options:
@@ -55,13 +57,13 @@ class _Options:
 # - Keep ${var}, %{var}, printf-style, and %% as they are common in i18n.
 _PLACEHOLDER_RE: Pattern[str] = re.compile(
     r"(?:"
-    r"{{\s*[A-Za-z0-9_.-]+\s*}}"            # {{name}}
-    r"|{[A-Za-z0-9_.-]+}"                   # {name}   (restricted to avoid false positives)
-    r"|\$\{\s*[A-Za-z0-9_.-]+\s*\}"         # ${var}
-    r"|%\{\s*[A-Za-z0-9_.-]+\s*\}"          # %{var}
+    r"{{\s*[A-Za-z0-9_.-]+\s*}}"  # {{name}}
+    r"|{[A-Za-z0-9_.-]+}"  # {name}   (restricted to avoid false positives)
+    r"|\$\{\s*[A-Za-z0-9_.-]+\s*\}"  # ${var}
+    r"|%\{\s*[A-Za-z0-9_.-]+\s*\}"  # %{var}
     r"|%\(\s*[A-Za-z0-9_.-]+\s*\)[a-zA-Z]"  # %(name)s
-    r"|(?<!\d)%(?!\s*[A-Za-z])(?:\d+\$)?[#0\-+']*\d*(?:\.\d+)?[a-zA-Z@]"    # %1$@, %d, %.2f, %@ ...
-    r"|%%"                                   # %%
+    r"|(?<!\d)%(?!\s*[A-Za-z])(?:\d+\$)?[#0\-+']*\d*(?:\.\d+)?[a-zA-Z@]"  # %1$@, %d, %.2f, %@ ...
+    r"|%%"  # %%
     r")"
 )
 
@@ -74,8 +76,9 @@ _PLACEHOLDER_EXAMPLES = (
 # Small helpers
 # =========================================================
 
+
 def _sleep_backoff(attempt: int, base: float, jitter: float) -> None:
-    time.sleep((base ** attempt) + random.uniform(0, jitter))
+    time.sleep((base**attempt) + random.uniform(0, jitter))
 
 
 def _extract_placeholders(text: str) -> List[str]:
@@ -90,7 +93,9 @@ def _multiset(xs: List[str]) -> Dict[str, int]:
 
 
 def _placeholders_compatible(src: str, tgt: str) -> bool:
-    return _multiset(_extract_placeholders(src)) == _multiset(_extract_placeholders(tgt))
+    return _multiset(_extract_placeholders(src)) == _multiset(
+        _extract_placeholders(tgt)
+    )
 
 
 def _guard_placeholders_list(src_items: List[str], out_items: List[str]) -> List[str]:
@@ -133,10 +138,10 @@ def _is_placeholder_only(s: str) -> bool:
 
 
 def _finalize_placeholders_list(
-        src_items: List[str],
-        out_items: List[str],
-        *,
-        fallback_safe_to_source: bool,
+    src_items: List[str],
+    out_items: List[str],
+    *,
+    fallback_safe_to_source: bool,
 ) -> List[str]:
     finalized: List[str] = []
     for src_text, tgt_text in zip(src_items, out_items):
@@ -144,7 +149,9 @@ def _finalize_placeholders_list(
             finalized.append(tgt_text)
             continue
 
-        if fallback_safe_to_source and (_is_url_only(src_text) or _is_placeholder_only(src_text)):
+        if fallback_safe_to_source and (
+            _is_url_only(src_text) or _is_placeholder_only(src_text)
+        ):
             finalized.append(src_text)
         else:
             finalized.append("")
@@ -154,27 +161,25 @@ def _finalize_placeholders_list(
 # =========================================================
 # Prompt & payload (List[str] version)
 # =========================================================
-def _build_system_prompt_list(*, src_locale: str, tgt_locale: str, prompt_en: Optional[str]) -> str:
+def _build_system_prompt_list(
+    *, src_locale: str, tgt_locale: str, prompt_en: Optional[str]
+) -> str:
     base = (
         "You are a professional localization translator for mobile UI.\n"
         f"Translate from {src_locale} to {tgt_locale}.\n\n"
-
         "OUTPUT (STRICT):\n"
         '- Return ONLY valid JSON: {"translations":[...]}.\n'
         "- The array length and order MUST exactly match the input list (1:1).\n"
         "- No extra text, keys, or formatting.\n\n"
-
         "RULES:\n"
         f"- Write in {tgt_locale}.\n"
         "- Strings may contain parameters like {{name}}; keep them intact.\n"
         f"- Preserve ALL placeholders/format tokens exactly as-is (e.g., {_PLACEHOLDER_EXAMPLES}).\n"
         "- Preserve URLs and explicit brand/proper nouns verbatim.\n\n"
         "- Insert a single space between numbers/percentages and adjacent Latin words/abbreviations."
-
         "ABBREVIATIONS & TERMS:\n"
         "- If the English source contains abbreviations, use the appropriate abbreviations in the target language.\n"
         "- If an abbreviation or term has no clear, standard translation, keep it in English.\n\n"
-
         "QUALITY REQUIREMENT:\n"
         "- Always provide the best possible translation.\n"
         "- Do not omit content.\n"
@@ -209,7 +214,9 @@ def _parse_translation_list_object(text: str) -> List[str]:
         elif isinstance(v, str):
             out.append(v)
         else:
-            raise ValueError("Invalid output: each translation must be a string or null")
+            raise ValueError(
+                "Invalid output: each translation must be a string or null"
+            )
     return out
 
 
@@ -217,14 +224,15 @@ def _parse_translation_list_object(text: str) -> List[str]:
 # OpenAI call helper
 # =========================================================
 
+
 def _chat_completion(
-        client,
-        *,
-        model: str,
-        system_prompt: str,
-        user_content: str,
-        opt: _Options,
-        use_json_format: bool,
+    client,
+    *,
+    model: str,
+    system_prompt: str,
+    user_content: str,
+    opt: _Options,
+    use_json_format: bool,
 ) -> str:
     kwargs = dict(
         model=model,
@@ -248,7 +256,10 @@ def _supports_response_format_error(msg_lower: str) -> bool:
     """
     if "response_format" not in msg_lower:
         return False
-    return any(x in msg_lower for x in ["unsupported", "unknown", "invalid", "not allowed", "unrecognized"])
+    return any(
+        x in msg_lower
+        for x in ["unsupported", "unknown", "invalid", "not allowed", "unrecognized"]
+    )
 
 
 def _has_placeholder_mismatch(src_items: List[str], out_items: List[str]) -> bool:
@@ -262,15 +273,16 @@ def _has_placeholder_mismatch(src_items: List[str], out_items: List[str]) -> boo
 # Public API
 # =========================================================
 
+
 def translate_list(
-        *,
-        prompt_en: Optional[str],
-        src_items: List[str],
-        src_locale: str,
-        tgt_locale: str,
-        model: Optional[Union[OpenAIModel, str]] = None,
-        api_key: Optional[str] = None,
-        opt: Optional[_Options] = None,
+    *,
+    prompt_en: Optional[str],
+    src_items: List[str],
+    src_locale: str,
+    tgt_locale: str,
+    model: Optional[Union[OpenAIModel, str]] = None,
+    api_key: Optional[str] = None,
+    opt: Optional[_Options] = None,
 ) -> List[str]:
     """
     Translate a flat list: [text, ...] -> [translated_text, ...] (same length, same order).
@@ -326,7 +338,8 @@ def translate_list(
 
             if len(translations) != len(src_items):
                 raise TranslationError(
-                    f"Length mismatch: input {len(src_items)} items, output {len(translations)} translations."
+                    f"Length mismatch: input {len(src_items)} items,"
+                    f" output {len(translations)} translations."
                 )
 
             if opt.placeholder_guard:
@@ -334,9 +347,9 @@ def translate_list(
 
                 # If still mismatch, do ONE extra retry with stricter placeholder rule.
                 if (
-                        opt.placeholder_retry_once
-                        and (not placeholder_extra_retry_used)
-                        and _has_placeholder_mismatch(src_items, translations)
+                    opt.placeholder_retry_once
+                    and (not placeholder_extra_retry_used)
+                    and _has_placeholder_mismatch(src_items, translations)
                 ):
                     placeholder_extra_retry_used = True
                     stricter = (
@@ -362,7 +375,11 @@ def translate_list(
             last_err = e
             msg = str(e).lower()
 
-            if use_json_format and opt.prefer_response_format_json and _supports_response_format_error(msg):
+            if (
+                use_json_format
+                and opt.prefer_response_format_json
+                and _supports_response_format_error(msg)
+            ):
                 use_json_format = False
                 attempt += 1
                 continue

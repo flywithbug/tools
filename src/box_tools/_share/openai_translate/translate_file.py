@@ -41,7 +41,10 @@ def _supports_osc8() -> bool:
         return True
 
     term = os.environ.get("TERM", "")
-    return any(x in term for x in ("xterm", "screen", "tmux", "vt100", "rxvt", "alacritty", "kitty"))
+    return any(
+        x in term
+        for x in ("xterm", "screen", "tmux", "vt100", "rxvt", "alacritty", "kitty")
+    )
 
 
 def _osc8_link(text: str, target: str) -> str:
@@ -55,7 +58,6 @@ def _file_hyperlink_display(path: str) -> str:
         return name
     uri = Path(path).resolve().as_uri()  # file:///Users/...
     return _osc8_link(name, uri)
-
 
 
 def _one_line(s: str) -> str:
@@ -77,12 +79,14 @@ def _make_item_message(key: str, src_text: str, max_len: int = 100) -> str:
     return f"key={key} | {t}"
 
 
-
 # =========================
 # Core translate_from_to
 # =========================
 
-def _incremental_jobs(src: Dict[str, str], tgt: Dict[str, str]) -> List[Tuple[str, str]]:
+
+def _incremental_jobs(
+    src: Dict[str, str], tgt: Dict[str, str]
+) -> List[Tuple[str, str]]:
     """
     增量规则：
     - target 缺 key 或 target[key] == "" -> 需要翻译
@@ -98,8 +102,10 @@ def _incremental_jobs(src: Dict[str, str], tgt: Dict[str, str]) -> List[Tuple[st
     return jobs
 
 
-def _chunk(items: List[Tuple[str, str]], batch_size: int) -> List[List[Tuple[str, str]]]:
-    return [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+def _chunk(
+    items: List[Tuple[str, str]], batch_size: int
+) -> List[List[Tuple[str, str]]]:
+    return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
 
 def _resolve_model(model: Optional[Union[OpenAIModel, str]]) -> OpenAIModel:
@@ -111,17 +117,17 @@ def _resolve_model(model: Optional[Union[OpenAIModel, str]]) -> OpenAIModel:
 
 
 def translate_from_to(
-        *,
-        source_file_path: str,
-        target_file_path: str,
-        src_locale: str,
-        tgt_locale: str,
-        model: Optional[Union[OpenAIModel, str]] = None,
-        api_key: Optional[str] = None,
-        prompt_en: Optional[str] = None,
-        progress: Optional[ProgressCallback] = None,
-        batch_size: int = 50,
-        pre_sort: bool = True,
+    *,
+    source_file_path: str,
+    target_file_path: str,
+    src_locale: str,
+    tgt_locale: str,
+    model: Optional[Union[OpenAIModel, str]] = None,
+    api_key: Optional[str] = None,
+    prompt_en: Optional[str] = None,
+    progress: Optional[ProgressCallback] = None,
+    batch_size: int = 50,
+    pre_sort: bool = True,
 ) -> None:
 
     if not os.path.exists(source_file_path):
@@ -134,19 +140,28 @@ def translate_from_to(
     - 每批翻完立刻写盘（断点续跑）
     - 目标 .strings：无注释、无分组、无空行（由 models.save_target_map 保证）
     """
-    def emit(stage: ProgressStage, total: int, done: int, message: Optional[str] = None) -> None:
+
+    def emit(
+        stage: ProgressStage, total: int, done: int, message: Optional[str] = None
+    ) -> None:
         if progress:
-            progress(FileProgress(
-                file=_file_hyperlink_display(target_file_path),  # ✅ 显示为文件名，点击打开完整路径
-                stage=stage,
-                total=total,
-                done=done,
-                message=message,
-            ))
+            progress(
+                FileProgress(
+                    file=_file_hyperlink_display(
+                        target_file_path
+                    ),  # ✅ 显示为文件名，点击打开完整路径
+                    stage=stage,
+                    total=total,
+                    done=done,
+                    message=message,
+                )
+            )
 
     try:
         if pre_sort:
-            sort_before_translate(source_file_path=source_file_path, target_file_path=target_file_path)
+            sort_before_translate(
+                source_file_path=source_file_path, target_file_path=target_file_path
+            )
 
         src = load_map(source_file_path)
         tgt = load_map(target_file_path)
@@ -177,7 +192,8 @@ def translate_from_to(
                 "progress",
                 total,
                 done,
-                message=f"batch {bi}/{len(batches)} start | " + _make_item_message(k0, t0),
+                message=f"batch {bi}/{len(batches)} start | "
+                + _make_item_message(k0, t0),
             )
 
             keys = [k for k, _ in batch]
@@ -201,11 +217,15 @@ def translate_from_to(
             # ✅ 复用 models 的目标写回规则（json 稳定排序；strings 纯 pairs 排序无注释）
             save_target_map(target_file_path, tgt)
 
-            emit("progress", total, done, message=f"batch {bi}/{len(batches)} done | {done}/{total}")
+            emit(
+                "progress",
+                total,
+                done,
+                message=f"batch {bi}/{len(batches)} done | {done}/{total}",
+            )
 
         emit("done", total, done, message="completed")
 
     except Exception as e:
         emit("error", 0, 0, message=str(e))
         raise
-
