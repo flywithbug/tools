@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Literal
 
 
-
 class OpenAIModel(str, Enum):
     # 4.x / 4o
     GPT_4O = "gpt-4o"
@@ -20,22 +19,23 @@ class OpenAIModel(str, Enum):
 
     # 5.x
     GPT_5 = "gpt-5"
-    GPT_5_CHAT = "gpt-5-chat-latest"          # ChatGPT 当前使用的 GPT-5 指针（偏“聊天最新”）
+    GPT_5_CHAT = "gpt-5-chat-latest"  # ChatGPT 当前使用的 GPT-5 指针（偏“聊天最新”）
     GPT_5_MINI = "gpt-5-mini"
     GPT_5_NANO = "gpt-5-nano"
 
     # 5.2（当前主推）
     GPT_5_2 = "gpt-5.2"
     GPT_5_2_PRO = "gpt-5.2-pro"
-    GPT_5_2_CHAT = "gpt-5.2-chat-latest"      # ChatGPT 当前使用的 GPT-5.2 指针（偏“聊天最新”）
-    GPT_5_2_CODEX = "gpt-5.2-codex"            # 指南中提到的 coding/agentic 变体
-
-
+    GPT_5_2_CHAT = (
+        "gpt-5.2-chat-latest"  # ChatGPT 当前使用的 GPT-5.2 指针（偏“聊天最新”）
+    )
+    GPT_5_2_CODEX = "gpt-5.2-codex"  # 指南中提到的 coding/agentic 变体
 
 
 # =========================
 # File type
 # =========================
+
 
 class FileType(str, Enum):
     JSON = "json"
@@ -55,6 +55,7 @@ def detect_file_type(path: str) -> FileType:
 # JSON helpers
 # =========================
 
+
 def _load_flat_json_map(path: str) -> Dict[str, str]:
     if not os.path.exists(path):
         return {}
@@ -64,7 +65,9 @@ def _load_flat_json_map(path: str) -> Dict[str, str]:
         raise ValueError(f"JSON must be an object(map): {path}")
     for k, v in data.items():
         if not isinstance(k, str) or not isinstance(v, str):
-            raise ValueError(f"Flat JSON required: key/value must be strings: {k}={type(v)}")
+            raise ValueError(
+                f"Flat JSON required: key/value must be strings: {k}={type(v)}"
+            )
     return data
 
 
@@ -96,23 +99,26 @@ _STRINGS_PAIR_RE = re.compile(
     r'^\s*"(?P<key>(?:\\.|[^"\\])*)"\s*=\s*"(?P<val>(?:\\.|[^"\\])*)"\s*;\s*$'
 )
 
+
 def _unescape_strings(s: str) -> str:
     return (
         s.replace(r"\\", "\\")
-        .replace(r"\"", "\"")
+        .replace(r"\"", '"')
         .replace(r"\n", "\n")
         .replace(r"\t", "\t")
         .replace(r"\r", "\r")
     )
 
+
 def _escape_strings(s: str) -> str:
     return (
         s.replace("\\", r"\\")
-        .replace("\"", r"\"")
+        .replace('"', r"\"")
         .replace("\n", r"\n")
         .replace("\t", r"\t")
         .replace("\r", r"\r")
     )
+
 
 def _key_prefix(key: str) -> str:
     # “前缀分组”：点号前；没有点号则归到空前缀组（会排在最前）
@@ -197,7 +203,13 @@ def _parse_strings_keep_comments(path: str) -> Tuple[List[str], List[StringsKV]]
         if m:
             k = _unescape_strings(m.group("key"))
             v = _unescape_strings(m.group("val"))
-            pairs.append(StringsKV(key=k, value=v, leading_comments=pending_comments[:] if pending_comments else []))
+            pairs.append(
+                StringsKV(
+                    key=k,
+                    value=v,
+                    leading_comments=pending_comments[:] if pending_comments else [],
+                )
+            )
             pending_comments = []
             continue
 
@@ -214,7 +226,9 @@ def _parse_strings_keep_comments(path: str) -> Tuple[List[str], List[StringsKV]]
     return header, pairs
 
 
-def _write_strings_source_sorted(path: str, header: List[str], pairs: List[StringsKV]) -> None:
+def _write_strings_source_sorted(
+    path: str, header: List[str], pairs: List[StringsKV]
+) -> None:
     """
     源文件写回规则：
     - 保留注释：输出在对应文案上方（leading_comments 原样输出）
@@ -261,7 +275,7 @@ def _write_strings_source_sorted(path: str, header: List[str], pairs: List[Strin
                 out_lines.extend(c.split("\n"))
             kk = _escape_strings(kv.key)
             vv = _escape_strings(kv.value)
-            out_lines.append(f"\"{kk}\" = \"{vv}\";")
+            out_lines.append(f'"{kk}" = "{vv}";')
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out_lines).rstrip() + "\n")
@@ -280,7 +294,7 @@ def _write_strings_target_sorted_no_comments(path: str, data: Dict[str, str]) ->
     for k in sorted(data.keys()):
         kk = _escape_strings(k)
         vv = _escape_strings(data[k])
-        lines.append(f"\"{kk}\" = \"{vv}\";")
+        lines.append(f'"{kk}" = "{vv}";')
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
