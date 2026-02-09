@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
@@ -21,11 +20,11 @@ def _normalize_api_key(v: Optional[str]) -> Optional[str]:
 # ----------------------------
 # 常量 / 默认文件名
 # ----------------------------
-DEFAULT_TEMPLATE_NAME = "slang_i18n.yaml"   # 内置模板文件（带注释）
+DEFAULT_TEMPLATE_NAME = "slang_i18n.yaml"  # 内置模板文件（带注释）
 DEFAULT_LANGUAGES_NAME = "languages.json"  # 本地语言列表文件
 
-LOCALE_META_KEY = "@@locale"               # i18n json 的 meta key（固定第一位）
-I18N_FILE_SUFFIX = ".i18n.json"            # 业务文件后缀
+LOCALE_META_KEY = "@@locale"  # i18n json 的 meta key（固定第一位）
+I18N_FILE_SUFFIX = ".i18n.json"  # 业务文件后缀
 
 
 # ----------------------------
@@ -33,6 +32,7 @@ I18N_FILE_SUFFIX = ".i18n.json"            # 业务文件后缀
 # ----------------------------
 class ConfigError(RuntimeError):
     """用于启动阶段的配置错误（更友好的报错与解决建议）"""
+
     pass
 
 
@@ -47,7 +47,7 @@ class Locale:
 
 @dataclass(frozen=True)
 class I18nConfig:
-    i18n_dir: Path                 # 绝对路径（按 project_root 解析）
+    i18n_dir: Path  # 绝对路径（按 project_root 解析）
     source_locale: Locale
     target_locales: List[Locale]
     openai_model: str
@@ -94,7 +94,9 @@ def ensure_languages_json(project_root: Path) -> Path:
     return dst
 
 
-def load_target_locales_from_languages_json(languages_path: Path, source_code: str) -> List[Dict[str, str]]:
+def load_target_locales_from_languages_json(
+    languages_path: Path, source_code: str
+) -> List[Dict[str, str]]:
     """
     从 languages.json 生成 target_locales（code + name_en），并：
     - 按 code 去重（保序）
@@ -135,7 +137,9 @@ def _yaml_block_for_target_locales(locales: List[Dict[str, str]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def replace_target_locales_block(template_text: str, new_locales: List[Dict[str, str]]) -> str:
+def replace_target_locales_block(
+    template_text: str, new_locales: List[Dict[str, str]]
+) -> str:
     """
     仅替换模板中 `target_locales:` 段落的内容，其他注释/排版保留。
     匹配规则：从 `target_locales:` 开始，替换到下一个顶层 key 之前。
@@ -148,7 +152,7 @@ def replace_target_locales_block(template_text: str, new_locales: List[Dict[str,
 
     start = start_match.start()
 
-    after = template_text[start_match.end():]
+    after = template_text[start_match.end() :]
     next_key = re.search(r"(?m)^(?!target_locales:)[A-Za-z_][A-Za-z0-9_]*:\s*$", after)
 
     if next_key:
@@ -186,7 +190,9 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
         cfg_path.write_text(out_text, encoding="utf-8")
 
     # 3) 校验配置（此处不强制要求 i18nDir 已存在，因为 init 会创建）
-    raw = assert_config_ok(cfg_path, project_root=project_root, check_i18n_dir_exists=False)
+    raw = assert_config_ok(
+        cfg_path, project_root=project_root, check_i18n_dir_exists=False
+    )
 
     # 4) 创建 i18nDir 目录（按 project_root 解析）
     i18n_dir_path = (project_root / raw["i18nDir"]).resolve()
@@ -197,9 +203,9 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
 # 启动优先校验入口（可选检查 i18nDir 是否存在）
 # ----------------------------
 def assert_config_ok(
-        cfg_path: Path,
-        project_root: Optional[Path] = None,
-        check_i18n_dir_exists: bool = True,
+    cfg_path: Path,
+    project_root: Optional[Path] = None,
+    check_i18n_dir_exists: bool = True,
 ) -> Dict:
     """
     启动时优先校验：
@@ -256,7 +262,9 @@ def load_config(cfg_path: Path, project_root: Optional[Path] = None) -> I18nConf
     cfg_path = cfg_path.resolve()
     project_root = (project_root or cfg_path.parent).resolve()
 
-    raw = assert_config_ok(cfg_path, project_root=project_root, check_i18n_dir_exists=True)
+    raw = assert_config_ok(
+        cfg_path, project_root=project_root, check_i18n_dir_exists=True
+    )
 
     i18n_dir = (project_root / raw["i18nDir"]).resolve()
 
@@ -285,7 +293,15 @@ def load_config(cfg_path: Path, project_root: Optional[Path] = None) -> I18nConf
 # validate_config：字段 + 类型 + 关键语义校验（含 i18nDir）
 # ----------------------------
 def validate_config(raw: Dict) -> None:
-    required_top = ["openAIModel", "maxWorkers", "i18nDir", "source_locale", "target_locales", "prompts", "options"]
+    required_top = [
+        "openAIModel",
+        "maxWorkers",
+        "i18nDir",
+        "source_locale",
+        "target_locales",
+        "prompts",
+        "options",
+    ]
     for k in required_top:
         if k not in raw:
             raise ValueError(f"配置缺少字段：{k}")
@@ -336,7 +352,9 @@ def validate_config(raw: Dict) -> None:
 
     src_code = str(src["code"]).strip()
     if src_code in set(codes):
-        raise ValueError("target_locales 里包含 source_locale.code，请移除（source 不能作为 target）")
+        raise ValueError(
+            "target_locales 里包含 source_locale.code，请移除（source 不能作为 target）"
+        )
 
     prompts = raw["prompts"]
     if not isinstance(prompts, dict):
@@ -347,7 +365,12 @@ def validate_config(raw: Dict) -> None:
     options = raw["options"]
     if not isinstance(options, dict):
         raise ValueError("options 必须是 object")
-    for k in ["sort_keys", "cleanup_extra_keys", "incremental_translate", "normalize_filenames"]:
+    for k in [
+        "sort_keys",
+        "cleanup_extra_keys",
+        "incremental_translate",
+        "normalize_filenames",
+    ]:
         if k not in options:
             raise ValueError(f"options 缺少字段：{k}")
 
@@ -384,9 +407,12 @@ def ensure_flat_json(obj: Any, file_path: Path) -> Dict[str, Any]:
             continue
 
         if v is not None and not isinstance(v, str):
-            raise ValueError(f"value 必须是 string：{file_path} key={k} type={type(v).__name__}")
+            raise ValueError(
+                f"value 必须是 string：{file_path} key={k} type={type(v).__name__}"
+            )
 
     return obj
+
 
 def sort_json_keys(data_obj: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -439,7 +465,9 @@ def read_json(path: Path) -> Dict[str, Any]:
 
     return ensure_flat_json(obj, path)
 
+
 JSON_INDENT = 4
+
 
 def json_pretty(obj: Dict[str, Any]) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=JSON_INDENT)
@@ -498,7 +526,7 @@ def all_locale_codes(cfg: I18nConfig) -> List[str]:
 
 @dataclass
 class DoctorIssue:
-    kind: str        # "missing" | "bad_name" | "no_module_dirs"
+    kind: str  # "missing" | "bad_name" | "no_module_dirs"
     message: str
     path: Optional[Path] = None
 
@@ -514,11 +542,13 @@ def check_i18n_naming_and_existence(cfg: I18nConfig) -> List[DoctorIssue]:
 
     module_dirs = list_module_dirs(cfg.i18n_dir)
     if not module_dirs:
-        issues.append(DoctorIssue(
-            kind="no_module_dirs",
-            message=f"i18nDir 下未发现任何业务子目录：{cfg.i18n_dir}",
-            path=cfg.i18n_dir,
-        ))
+        issues.append(
+            DoctorIssue(
+                kind="no_module_dirs",
+                message=f"i18nDir 下未发现任何业务子目录：{cfg.i18n_dir}",
+                path=cfg.i18n_dir,
+            )
+        )
         return issues
 
     locale_codes = all_locale_codes(cfg)
@@ -529,24 +559,28 @@ def check_i18n_naming_and_existence(cfg: I18nConfig) -> List[DoctorIssue]:
         # 1) 只检查 *.i18n.json（避免误伤其它 json）
         for fp in sorted(md.glob(f"*{I18N_FILE_SUFFIX}")):
             if fp.name not in expected_names:
-                issues.append(DoctorIssue(
-                    kind="bad_name",
-                    message=(
-                        f"文件名不符合规范：{fp.name}；应为 "
-                        f"{to_lower_camel(md.name)}_{{code}}{I18N_FILE_SUFFIX}"
-                    ),
-                    path=fp,
-                ))
+                issues.append(
+                    DoctorIssue(
+                        kind="bad_name",
+                        message=(
+                            f"文件名不符合规范：{fp.name}；应为 "
+                            f"{to_lower_camel(md.name)}_{{code}}{I18N_FILE_SUFFIX}"
+                        ),
+                        path=fp,
+                    )
+                )
 
         # 2) 检查缺失文件
         for code in locale_codes:
             expected = md / expected_i18n_filename(md, code)
             if not expected.exists():
-                issues.append(DoctorIssue(
-                    kind="missing",
-                    message=f"缺少语言文件：{expected.name}",
-                    path=expected,
-                ))
+                issues.append(
+                    DoctorIssue(
+                        kind="missing",
+                        message=f"缺少语言文件：{expected.name}",
+                        path=expected,
+                    )
+                )
 
     return issues
 
@@ -621,7 +655,9 @@ def check_redundant_keys(cfg: I18nConfig) -> List[RedundantKeyIssue]:
                 continue
 
             obj = read_json(fp)
-            extra = sorted([k for k in obj.keys() if (not is_meta_key(k)) and (k not in src_keys)])
+            extra = sorted(
+                [k for k in obj.keys() if (not is_meta_key(k)) and (k not in src_keys)]
+            )
             if extra:
                 issues.append(RedundantKeyIssue(file=fp, keys=extra))
 
@@ -645,7 +681,6 @@ def delete_redundant_keys(redundant: List[RedundantKeyIssue]) -> int:
 
         obj = sort_json_keys(obj)
         fp.write_text(json_pretty(obj), encoding="utf-8")
-
 
         affected += 1
     return affected
@@ -681,7 +716,6 @@ def run_sort(cfg: I18nConfig) -> None:
             changed += 1
 
     print(f"✅ sort 完成：扫描 {len(files)} 个文件，改动 {changed} 个")
-
 
 
 def delete_bad_name_files(cfg: I18nConfig) -> int:
@@ -740,7 +774,11 @@ def run_doctor(cfg: I18nConfig) -> int:
         # 缺失 -> sync
         if any(it.kind == "missing" for it in issues):
             try:
-                ans = input("\n检测到缺失语言文件，是否执行 sync 自动创建？(y/N) ").strip().lower()
+                ans = (
+                    input("\n检测到缺失语言文件，是否执行 sync 自动创建？(y/N) ")
+                    .strip()
+                    .lower()
+                )
             except EOFError:
                 ans = ""
             if ans in ("y", "yes"):
@@ -751,7 +789,11 @@ def run_doctor(cfg: I18nConfig) -> int:
         issues2 = check_i18n_naming_and_existence(cfg)
         if any(it.kind == "bad_name" for it in issues2):
             try:
-                ans = input("\n检测到不符合规范命名的语言文件，是否删除？(y/N) ").strip().lower()
+                ans = (
+                    input("\n检测到不符合规范命名的语言文件，是否删除？(y/N) ")
+                    .strip()
+                    .lower()
+                )
             except EOFError:
                 ans = ""
             if ans in ("y", "yes"):

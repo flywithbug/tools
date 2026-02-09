@@ -8,7 +8,7 @@ from pathlib import Path
 from . import data
 from . import translate  # 如果你暂时没实现 translate.py，可先注释掉相关分支
 
-from _share.tool_spec import tool, opt, ex 
+from _share.tool_spec import tool, opt, ex
 
 BOX_TOOL = tool(
     id="flutter.box_slang_i18n",
@@ -42,10 +42,19 @@ BOX_TOOL = tool(
         ),
         ex("box_slang_i18n", "进入交互菜单（启动会优先校验配置 + 检查 i18nDir 目录）"),
         ex("box_slang_i18n sort", "对 i18n JSON 执行排序（按工具规则）"),
-        ex("box_slang_i18n doctor", "环境/结构诊断：配置合法、目录结构、文件命名、@@locale/flat 等"),
+        ex(
+            "box_slang_i18n doctor",
+            "环境/结构诊断：配置合法、目录结构、文件命名、@@locale/flat 等",
+        ),
         ex("box_slang_i18n translate", "AI 增量翻译：只翻译缺失 key（排除 @@locale）"),
-        ex("box_slang_i18n translate --no-incremental", "AI 全量翻译：按 source 覆盖生成 target 的翻译内容"),
-        ex("box_slang_i18n --project-root ./app --config slang_i18n.yaml init", "在指定项目根目录下初始化"),
+        ex(
+            "box_slang_i18n translate --no-incremental",
+            "AI 全量翻译：按 source 覆盖生成 target 的翻译内容",
+        ),
+        ex(
+            "box_slang_i18n --project-root ./app --config slang_i18n.yaml init",
+            "在指定项目根目录下初始化",
+        ),
     ],
     dependencies=[
         "PyYAML>=6.0",
@@ -70,17 +79,25 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"配置文件路径（默认 {data.DEFAULT_TEMPLATE_NAME}，基于 project-root）",
     )
     p.add_argument("--project-root", default=".", help="项目根目录（默认当前目录）")
-    p.add_argument("--i18n-dir", default=None, help="覆盖配置中的 i18nDir（相对 project-root 或绝对路径）")
-    p.add_argument("--no-incremental", action="store_true", help="translate：关闭增量翻译（全量翻译）")
+    p.add_argument(
+        "--i18n-dir",
+        default=None,
+        help="覆盖配置中的 i18nDir（相对 project-root 或绝对路径）",
+    )
+    p.add_argument(
+        "--no-incremental",
+        action="store_true",
+        help="translate：关闭增量翻译（全量翻译）",
+    )
     return p
 
 
 def run_menu(cfg_path: Path, project_root: Path) -> int:
     menu = [
-        ("sort",      "排序"),
+        ("sort", "排序"),
         ("translate", "翻译（默认增量）"),
-        ("doctor",    "环境诊断"),
-        ("init",      "生成/校验配置"),
+        ("doctor", "环境诊断"),
+        ("init", "生成/校验配置"),
     ]
 
     while True:
@@ -103,7 +120,14 @@ def run_menu(cfg_path: Path, project_root: Path) -> int:
             continue
 
         cmd = menu[idx - 1][0]
-        argv = ["box_slang_i18n", cmd, "--config", str(cfg_path), "--project-root", str(project_root)]
+        argv = [
+            "box_slang_i18n",
+            cmd,
+            "--config",
+            str(cfg_path),
+            "--project-root",
+            str(project_root),
+        ]
         return main(argv)
 
 
@@ -131,7 +155,9 @@ def main(argv=None) -> int:
 
     # 2) 其他命令：启动后优先校验配置（包括 menu），并检查 i18nDir 是否存在
     try:
-        data.assert_config_ok(cfg_path, project_root=project_root, check_i18n_dir_exists=True)
+        data.assert_config_ok(
+            cfg_path, project_root=project_root, check_i18n_dir_exists=True
+        )
     except data.ConfigError as e:
         print(str(e))
         return 1
@@ -144,7 +170,9 @@ def main(argv=None) -> int:
         return 1
 
     if args.i18n_dir:
-        cfg = data.override_i18n_dir(cfg, _resolve_i18n_dir_override(project_root, args.i18n_dir))
+        cfg = data.override_i18n_dir(
+            cfg, _resolve_i18n_dir_override(project_root, args.i18n_dir)
+        )
 
     if args.command == "menu":
         return run_menu(cfg_path=cfg_path, project_root=project_root)

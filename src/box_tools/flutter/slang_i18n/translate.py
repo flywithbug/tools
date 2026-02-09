@@ -7,6 +7,8 @@ import threading
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
+from box_tools._share.openai_translate.translate import translate_flat_dict
+from . import data
 
 
 def _normalize_api_key(v: Optional[str]) -> Optional[str]:
@@ -17,25 +19,22 @@ def _normalize_api_key(v: Optional[str]) -> Optional[str]:
     return None
 
 
-from box_tools._share.openai_translate.translate import translate_flat_dict
-from . import data
-
-
-
 _PRINT_LOCK = threading.Lock()
+
 
 def _ts_print(*args: object) -> None:
     # Avoid interleaved logs in multi-threading
     with _PRINT_LOCK:
         print(*args, flush=True)
 
+
 def _make_progress_cb(t: _Task):
     """Build a progress callback for translate_flat_dict (best-effort, robust)."""
     task_start = time.perf_counter()
     ctx: Dict[str, Any] = {
-        "chunk_total": None,   # int
-        "chunk_keys": None,    # int
-        "chunk_starts": {},    # raw_idx(int) -> perf_counter(float)
+        "chunk_total": None,  # int
+        "chunk_keys": None,  # int
+        "chunk_starts": {},  # raw_idx(int) -> perf_counter(float)
     }
 
     def _as_int(x: Any) -> Optional[int]:
@@ -50,44 +49,46 @@ def _make_progress_cb(t: _Task):
 
     def _pick_total(ev: Dict[str, Any]) -> Optional[int]:
         return (
-                _as_int(ev.get("chunks_total"))
-                or _as_int(ev.get("total_chunks"))
-                or _as_int(ev.get("chunk_total"))
-                or _as_int(ev.get("chunks"))
-                or _as_int(ev.get("n"))
-                or _as_int(ctx.get("chunk_total"))
+            _as_int(ev.get("chunks_total"))
+            or _as_int(ev.get("total_chunks"))
+            or _as_int(ev.get("chunk_total"))
+            or _as_int(ev.get("chunks"))
+            or _as_int(ev.get("n"))
+            or _as_int(ctx.get("chunk_total"))
         )
 
     def _pick_chunk_keys(ev: Dict[str, Any]) -> Optional[int]:
         return (
-                _as_int(ev.get("chunk_keys"))
-                or _as_int(ev.get("chunk_size"))
-                or _as_int(ev.get("max_chunk_items"))
-                or _as_int(ev.get("max_keys"))
-                or _as_int(ev.get("items_per_chunk"))
-                or _as_int(ctx.get("chunk_keys"))
+            _as_int(ev.get("chunk_keys"))
+            or _as_int(ev.get("chunk_size"))
+            or _as_int(ev.get("max_chunk_items"))
+            or _as_int(ev.get("max_keys"))
+            or _as_int(ev.get("items_per_chunk"))
+            or _as_int(ctx.get("chunk_keys"))
         )
 
     def _pick_idx(ev: Dict[str, Any]) -> Optional[int]:
         return (
-                _as_int(ev.get("chunk_index"))
-                or _as_int(ev.get("chunk_i"))
-                or _as_int(ev.get("index"))
-                or _as_int(ev.get("idx"))
-                or _as_int(ev.get("i"))
+            _as_int(ev.get("chunk_index"))
+            or _as_int(ev.get("chunk_i"))
+            or _as_int(ev.get("index"))
+            or _as_int(ev.get("idx"))
+            or _as_int(ev.get("i"))
         )
 
     def _pick_nkeys(ev: Dict[str, Any]) -> Optional[int]:
         return (
-                _as_int(ev.get("n_keys"))
-                or _as_int(ev.get("keys"))
-                or _as_int(ev.get("items"))
-                or _as_int(ev.get("chunk_len"))
-                or _as_int(ev.get("size"))
-                or _pick_chunk_keys(ev)
+            _as_int(ev.get("n_keys"))
+            or _as_int(ev.get("keys"))
+            or _as_int(ev.get("items"))
+            or _as_int(ev.get("chunk_len"))
+            or _as_int(ev.get("size"))
+            or _pick_chunk_keys(ev)
         )
 
-    def _normalize_display_idx(raw_i: Optional[int], total: Optional[int]) -> Optional[int]:
+    def _normalize_display_idx(
+        raw_i: Optional[int], total: Optional[int]
+    ) -> Optional[int]:
         """
         将 raw idx 规范化为 1-based 显示。
         - 如果 total 已知且 raw_i 在 [0, total-1]，认为是 0-based，显示 raw_i+1
@@ -129,7 +130,10 @@ def _make_progress_cb(t: _Task):
                 return
 
             # 单片时压制 start/done 噪声
-            if (ctx.get("chunk_total") or 0) <= 1 and et in ("chunk_start", "chunk_done"):
+            if (ctx.get("chunk_total") or 0) <= 1 and et in (
+                "chunk_start",
+                "chunk_done",
+            ):
                 return
 
             if et in ("chunk_start", "chunk_begin", "chunk_started"):
@@ -199,6 +203,7 @@ def _make_progress_cb(t: _Task):
             return
 
     return cb
+
 
 @dataclass(frozen=True)
 class _Task:
@@ -295,8 +300,7 @@ def run_translate(cfg: data.I18nConfig, incremental: bool = True) -> None:
     else:
         print(f"- 并发: {max_workers} workers（maxWorkers={max_workers_cfg}）")
 
-
-# ✅ 总耗时：从“翻译开始”到“全部结束”的墙钟时间
+    # ✅ 总耗时：从“翻译开始”到“全部结束”的墙钟时间
     start_all = time.perf_counter()
 
     # ✅ 累计每条任务耗时（用于对比并发节省）
@@ -336,7 +340,9 @@ def run_translate(cfg: data.I18nConfig, incremental: bool = True) -> None:
             data.write_json(r.tgt_file, merged)
 
             done_keys += r.success_keys
-            per_lang_done[r.tgt_code] = per_lang_done.get(r.tgt_code, 0) + r.success_keys
+            per_lang_done[r.tgt_code] = (
+                per_lang_done.get(r.tgt_code, 0) + r.success_keys
+            )
 
             elapsed_all = time.perf_counter() - start_all
             print(
@@ -386,6 +392,7 @@ def run_translate(cfg: data.I18nConfig, incremental: bool = True) -> None:
 # 并发 worker 规则
 # -------------------------
 
+
 def _get_max_workers(cfg: data.I18nConfig) -> int:
     # 兼容 maxWorkers / max_workers
     v = getattr(cfg, "maxWorkers", None)
@@ -414,14 +421,15 @@ def _compute_workers(max_workers_cfg: int, total_batches: int) -> int:
 # 构建任务（严格按 data.py 的文件命名规则）
 # -------------------------
 
+
 def _build_tasks(
-        cfg: data.I18nConfig,
-        module_dirs: List[Any],
-        src_code: str,
-        src_lang_name: str,
-        model: str,
-        targets: List[Any],
-        incremental: bool,
+    cfg: data.I18nConfig,
+    module_dirs: List[Any],
+    src_code: str,
+    src_lang_name: str,
+    model: str,
+    targets: List[Any],
+    incremental: bool,
 ) -> Tuple[List[_Task], int, Dict[str, int]]:
     tasks: List[_Task] = []
     total_keys = 0
@@ -461,13 +469,22 @@ def _build_tasks(
             if not src_for_translate:
                 continue
 
-            staged.append((md.name, tgt_file, tgt_obj, src_for_translate, tgt_code, tgt_lang_name))
+            staged.append(
+                (md.name, tgt_file, tgt_obj, src_for_translate, tgt_code, tgt_lang_name)
+            )
 
     total_batches = len(staged)
     if total_batches == 0:
         return [], 0, per_lang_total
 
-    for i, (module_name, tgt_file, tgt_obj, src_for_translate, tgt_code, tgt_lang_name) in enumerate(staged, start=1):
+    for i, (
+        module_name,
+        tgt_file,
+        tgt_obj,
+        src_for_translate,
+        tgt_code,
+        tgt_lang_name,
+    ) in enumerate(staged, start=1):
         n_keys = len(src_for_translate)
         total_keys += n_keys
         per_lang_total[tgt_code] = per_lang_total.get(tgt_code, 0) + n_keys
@@ -500,10 +517,12 @@ def _translate_one(t: _Task) -> _TaskResult:
     out = translate_flat_dict(
         prompt_en=t.prompt_en,
         src_dict=t.src_for_translate,
-        src_lang=t.src_lang_name,     # ✅ name_en
-        tgt_locale=t.tgt_lang_name,   # ✅ name_en
+        src_lang=t.src_lang_name,  # ✅ name_en
+        tgt_locale=t.tgt_lang_name,  # ✅ name_en
         model=t.model,
-        api_key=_normalize_api_key(t.api_key),            # ✅ 配置非空则用配置，否则 None（走环境变量/默认）
+        api_key=_normalize_api_key(
+            t.api_key
+        ),  # ✅ 配置非空则用配置，否则 None（走环境变量/默认）
         progress_cb=_make_progress_cb(t),
     )
     t1 = time.perf_counter()
@@ -534,6 +553,7 @@ def _translate_one(t: _Task) -> _TaskResult:
 # util：KV/增量判断/prompt/打印
 # -------------------------
 
+
 def _normal_kv(obj: Dict[str, Any]) -> Dict[str, Any]:
     """只保留普通 key（排除 @@* 元字段）。"""
     return {k: v for k, v in obj.items() if not data.is_meta_key(k)}
@@ -548,7 +568,9 @@ def _only_non_empty_strings(kv: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-def _compute_incremental_pairs(src: Dict[str, Any], tgt: Dict[str, Any]) -> Dict[str, Any]:
+def _compute_incremental_pairs(
+    src: Dict[str, Any], tgt: Dict[str, Any]
+) -> Dict[str, Any]:
     """
     增量：src 有，tgt 缺 / None / 空字符串 -> 需要翻译
     """
@@ -576,18 +598,22 @@ def _build_prompt_en(cfg: data.I18nConfig, target_code: str) -> Optional[str]:
     prompts = cfg.prompts or {}
     default_en = (prompts.get("default_en") or "").strip()
     by_locale_en = prompts.get("by_locale_en") or {}
-    extra = (by_locale_en.get(target_code) or "").strip() if isinstance(by_locale_en, dict) else ""
+    extra = (
+        (by_locale_en.get(target_code) or "").strip()
+        if isinstance(by_locale_en, dict)
+        else ""
+    )
 
     parts = [p for p in [default_en, extra] if p]
     return "\n\n".join(parts) if parts else None
 
 
 def _print_translated_pairs(
-        src_lang_name: str,
-        tgt_lang_name: str,
-        src_dict: Dict[str, str],
-        out: Dict[str, Any],
-        max_print: int = 200,
+    src_lang_name: str,
+    tgt_lang_name: str,
+    src_dict: Dict[str, str],
+    out: Dict[str, Any],
+    max_print: int = 200,
 ) -> None:
     """
     打印本次翻译成功的内容（源语言 + 目标语言）。
