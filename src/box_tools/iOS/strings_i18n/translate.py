@@ -346,6 +346,7 @@ def _build_tasks(
                 tgt_lang_name=tgt.name_en,
                 model=model,
                 prompt_en=_build_prompt_en(cfg, target_code=tgt.code),
+                api_key=_norm_api_key(getattr(cfg, "api_key", None)),
                 base_file=bf,
                 tgt_file=tf,
                 base_preamble=base_preamble,
