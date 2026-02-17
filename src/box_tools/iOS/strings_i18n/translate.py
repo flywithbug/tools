@@ -78,6 +78,9 @@ def run_translate(cfg: data.StringsI18nConfig, incremental: bool = True) -> None
     print(f"- Core:   {[x.code for x in cfg.core_locales]}")
     print(f"- Targets:{len(cfg.target_locales)}")
 
+    # 先补齐 base_locale 的缺失 key（若存在同名 .lproj）
+    base_missing = _sync_missing_in_base_locale(cfg)
+    _print_missing_keys_report(base_missing, title=f"base_locale({cfg.base_locale.code}) 缺失 key 已补齐")
 
     # 进入 translate 后内部二级菜单：选择执行阶段（tool 不变）
     if sys.stdin.isatty():
@@ -122,7 +125,7 @@ def translate_base_to_core(cfg: data.StringsI18nConfig, incremental: bool = True
     print(f"- src: {cfg.base_locale.code} ({cfg.base_locale.name_en})")
     print(f"- tgt: {[t.code for t in targets]}")
 
-    tasks, total_keys = _build_tasks(
+    tasks, total_keys, missing_report = _build_tasks(
         cfg=cfg,
         phase="base->core",
         src_locale=cfg.base_locale,
@@ -132,6 +135,7 @@ def translate_base_to_core(cfg: data.StringsI18nConfig, incremental: bool = True
         incremental=incremental,
         pivot_locale=None,
     )
+    _print_missing_keys_report(missing_report, title="base→core 缺失 key（相对 Base）")
     _run_tasks_and_write(cfg, tasks, total_keys)
 
 
@@ -151,7 +155,7 @@ def translate_source_to_target(cfg: data.StringsI18nConfig, incremental: bool = 
     print(f"- src: {cfg.source_locale.code} ({cfg.source_locale.name_en})")
     print(f"- tgt: {len(targets)} locales")
 
-    tasks, total_keys = _build_tasks(
+    tasks, total_keys, missing_report = _build_tasks(
         cfg=cfg,
         phase="source->target",
         src_locale=cfg.source_locale,
@@ -161,6 +165,7 @@ def translate_source_to_target(cfg: data.StringsI18nConfig, incremental: bool = 
         incremental=incremental,
         pivot_locale=cfg.source_locale,
     )
+    _print_missing_keys_report(missing_report, title="source→target 缺失 key（相对 Base）")
     _run_tasks_and_write(cfg, tasks, total_keys)
 
 
@@ -268,10 +273,11 @@ def _build_tasks(
     base_dir: Path,
     incremental: bool,
     pivot_locale: Optional[data.Locale],
-) -> Tuple[List[_Task], int]:
+) -> Tuple[List[_Task], int, Dict[str, Dict[str, List[str]]]]:
     tasks: List[_Task] = []
     staged: List[Tuple[data.Locale, Path, Path, List[str], List[data.StringsEntry], List[str], List[data.StringsEntry], Dict[str, str]]] = []
     total_keys = 0
+    missing_report: Dict[str, Dict[str, List[str]]] = {}
 
     model = _get_model(cfg)
 
@@ -293,6 +299,13 @@ def _build_tasks(
                 continue
 
             tgt_entry_map: Dict[str, data.StringsEntry] = {e.key: e for e in tgt_entries}
+
+            # 缺失 key（相对 Base）：仅记录，便于在 translate 阶段打印
+            base_keys = set(base_map.keys())
+            tgt_keys = set(tgt_entry_map.keys())
+            mk = sorted(list(base_keys - tgt_keys))
+            if mk:
+                missing_report.setdefault(tgt.code, {}).setdefault(bf.name, []).extend(mk)
 
             # 生成 src_map（phase2 用 pivot 文案；缺失回退 base）
             if phase == "source->target" and pivot_locale is not None:
@@ -330,7 +343,7 @@ def _build_tasks(
 
     total_batches = len(staged)
     if total_batches == 0:
-        return [], 0
+        return [], 0, missing_report
 
     for i, (tgt, bf, tf, base_preamble, base_entries, tgt_preamble, tgt_entries, src_for_translate) in enumerate(staged, start=1):
         total_keys += len(src_for_translate)
@@ -357,7 +370,57 @@ def _build_tasks(
             )
         )
 
-    return tasks, total_keys
+    return tasks, total_keys, missing_report
+
+
+def _print_missing_keys_report(report: Dict[str, Dict[str, List[str]]], *, title: str) -> None:
+    if not report:
+        return
+    total = sum(len(keys) for m in report.values() for keys in m.values())
+    if total <= 0:
+        return
+    print(f"\n⚠️ {title}：共 {total} 个")
+    for lang in sorted(report.keys()):
+        by_file = report[lang]
+        for fn in sorted(by_file.keys()):
+            for k in sorted(set(by_file[fn])):
+                print(f"- {lang}/{fn}:{k}")
+
+
+def _sync_missing_in_base_locale(cfg: data.StringsI18nConfig) -> Dict[str, Dict[str, List[str]]]:
+    """如果存在 base_locale 对应 .lproj，则把 Base.lproj 缺失的 key 补齐进去。"""
+    base_dir, base_files = _load_base_files(cfg)
+    loc_dir = (cfg.lang_root / f"{cfg.base_locale.code}.lproj").resolve()
+    if not loc_dir.exists():
+        return {}
+
+    missing_report: Dict[str, Dict[str, List[str]]] = {}
+
+    for bf in base_files:
+        tf = loc_dir / bf.name
+        if not tf.exists():
+            tf.write_text("", encoding="utf-8")
+
+        base_preamble, base_entries = data.parse_strings_file(bf)
+        tgt_preamble, tgt_entries = data.parse_strings_file(tf)
+
+        base_entry_map: Dict[str, data.StringsEntry] = {e.key: e for e in _normal_entries(base_entries)}
+        tgt_entry_map: Dict[str, data.StringsEntry] = {e.key: e for e in tgt_entries}
+
+        missing = sorted([k for k in base_entry_map.keys() if k not in tgt_entry_map])
+        if not missing:
+            continue
+
+        missing_report.setdefault(cfg.base_locale.code, {}).setdefault(bf.name, []).extend(missing)
+
+        # 直接使用 Base 的条目补齐（保留 Base 注释）
+        for k in missing:
+            tgt_entry_map[k] = base_entry_map[k]
+
+        new_entries = sorted(tgt_entry_map.values(), key=lambda e: e.key)
+        data.write_strings_file(tf, tgt_preamble, new_entries, group_by_prefix=False)
+
+    return missing_report
 
 
 def _make_progress_cb(t: _Task):
