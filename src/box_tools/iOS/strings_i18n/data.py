@@ -241,6 +241,7 @@ def generate_l10n_swift(
 # ----------------------------
 DEFAULT_TEMPLATE_NAME = "strings_i18n.yaml"  # 内置模板文件（带注释）
 DEFAULT_LANGUAGES_NAME = "languages.json"  # 本地语言列表文件（code + name_en）
+DEFAULT_FASTLANE_METADATA_ROOT = "./fastlane/metadata"
 
 
 # ----------------------------
@@ -270,6 +271,7 @@ class StringsI18nConfig:
     languages_path: Path  # 绝对路径
     lang_root: Path  # 绝对路径：*.lproj 所在目录
     base_folder: str  # e.g. Base.lproj
+    fastlane_metadata_root: Path  # 绝对路径：fastlane/metadata 根目录
 
     # 语言
     base_locale: Locale
@@ -376,6 +378,7 @@ def _doctor_print_and_write(
     print(f"- project_root: {cfg.project_root}")
     print(f"- lang_root:    {cfg.lang_root}")
     print(f"- base_folder:  {cfg.base_folder}")
+    print(f"- fastlane_metadata_root: {cfg.fastlane_metadata_root}")
     print(f"- base_locale:  {cfg.base_locale.code}")
     print(f"- source_locale:{cfg.source_locale.code}")
     print(f"- core_locales: {[l.code for l in cfg.core_locales]}")
@@ -399,6 +402,7 @@ def _doctor_print_and_write(
         lines.append(f"project_root: {cfg.project_root}")
         lines.append(f"lang_root:    {cfg.lang_root}")
         lines.append(f"base_folder:  {cfg.base_folder}")
+        lines.append(f"fastlane_metadata_root: {cfg.fastlane_metadata_root}")
         lines.append(f"base_locale:  {cfg.base_locale.code}")
         lines.append(f"source_locale:{cfg.source_locale.code}")
         lines.append(f"core_locales: {[l.code for l in cfg.core_locales]}")
@@ -556,6 +560,15 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
     languages_rel = str(raw.get("languages") or DEFAULT_LANGUAGES_NAME)
     languages_path = ensure_languages_json(project_root, languages_rel=languages_rel)
 
+    # 6.1) 确保 fastlane metadata 根目录存在（按配置）
+    fastlane_root_rel = str(
+        raw.get("fastlane_metadata_root")
+        or raw.get("fastlaneMetadataRoot")
+        or DEFAULT_FASTLANE_METADATA_ROOT
+    )
+    fastlane_root = (project_root / fastlane_root_rel).resolve()
+    fastlane_root.mkdir(parents=True, exist_ok=True)
+
     # 7) 仅补齐缺失 ascCode（不改动其它配置字段）
     try:
         raw_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
@@ -677,6 +690,14 @@ def load_config(
 
     languages_path = (project_root / str(raw["languages"])).resolve()
     lang_root = (project_root / str(raw["lang_root"])).resolve()
+    fastlane_metadata_root = (
+        project_root
+        / str(
+            raw.get("fastlane_metadata_root")
+            or raw.get("fastlaneMetadataRoot")
+            or DEFAULT_FASTLANE_METADATA_ROOT
+        )
+    ).resolve()
 
     base_locale = _first_locale(raw["base_locale"])
     source_locale = _first_locale(raw["source_locale"])
@@ -689,6 +710,7 @@ def load_config(
         languages_path=languages_path,
         lang_root=lang_root,
         base_folder=str(raw["base_folder"]),
+        fastlane_metadata_root=fastlane_metadata_root,
         base_locale=base_locale,
         source_locale=source_locale,
         core_locales=core_locales,
@@ -737,6 +759,15 @@ def validate_config(raw: Dict[str, Any]) -> None:
     for k in ["languages", "lang_root", "base_folder"]:
         if not isinstance(raw[k], str) or not str(raw[k]).strip():
             raise ValueError(f"{k} 必须是非空字符串")
+
+    # fastlane metadata（可选）
+    fastlane_root = raw.get("fastlane_metadata_root")
+    if fastlane_root is None:
+        fastlane_root = raw.get("fastlaneMetadataRoot")
+    if fastlane_root is not None and (
+        not isinstance(fastlane_root, str) or not fastlane_root.strip()
+    ):
+        raise ValueError("fastlane_metadata_root 必须是非空字符串")
 
     # locales (这些在模板里是 list[object]，每个只放一个)
     _ = _first_locale(raw["base_locale"])

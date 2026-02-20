@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from . import data
+from . import fastlane
 from . import translate
 
 from _share.tool_spec import tool, opt, ex
@@ -25,15 +26,17 @@ BOX_TOOL = tool(
         "box_strings_i18n doctor",
         "box_strings_i18n gen",
         "box_strings_i18n translate",
+        "box_strings_i18n fastlane",
         "box_strings_i18n translate --no-incremental",
+        "box_strings_i18n fastlane --no-incremental",
         "box_strings_i18n --config strings_i18n.yaml",
         "box_strings_i18n --project-root path/to/project",
     ],
     options=[
-        opt("command", "子命令：menu/init/sort/translate/doctor（默认 menu）"),
+        opt("command", "子命令：menu/init/sort/translate/fastlane/doctor（默认 menu）"),
         opt("--config", "配置文件路径（默认 strings_i18n.yaml，基于 project-root）"),
         opt("--project-root", "项目根目录（默认当前目录）"),
-        opt("--no-incremental", "translate：关闭增量翻译，改为全量翻译"),
+        opt("--no-incremental", "translate/fastlane：关闭增量翻译，改为全量翻译"),
         opt(
             "--strings-file",
             "gen：从 Base.lproj 下的哪个 .strings 文件生成（默认 Localizable.strings）",
@@ -53,6 +56,7 @@ BOX_TOOL = tool(
         ex("box_strings_i18n sort", "排序（骨架：待实现 .strings key 排序与写回）"),
         ex("box_strings_i18n gen", "从 Base.lproj/Localizable.strings 生成 L10n.swift"),
         ex("box_strings_i18n translate", "翻译入口（骨架：待实现）"),
+        ex("box_strings_i18n fastlane", "翻译 fastlane/metadata 多语言文案"),
     ],
     dependencies=[
         "PyYAML>=6.0",
@@ -67,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
         "command",
         nargs="?",
         default="menu",
-        choices=["menu", "init", "sort", "translate", "doctor", "gen"],
+        choices=["menu", "init", "sort", "translate", "fastlane", "doctor", "gen"],
         help="子命令",
     )
     p.add_argument(
@@ -79,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--no-incremental",
         action="store_true",
-        help="translate：关闭增量翻译（全量翻译）",
+        help="translate/fastlane：关闭增量翻译（全量翻译）",
     )
     p.add_argument(
         "--strings-file",
@@ -99,6 +103,7 @@ def run_menu(cfg_path: Path, project_root: Path) -> int:
         ("doctor", "环境诊断"),
         ("sort", "排序"),
         ("translate", "翻译"),
+        ("fastlane", "翻译 fastlane metadata"),
         ("gen", "生成 L10n.swift"),
         ("init", "生成/校验配置"),
     ]
@@ -197,6 +202,11 @@ def main(argv=None) -> int:
     if args.command == "translate":
         incremental = not args.no_incremental
         translate.run_translate(cfg, incremental=incremental)
+        return 0
+
+    if args.command == "fastlane":
+        incremental = not args.no_incremental
+        fastlane.run_fastlane(cfg, incremental=incremental)
         return 0
 
     print("未知命令")

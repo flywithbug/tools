@@ -25,6 +25,9 @@ lang_root: ./TimeTrails/TimeTrails/SupportFiles/
 base_folder: Base.lproj
 #l10n_file:
 
+# fastlane metadata 配置（目录使用 ASC locale，例如 en-US / zh-Hans）
+fastlane_metadata_root: ./fastlane/metadata
+
 
 # 基礎語言（通常是簡體中文）
 base_locale:
@@ -348,4 +351,3 @@ prompts:
     ko: |
       Use natural Korean UI style.
       Prefer concise wording suitable for mobile interfaces.
-

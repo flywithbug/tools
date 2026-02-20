@@ -19,11 +19,12 @@ _PRINT_LOCK = threading.Lock()
 # Task / Result（对齐 slang_i18n 的结构风格）
 # -------------------------
 
+
 @dataclass(frozen=True)
 class _Task:
     idx: int
     total: int
-    phase: str                 # "base->core" | "source->target"
+    phase: str  # "base->core" | "source->target"
     src_code: str
     src_lang_name: str
     tgt_code: str
@@ -33,11 +34,13 @@ class _Task:
     api_key: Optional[str]
     base_file: Path
     tgt_file: Path
-    base_preamble: List[str]   # 仅用于复制注释（可选）
+    base_preamble: List[str]  # 仅用于复制注释（可选）
     base_entries: List[data.StringsEntry]
     tgt_preamble: List[str]
     tgt_entries: List[data.StringsEntry]
-    src_for_translate: Dict[str, str]  # 本批次要提交的 key->src_text（已过滤非空字符串）
+    src_for_translate: Dict[
+        str, str
+    ]  # 本批次要提交的 key->src_text（已过滤非空字符串）
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,7 @@ class _TaskResult:
 # Public entry
 # -------------------------
 
+
 def run_translate(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
     """strings_i18n 翻译入口（框架版）
 
@@ -80,7 +84,9 @@ def run_translate(cfg: data.StringsI18nConfig, incremental: bool = True) -> None
 
     # 先补齐 base_locale 的缺失 key（若存在同名 .lproj）
     base_missing = _sync_missing_in_base_locale(cfg)
-    _print_missing_keys_report(base_missing, title=f"base_locale({cfg.base_locale.code}) 缺失 key 已补齐")
+    _print_missing_keys_report(
+        base_missing, title=f"base_locale({cfg.base_locale.code}) 缺失 key 已补齐"
+    )
 
     # 进入 translate 后内部二级菜单：选择执行阶段（tool 不变）
     if sys.stdin.isatty():
@@ -111,7 +117,11 @@ def run_translate(cfg: data.StringsI18nConfig, incremental: bool = True) -> None
         translate_source_to_target(cfg, incremental=incremental)
         print("🔧 translate 后执行 sort（保证格式一致）...")
         data.run_sort(cfg)
-def translate_base_to_core(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
+
+
+def translate_base_to_core(
+    cfg: data.StringsI18nConfig, incremental: bool = True
+) -> None:
     """阶段 1：base_locale -> core_locales（增量翻译入口）"""
     base_dir, base_files = _load_base_files(cfg)
 
@@ -139,14 +149,20 @@ def translate_base_to_core(cfg: data.StringsI18nConfig, incremental: bool = True
     _run_tasks_and_write(cfg, tasks, total_keys)
 
 
-def translate_source_to_target(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
+def translate_source_to_target(
+    cfg: data.StringsI18nConfig, incremental: bool = True
+) -> None:
     """阶段 2：source_locale(pivot) -> target_locales（增量翻译入口）
 
     pivot 缺 key/空时：回退使用 Base 的 value 作为 src_text。
     """
     base_dir, base_files = _load_base_files(cfg)
 
-    targets = [x for x in cfg.target_locales if x.code not in {cfg.base_locale.code, cfg.source_locale.code}]
+    targets = [
+        x
+        for x in cfg.target_locales
+        if x.code not in {cfg.base_locale.code, cfg.source_locale.code}
+    ]
     if not targets:
         print("⚠️ source->target：target_locales 为空或与 base/source 重合，跳过。")
         return
@@ -165,13 +181,16 @@ def translate_source_to_target(cfg: data.StringsI18nConfig, incremental: bool = 
         incremental=incremental,
         pivot_locale=cfg.source_locale,
     )
-    _print_missing_keys_report(missing_report, title="source→target 缺失 key（相对 Base）")
+    _print_missing_keys_report(
+        missing_report, title="source→target 缺失 key（相对 Base）"
+    )
     _run_tasks_and_write(cfg, tasks, total_keys)
 
 
 # -------------------------
 # Core framework
 # -------------------------
+
 
 def _load_base_files(cfg: data.StringsI18nConfig) -> Tuple[Path, List[Path]]:
     base_dir = (cfg.lang_root / cfg.base_folder).resolve()
@@ -211,15 +230,17 @@ def _get_model(cfg: data.StringsI18nConfig) -> str:
 
     # 2) 兼容 options 里可能出现的 model/openai_model/openaiModel
     if isinstance(cfg.options, dict):
-        m = cfg.options.get("model") or cfg.options.get("openai_model") or cfg.options.get("openaiModel") or cfg.options.get("openaiModel")
+        m = (
+            cfg.options.get("model")
+            or cfg.options.get("openai_model")
+            or cfg.options.get("openaiModel")
+            or cfg.options.get("openaiModel")
+        )
         if isinstance(m, str) and m.strip():
             return m.strip()
 
     # 3) 最后回退到环境变量/默认
     return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-
-
-
 
 
 def _norm_api_key(v: Any) -> Optional[str]:
@@ -234,7 +255,11 @@ def _build_prompt_en(cfg: data.StringsI18nConfig, target_code: str) -> Optional[
     prompts = cfg.prompts or {}
     default_en = (prompts.get("default_en") or "").strip()
     by_locale_en = prompts.get("by_locale_en") or {}
-    extra = (by_locale_en.get(target_code) or "").strip() if isinstance(by_locale_en, dict) else ""
+    extra = (
+        (by_locale_en.get(target_code) or "").strip()
+        if isinstance(by_locale_en, dict)
+        else ""
+    )
     parts = [p for p in [default_en, extra] if p]
     return "\n\n".join(parts) if parts else None
 
@@ -247,7 +272,9 @@ def _only_non_empty_strings(kv: Dict[str, str]) -> Dict[str, str]:
     return {k: v for k, v in kv.items() if isinstance(v, str) and v.strip()}
 
 
-def _compute_incremental_pairs(src_map: Dict[str, str], tgt_map: Dict[str, data.StringsEntry]) -> Dict[str, str]:
+def _compute_incremental_pairs(
+    src_map: Dict[str, str], tgt_map: Dict[str, data.StringsEntry]
+) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for k, v in src_map.items():
         if k not in tgt_map:
@@ -275,7 +302,18 @@ def _build_tasks(
     pivot_locale: Optional[data.Locale],
 ) -> Tuple[List[_Task], int, Dict[str, Dict[str, List[str]]]]:
     tasks: List[_Task] = []
-    staged: List[Tuple[data.Locale, Path, Path, List[str], List[data.StringsEntry], List[str], List[data.StringsEntry], Dict[str, str]]] = []
+    staged: List[
+        Tuple[
+            data.Locale,
+            Path,
+            Path,
+            List[str],
+            List[data.StringsEntry],
+            List[str],
+            List[data.StringsEntry],
+            Dict[str, str],
+        ]
+    ] = []
     total_keys = 0
     missing_report: Dict[str, Dict[str, List[str]]] = {}
 
@@ -294,24 +332,34 @@ def _build_tasks(
             tgt_preamble, tgt_entries = data.parse_strings_file(tf)
 
             # key->value（只取普通 key）
-            base_map: Dict[str, str] = {e.key: e.value for e in _normal_entries(base_entries)}
+            base_map: Dict[str, str] = {
+                e.key: e.value for e in _normal_entries(base_entries)
+            }
             if not base_map:
                 continue
 
-            tgt_entry_map: Dict[str, data.StringsEntry] = {e.key: e for e in tgt_entries}
+            tgt_entry_map: Dict[str, data.StringsEntry] = {
+                e.key: e for e in tgt_entries
+            }
 
             # 缺失 key（相对 Base）：仅记录，便于在 translate 阶段打印
             base_keys = set(base_map.keys())
             tgt_keys = set(tgt_entry_map.keys())
             mk = sorted(list(base_keys - tgt_keys))
             if mk:
-                missing_report.setdefault(tgt.code, {}).setdefault(bf.name, []).extend(mk)
+                missing_report.setdefault(tgt.code, {}).setdefault(bf.name, []).extend(
+                    mk
+                )
 
             # 生成 src_map（phase2 用 pivot 文案；缺失回退 base）
             if phase == "source->target" and pivot_locale is not None:
-                pivot_file = (cfg.lang_root / f"{pivot_locale.code}.lproj" / bf.name).resolve()
+                pivot_file = (
+                    cfg.lang_root / f"{pivot_locale.code}.lproj" / bf.name
+                ).resolve()
                 _, pivot_entries = data.parse_strings_file(pivot_file)
-                pivot_map: Dict[str, str] = {e.key: e.value for e in _normal_entries(pivot_entries)}
+                pivot_map: Dict[str, str] = {
+                    e.key: e.value for e in _normal_entries(pivot_entries)
+                }
 
                 src_map: Dict[str, str] = {}
                 for k, base_val in base_map.items():
@@ -339,13 +387,33 @@ def _build_tasks(
             if not src_for_translate:
                 continue
 
-            staged.append((tgt, bf, tf, base_preamble, base_entries, tgt_preamble, tgt_entries, src_for_translate))
+            staged.append(
+                (
+                    tgt,
+                    bf,
+                    tf,
+                    base_preamble,
+                    base_entries,
+                    tgt_preamble,
+                    tgt_entries,
+                    src_for_translate,
+                )
+            )
 
     total_batches = len(staged)
     if total_batches == 0:
         return [], 0, missing_report
 
-    for i, (tgt, bf, tf, base_preamble, base_entries, tgt_preamble, tgt_entries, src_for_translate) in enumerate(staged, start=1):
+    for i, (
+        tgt,
+        bf,
+        tf,
+        base_preamble,
+        base_entries,
+        tgt_preamble,
+        tgt_entries,
+        src_for_translate,
+    ) in enumerate(staged, start=1):
         total_keys += len(src_for_translate)
 
         tasks.append(
@@ -373,7 +441,9 @@ def _build_tasks(
     return tasks, total_keys, missing_report
 
 
-def _print_missing_keys_report(report: Dict[str, Dict[str, List[str]]], *, title: str) -> None:
+def _print_missing_keys_report(
+    report: Dict[str, Dict[str, List[str]]], *, title: str
+) -> None:
     if not report:
         return
     total = sum(len(keys) for m in report.values() for keys in m.values())
@@ -387,7 +457,9 @@ def _print_missing_keys_report(report: Dict[str, Dict[str, List[str]]], *, title
                 print(f"- {lang}/{fn}:{k}")
 
 
-def _sync_missing_in_base_locale(cfg: data.StringsI18nConfig) -> Dict[str, Dict[str, List[str]]]:
+def _sync_missing_in_base_locale(
+    cfg: data.StringsI18nConfig,
+) -> Dict[str, Dict[str, List[str]]]:
     """如果存在 base_locale 对应 .lproj，则把 Base.lproj 缺失的 key 补齐进去。"""
     base_dir, base_files = _load_base_files(cfg)
     loc_dir = (cfg.lang_root / f"{cfg.base_locale.code}.lproj").resolve()
@@ -404,14 +476,18 @@ def _sync_missing_in_base_locale(cfg: data.StringsI18nConfig) -> Dict[str, Dict[
         base_preamble, base_entries = data.parse_strings_file(bf)
         tgt_preamble, tgt_entries = data.parse_strings_file(tf)
 
-        base_entry_map: Dict[str, data.StringsEntry] = {e.key: e for e in _normal_entries(base_entries)}
+        base_entry_map: Dict[str, data.StringsEntry] = {
+            e.key: e for e in _normal_entries(base_entries)
+        }
         tgt_entry_map: Dict[str, data.StringsEntry] = {e.key: e for e in tgt_entries}
 
         missing = sorted([k for k in base_entry_map.keys() if k not in tgt_entry_map])
         if not missing:
             continue
 
-        missing_report.setdefault(cfg.base_locale.code, {}).setdefault(bf.name, []).extend(missing)
+        missing_report.setdefault(cfg.base_locale.code, {}).setdefault(
+            bf.name, []
+        ).extend(missing)
 
         # 直接使用 Base 的条目补齐（保留 Base 注释）
         for k in missing:
@@ -471,7 +547,12 @@ def _make_progress_cb(t: _Task):
             e = evt.get("event") or evt.get("type") or evt.get("name") or "event"
             ci = evt.get("chunk_index") or evt.get("i")
             cn = evt.get("chunk_total") or evt.get("n")
-            ck = evt.get("chunk_keys") or evt.get("chunk_items") or evt.get("items") or evt.get("keys")
+            ck = (
+                evt.get("chunk_keys")
+                or evt.get("chunk_items")
+                or evt.get("items")
+                or evt.get("keys")
+            )
             attempt = evt.get("attempt")
             msg = evt.get("error") or evt.get("message") or ""
             now = time.perf_counter()
@@ -509,7 +590,9 @@ def _make_progress_cb(t: _Task):
                 # chunking_done：只有 >1 才打印
                 if e == "chunking_done":
                     if _should_print_chunks() and not _printed_chunking_done:
-                        print(f"{head} 分片完成：{_chunk_total} 片（chunk_keys={_cfg_chunk_keys}） | {since:.2f}s")
+                        print(
+                            f"{head} 分片完成：{_chunk_total} 片（chunk_keys={_cfg_chunk_keys}） | {since:.2f}s"
+                        )
                         _printed_chunking_done = True
                     return
 
@@ -521,17 +604,27 @@ def _make_progress_cb(t: _Task):
 
                 if e == "chunk_done":
                     if _should_print_chunks() and idx:
-                        s = f"{evt_sec:.2f}s" if isinstance(evt_sec, (int, float)) else "?"
-                        print(f"{head} chunk {idx} 完成（{ck} key） | {s} | {since:.2f}s")
+                        s = (
+                            f"{evt_sec:.2f}s"
+                            if isinstance(evt_sec, (int, float))
+                            else "?"
+                        )
+                        print(
+                            f"{head} chunk {idx} 完成（{ck} key） | {s} | {since:.2f}s"
+                        )
                     return
 
                 # retry / error / split：无论是否单分片，都打印“最小必要信息”
                 if e in {"chunk_error", "retry"}:
                     if idx and _should_print_chunks():
-                        print(f"{head} chunk {idx} 异常/重试 attempt={attempt} {msg} | {since:.2f}s")
+                        print(
+                            f"{head} chunk {idx} 异常/重试 attempt={attempt} {msg} | {since:.2f}s"
+                        )
                     else:
                         # 单分片或 idx 不可信时：不输出 idx，避免乱
-                        print(f"{head} 异常/重试 attempt={attempt} {msg} | {since:.2f}s")
+                        print(
+                            f"{head} 异常/重试 attempt={attempt} {msg} | {since:.2f}s"
+                        )
                     return
 
                 if e == "chunk_split":
@@ -550,18 +643,21 @@ def _make_progress_cb(t: _Task):
             return
 
     return _cb
+
+
 def _translate_text_map(*, t: _Task) -> Dict[str, Any]:
     # 与 slang_i18n 完全一致的调用方式
     cb = _make_progress_cb(t)
     return translate_flat_dict(
         prompt_en=t.prompt_en,
         src_dict=t.src_for_translate,
-        src_lang=t.src_lang_name,     # ✅ name_en
-        tgt_locale=t.tgt_lang_name,   # ✅ name_en
+        src_lang=t.src_lang_name,  # ✅ name_en
+        tgt_locale=t.tgt_lang_name,  # ✅ name_en
         model=t.model,
         api_key=_norm_api_key(t.api_key),
         progress_cb=cb,
     )
+
 
 def _translate_one(t: _Task) -> _TaskResult:
     t0 = time.perf_counter()
@@ -620,7 +716,9 @@ def _print_translated_pairs(
         printed += 1
 
 
-def _run_tasks_and_write(cfg: data.StringsI18nConfig, tasks: List[_Task], total_keys: int) -> None:
+def _run_tasks_and_write(
+    cfg: data.StringsI18nConfig, tasks: List[_Task], total_keys: int
+) -> None:
     total_batches = len(tasks)
     if total_batches == 0 or total_keys == 0:
         print("✅ 没有需要翻译的 key")
@@ -658,10 +756,16 @@ def _run_tasks_and_write(cfg: data.StringsI18nConfig, tasks: List[_Task], total_
             sum_batch_sec += r.batch_sec
 
             # 主线程写回：合并原 entries + 新翻译，保留 preamble
-            _, base_entries = data.parse_strings_file(tasks[r.idx - 1].base_file)  # 只用于复制注释（稳妥起见重新读）
-            base_comments_map: Dict[str, List[str]] = {e.key: e.comments for e in _normal_entries(base_entries)}
+            _, base_entries = data.parse_strings_file(
+                tasks[r.idx - 1].base_file
+            )  # 只用于复制注释（稳妥起见重新读）
+            base_comments_map: Dict[str, List[str]] = {
+                e.key: e.comments for e in _normal_entries(base_entries)
+            }
 
-            tgt_entry_map: Dict[str, data.StringsEntry] = {e.key: e for e in r.tgt_entries}
+            tgt_entry_map: Dict[str, data.StringsEntry] = {
+                e.key: e for e in r.tgt_entries
+            }
 
             # 合并：只写入非空字符串；保留原注释；若原无注释则用 base 注释（如果有）
             for k, v in r.out.items():
@@ -679,7 +783,9 @@ def _run_tasks_and_write(cfg: data.StringsI18nConfig, tasks: List[_Task], total_
                 tgt_entry_map[k] = data.StringsEntry(key=k, value=v, comments=comments)
 
             new_entries = sorted(tgt_entry_map.values(), key=lambda e: e.key)
-            data.write_strings_file(r.tgt_file, r.tgt_preamble, new_entries, group_by_prefix=False)
+            data.write_strings_file(
+                r.tgt_file, r.tgt_preamble, new_entries, group_by_prefix=False
+            )
 
             done_files += 1
             done_keys += r.success_keys
