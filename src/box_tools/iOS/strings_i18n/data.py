@@ -554,7 +554,22 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
 
     # 6) 确保 languages 文件存在（按配置）
     languages_rel = str(raw.get("languages") or DEFAULT_LANGUAGES_NAME)
-    ensure_languages_json(project_root, languages_rel=languages_rel)
+    languages_path = ensure_languages_json(project_root, languages_rel=languages_rel)
+
+    # 7) 仅补齐缺失 ascCode（不改动其它配置字段）
+    try:
+        raw_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        missing_asc = _find_missing_asc_in_raw_config(raw_cfg)
+        if missing_asc:
+            langs = _load_languages(languages_path)
+            code_to_asc = {
+                str(x.get("code", "")).strip(): str(x.get("asc_code", "")).strip()
+                for x in langs
+            }
+            _fill_missing_asc_codes_in_config_file(cfg_path, code_to_asc)
+    except Exception:
+        # init 主流程不因 ascCode 自动补全失败而中断
+        pass
 
 
 # ----------------------------
@@ -814,6 +829,82 @@ def _find_missing_asc_in_raw_config(raw: Dict[str, Any]) -> List[Tuple[str, str]
             if not asc_camel and not asc_snake:
                 missing.append((sec, code))
     return missing
+
+
+def _fill_missing_asc_codes_in_config_file(
+    cfg_path: Path, code_to_asc: Dict[str, str]
+) -> int:
+    """
+    仅为 locale 条目补齐缺失 ascCode，尽量保留原文件的其它配置/注释/排版。
+    返回新增 ascCode 的数量。
+    """
+    text = cfg_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    code_re = re.compile(r"^(\s*)-\s+code:\s*([^#\n]+?)\s*$")
+    asc_re = re.compile(r"^\s*asc(?:Code|_code):\s*")
+    name_re = re.compile(r"^(\s*)name_en:\s*(.*?)\s*$")
+    top_key_re = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*:\s*$")
+
+    out: List[str] = []
+    i = 0
+    inserted = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+        m = code_re.match(line)
+        if not m:
+            out.append(line)
+            i += 1
+            continue
+
+        item_indent = m.group(1)
+        item_indent_len = len(item_indent)
+        code = m.group(2).strip().strip('"').strip("'")
+
+        out.append(line)
+        i += 1
+
+        body: List[str] = []
+        while i < n:
+            l2 = lines[i]
+            m2 = code_re.match(l2)
+            if m2 and len(m2.group(1)) == item_indent_len:
+                break
+            if top_key_re.match(l2) and (len(l2) - len(l2.lstrip())) <= item_indent_len:
+                break
+            body.append(l2)
+            i += 1
+
+        has_asc = any(asc_re.match(x) for x in body)
+        if has_asc:
+            out.extend(body)
+            continue
+
+        asc = (code_to_asc.get(code) or code).strip()
+        insert_idx = None
+        insert_indent = f"{item_indent}  "
+        for j, bl in enumerate(body):
+            nm = name_re.match(bl)
+            if nm:
+                insert_idx = j + 1
+                insert_indent = nm.group(1)
+                break
+
+        asc_line = f"{insert_indent}ascCode: {asc}"
+        if insert_idx is None:
+            out.append(asc_line)
+            out.extend(body)
+        else:
+            out.extend(body[:insert_idx])
+            out.append(asc_line)
+            out.extend(body[insert_idx:])
+        inserted += 1
+
+    if inserted > 0:
+        cfg_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return inserted
 
 
 # ----------------------------
