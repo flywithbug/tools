@@ -265,6 +265,7 @@ class Locale:
 @dataclass(frozen=True)
 class StringsI18nConfig:
     # 路径
+    config_path: Path  # 绝对路径：当前配置文件
     project_root: Path
     languages_path: Path  # 绝对路径
     lang_root: Path  # 绝对路径：*.lproj 所在目录
@@ -668,6 +669,7 @@ def load_config(
     target_locales = [_locale_obj(x) for x in (raw.get("target_locales") or [])]
 
     return StringsI18nConfig(
+        config_path=cfg_path,
         project_root=project_root,
         languages_path=languages_path,
         lang_root=lang_root,
@@ -793,6 +795,27 @@ def _first_locale(obj: Any) -> Locale:
     return _locale_obj(obj[0])
 
 
+def _find_missing_asc_in_raw_config(raw: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """扫描配置中的 locale 列表，找出未显式配置 ascCode/asc_code 的项。"""
+    missing: List[Tuple[str, str]] = []
+    sections = ["base_locale", "source_locale", "core_locales", "target_locales"]
+    for sec in sections:
+        arr = raw.get(sec)
+        if not isinstance(arr, list):
+            continue
+        for it in arr:
+            if not isinstance(it, dict):
+                continue
+            code = str(it.get("code", "")).strip()
+            if not code:
+                continue
+            asc_camel = str(it.get("ascCode", "")).strip()
+            asc_snake = str(it.get("asc_code", "")).strip()
+            if not asc_camel and not asc_snake:
+                missing.append((sec, code))
+    return missing
+
+
 # ----------------------------
 # commands：doctor/sort（骨架）
 # ----------------------------
@@ -843,6 +866,21 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
             "languages.json 缺少以下 code（建议补全，以便 init/校验一致）："
             + ", ".join(missing_in_languages)
         )
+
+    # ---- 配置中的 ascCode 完整性 ----
+    try:
+        raw_cfg = yaml.safe_load(cfg.config_path.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        warns.append(f"配置文件读取失败，无法检查 ascCode 是否缺失：{cfg.config_path}（{e}）")
+        raw_cfg = {}
+
+    missing_asc = _find_missing_asc_in_raw_config(raw_cfg)
+    if missing_asc:
+        preview = ", ".join([f"{sec}:{code}" for sec, code in missing_asc[:12]])
+        if len(missing_asc) > 12:
+            preview += f" …（共 {len(missing_asc)} 项）"
+        warns.append(f"检测到配置中缺少 ascCode：{preview}")
+        warns.append("为避免影响现有配置，doctor 仅提示，不会自动写回 ascCode。")
 
     # ---- Base.lproj 文件集 ----
     base_files = sorted([p for p in base_dir.glob("*.strings") if p.is_file()])
