@@ -971,7 +971,30 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
         if len(missing_asc) > 12:
             preview += f" …（共 {len(missing_asc)} 项）"
         warns.append(f"检测到配置中缺少 ascCode：{preview}")
-        warns.append("为避免影响现有配置，doctor 仅提示，不会自动写回 ascCode。")
+        warns.append("可在 doctor 交互中选择是否自动补齐 ascCode（仅插入该字段，不改其它配置）。")
+
+        if sys.stdin.isatty():
+            ans = (
+                input(
+                    f"检测到 {len(missing_asc)} 个 locale 缺少 ascCode，是否现在补齐？(y/n) [n]: "
+                )
+                .strip()
+                .lower()
+            )
+            if ans in {"y", "yes"}:
+                code_to_asc = {
+                    str(x.get("code", "")).strip(): str(x.get("asc_code", "")).strip()
+                    for x in languages_list
+                }
+                inserted = _fill_missing_asc_codes_in_config_file(
+                    cfg.config_path, code_to_asc
+                )
+                if inserted > 0:
+                    warns.append(
+                        f"已补齐 ascCode：{inserted} 项（仅插入该字段，文件：{cfg.config_path}）"
+                    )
+                else:
+                    warns.append("未补齐 ascCode：未找到可写入位置")
 
     # ---- Base.lproj 文件集 ----
     base_files = sorted([p for p in base_dir.glob("*.strings") if p.is_file()])
