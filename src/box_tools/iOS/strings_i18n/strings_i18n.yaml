@@ -18,7 +18,7 @@ options:
   normalize_filenames: true      # 是否規範化文件名（可選）
   sort_keys: true                # 是否按 key 排序輸出
 
-languages: ./languages.json      # 語言定義檔路徑（code + name_en）
+languages: ./languages.json      # 語言定義檔路徑（code + name_en + asc_code）
 
 # 語言檔案存放根目錄與 Base 資料夾名稱
 lang_root: ./TimeTrails/TimeTrails/SupportFiles/
@@ -30,28 +30,37 @@ base_folder: Base.lproj
 base_locale:
   - code: zh-Hans
     name_en: Simplified Chinese
+    ascCode: zh-Hans
 
 # 原始語言（通常是英文，翻譯的起點）
 source_locale:
   - code: en
     name_en: English
+    ascCode: en-US
 
 # 核心語言（常駐、優先翻譯、常在應用內顯示的語言）
 core_locales:
   - code: zh-Hant
     name_en: Traditional Chinese
+    ascCode: zh-Hant
   - code: yue
     name_en: Cantonese
+    ascCode: yue
   - code: zh-Hans
     name_en: Simplified Chinese
+    ascCode: zh-Hans
   - code: zh-HK
     name_en: Chinese (Hong Kong)
+    ascCode: zh-Hant
   - code: en
     name_en: English
+    ascCode: en-US
   - code: ko
     name_en: Korean
+    ascCode: ko
   - code: ja
     name_en: Japanese
+    ascCode: ja
 
 # 目標翻譯語言（自動從 languages.json 產生，已排除 core_locales 重複項）
 # 若需新增/移除語言，請修改 languages.json 後重新 --init
@@ -60,170 +69,253 @@ core_locales:
 target_locales:
   - code: af
     name_en: Afrikaans
+    ascCode: af
   - code: am
     name_en: Amharic
+    ascCode: am
   - code: ar
     name_en: Arabic
+    ascCode: ar-SA
   - code: be
     name_en: Belarusian
+    ascCode: be
   - code: bg
     name_en: Bulgarian
+    ascCode: bg
   - code: bn
     name_en: Bengali
+    ascCode: bn
   - code: bo
     name_en: Tibetan
+    ascCode: bo
   - code: bs
     name_en: Bosnian
+    ascCode: bs
   - code: ca
     name_en: Catalan
+    ascCode: ca
   - code: cs
     name_en: Czech
+    ascCode: cs
   - code: cy
     name_en: Welsh
+    ascCode: cy
   - code: da
     name_en: Danish
+    ascCode: da
   - code: de
     name_en: German
+    ascCode: de-DE
   - code: el
     name_en: Greek
+    ascCode: el
   - code: en-AU
     name_en: English (Australia)
+    ascCode: en-AU
   - code: en-CA
     name_en: English (Canada)
+    ascCode: en-CA
   - code: en-GB
     name_en: English (United Kingdom)
+    ascCode: en-GB
   - code: en-IN
     name_en: English (India)
+    ascCode: en-IN
   - code: eo
     name_en: Esperanto
+    ascCode: eo
   - code: es
     name_en: Spanish
+    ascCode: es-ES
   - code: es-419
     name_en: Spanish (Latin America)
+    ascCode: es-419
   - code: es-MX
     name_en: Spanish (Mexico)
+    ascCode: es-MX
   - code: et
     name_en: Estonian
+    ascCode: et
   - code: eu
     name_en: Basque
+    ascCode: eu
   - code: fa
     name_en: Persian
+    ascCode: fa
   - code: fi
     name_en: Finnish
+    ascCode: fi
   - code: fil
     name_en: Filipino
+    ascCode: fil
   - code: fr
     name_en: French
+    ascCode: fr-FR
   - code: fr-CA
     name_en: French (Canada)
+    ascCode: fr-CA
   - code: ga
     name_en: Irish
+    ascCode: ga
   - code: gl
     name_en: Galician
+    ascCode: gl
   - code: gu
     name_en: Gujarati
+    ascCode: gu
   - code: he
     name_en: Hebrew
+    ascCode: he
   - code: hi
     name_en: Hindi
+    ascCode: hi
   - code: hr
     name_en: Croatian
+    ascCode: hr
   - code: hu
     name_en: Hungarian
+    ascCode: hu
   - code: hy
     name_en: Armenian
+    ascCode: hy
   - code: id
     name_en: Indonesian
+    ascCode: id
   - code: is
     name_en: Icelandic
+    ascCode: is
   - code: it
     name_en: Italian
+    ascCode: it
   - code: ka
     name_en: Georgian
+    ascCode: ka
   - code: kk
     name_en: Kazakh
+    ascCode: kk
   - code: km
     name_en: Khmer
+    ascCode: km
   - code: kn
     name_en: Kannada
+    ascCode: kn
   - code: lo
     name_en: Lao
+    ascCode: lo
   - code: lt
     name_en: Lithuanian
+    ascCode: lt
   - code: lv
     name_en: Latvian
+    ascCode: lv
   - code: mk
     name_en: Macedonian
+    ascCode: mk
   - code: ml
     name_en: Malayalam
+    ascCode: ml
   - code: mr
     name_en: Marathi
+    ascCode: mr
   - code: ms
     name_en: Malay
+    ascCode: ms
   - code: mt
     name_en: Maltese
+    ascCode: mt
   - code: my
     name_en: Burmese
+    ascCode: my
   - code: nb
     name_en: Norwegian Bokmål
+    ascCode: no
   - code: ne
     name_en: Nepali
+    ascCode: ne
   - code: nl
     name_en: Dutch
+    ascCode: nl-NL
   - code: nl-BE
     name_en: Dutch (Belgium)
+    ascCode: nl-BE
   - code: nn
     name_en: Norwegian Nynorsk
+    ascCode: nn
   - code: pa
     name_en: Punjabi
+    ascCode: pa
   - code: pl
     name_en: Polish
+    ascCode: pl
   - code: ps
     name_en: Pashto
+    ascCode: ps
   - code: pt-BR
     name_en: Portuguese (Brazil)
+    ascCode: pt-BR
   - code: pt-PT
     name_en: Portuguese (Portugal)
+    ascCode: pt-PT
   - code: ro
     name_en: Romanian
+    ascCode: ro
   - code: ru
     name_en: Russian
+    ascCode: ru
   - code: si
     name_en: Sinhala
+    ascCode: si
   - code: sk
     name_en: Slovak
+    ascCode: sk
   - code: sl
     name_en: Slovenian
+    ascCode: sl
   - code: sq
     name_en: Albanian
+    ascCode: sq
   - code: sr
     name_en: Serbian
+    ascCode: sr
   - code: sr-Latn
     name_en: Serbian (Latin)
+    ascCode: sr-Latn
   - code: sv
     name_en: Swedish
+    ascCode: sv
   - code: sw
     name_en: Swahili
+    ascCode: sw
   - code: ta
     name_en: Tamil
+    ascCode: ta
   - code: te
     name_en: Telugu
+    ascCode: te
   - code: tg
     name_en: Tajik
+    ascCode: tg
   - code: th
     name_en: Thai
+    ascCode: th
   - code: tr
     name_en: Turkish
+    ascCode: tr
   - code: uk
     name_en: Ukrainian
+    ascCode: uk
   - code: ur
     name_en: Urdu
+    ascCode: ur
   - code: ur-IN
     name_en: Urdu (India)
+    ascCode: ur-IN
   - code: uz
     name_en: Uzbek
+    ascCode: uz
   - code: vi
     name_en: Vietnamese
+    ascCode: vi
 
 
 

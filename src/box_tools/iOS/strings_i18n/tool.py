@@ -8,7 +8,7 @@ from pathlib import Path
 from . import data
 from . import translate
 
-from _share.tool_spec import tool, opt, ex 
+from _share.tool_spec import tool, opt, ex
 
 BOX_TOOL = tool(
     id="ios.box_strings_i18n",
@@ -34,8 +34,14 @@ BOX_TOOL = tool(
         opt("--config", "配置文件路径（默认 strings_i18n.yaml，基于 project-root）"),
         opt("--project-root", "项目根目录（默认当前目录）"),
         opt("--no-incremental", "translate：关闭增量翻译，改为全量翻译"),
-        opt("--strings-file", "gen：从 Base.lproj 下的哪个 .strings 文件生成（默认 Localizable.strings）"),
-        opt("--swift-out", "gen：L10n.swift 输出路径（默认 <lang_root>/L10n.swift；相对路径按 lang_root 解析）"),
+        opt(
+            "--strings-file",
+            "gen：从 Base.lproj 下的哪个 .strings 文件生成（默认 Localizable.strings）",
+        ),
+        opt(
+            "--swift-out",
+            "gen：L10n.swift 输出路径（默认 <lang_root>/L10n.swift；相对路径按 lang_root 解析）",
+        ),
     ],
     examples=[
         ex(
@@ -70,19 +76,31 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"配置文件路径（默认 {data.DEFAULT_TEMPLATE_NAME}，基于 project-root）",
     )
     p.add_argument("--project-root", default=".", help="项目根目录（默认当前目录）")
-    p.add_argument("--no-incremental", action="store_true", help="translate：关闭增量翻译（全量翻译）")
-    p.add_argument("--strings-file", default="Localizable.strings", help="gen：Base.lproj 下输入 .strings 文件名")
-    p.add_argument("--swift-out", default="L10n.swift", help="gen：输出 Swift 文件路径（默认写到 lang_root 下；相对路径按 lang_root）")
+    p.add_argument(
+        "--no-incremental",
+        action="store_true",
+        help="translate：关闭增量翻译（全量翻译）",
+    )
+    p.add_argument(
+        "--strings-file",
+        default="Localizable.strings",
+        help="gen：Base.lproj 下输入 .strings 文件名",
+    )
+    p.add_argument(
+        "--swift-out",
+        default="L10n.swift",
+        help="gen：输出 Swift 文件路径（默认写到 lang_root 下；相对路径按 lang_root）",
+    )
     return p
 
 
 def run_menu(cfg_path: Path, project_root: Path) -> int:
     menu = [
-        ("doctor",    "环境诊断"),
-        ("sort",      "排序（TODO）"),
-        ("translate", "翻译（TODO）"),
-        ("gen",       "生成 L10n.swift"),
-        ("init",      "生成/校验配置"),
+        ("doctor", "环境诊断"),
+        ("sort", "排序"),
+        ("translate", "翻译"),
+        ("gen", "生成 L10n.swift"),
+        ("init", "生成/校验配置"),
     ]
 
     while True:
@@ -105,7 +123,14 @@ def run_menu(cfg_path: Path, project_root: Path) -> int:
             continue
 
         cmd = menu[idx - 1][0]
-        argv = ["box_strings_i18n", cmd, "--config", str(cfg_path), "--project-root", str(project_root)]
+        argv = [
+            "box_strings_i18n",
+            cmd,
+            "--config",
+            str(cfg_path),
+            "--project-root",
+            str(project_root),
+        ]
         return main(argv)
 
 
@@ -128,7 +153,9 @@ def main(argv=None) -> int:
 
     # 2) 其他命令：启动后优先校验配置（包括 menu）
     try:
-        data.assert_config_ok(cfg_path, project_root=project_root, check_paths_exist=True)
+        data.assert_config_ok(
+            cfg_path, project_root=project_root, check_paths_exist=True
+        )
     except data.ConfigError as e:
         print(str(e))
         return 1
