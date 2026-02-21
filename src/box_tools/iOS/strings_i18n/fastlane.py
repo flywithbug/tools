@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -8,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from . import data
 from box_tools._share.openai_translate.translate import translate_flat_dict
+
+URL_PASSTHROUGH_FILES = {"marketing_url.txt", "support_url.txt", "privacy_url.txt"}
 
 
 def _norm_api_key(v: Any) -> Optional[str]:
@@ -34,6 +37,84 @@ def _get_model(cfg: data.StringsI18nConfig) -> str:
     return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 
+def _is_zh_locale(locale: str) -> bool:
+    loc = locale.lower()
+    return loc.startswith("zh") or "hans" in loc or "hant" in loc
+
+
+def _locale_allows_cjk(locale: str) -> bool:
+    loc = locale.lower()
+    if _is_zh_locale(loc):
+        return True
+    if loc.startswith("ja") or loc.startswith("ko"):
+        return True
+    return False
+
+
+def _has_cjk(text: str) -> bool:
+    for ch in text:
+        cp = ord(ch)
+        if 0x4E00 <= cp <= 0x9FFF:
+            return True
+        if 0x3400 <= cp <= 0x4DBF:
+            return True
+    return False
+
+
+def _looks_wrong_language(locale: str, text: str) -> bool:
+    if _locale_allows_cjk(locale):
+        return False
+    return _has_cjk(text)
+
+
+def _extract_ascii(text: str) -> str:
+    allowed = set(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'.,:/()[]{}+&_#@!? "
+    )
+    out = "".join(ch for ch in text if ch in allowed)
+    out = " ".join(out.split())
+    return out.strip(" .,:;/|·-—_")
+
+
+def _length_policy_for(filename: str) -> tuple[Optional[int], Optional[str]]:
+    if filename == "keywords.txt":
+        return (99, "keywords")
+    if filename == "subtitle.txt":
+        return (29, "subtitle")
+    if filename == "name.txt":
+        return (29, "name")
+    return (None, None)
+
+
+def _postprocess_keywords_locale(s: str, max_chars: Optional[int], tgt_locale: str) -> str:
+    s = s.replace("，", ",").replace("、", ",").replace("；", ",")
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    cleaned: List[str] = []
+    seen = set()
+    keep_unicode = _locale_allows_cjk(tgt_locale) or _is_zh_locale(tgt_locale)
+    for p in parts:
+        tok = p if keep_unicode else _extract_ascii(p)
+        if not tok:
+            continue
+        key = tok.lower()
+        if key not in seen:
+            seen.add(key)
+            cleaned.append(tok)
+    out = ",".join(cleaned)
+    if max_chars and len(out) > max_chars:
+        keep: List[str] = []
+        total = 0
+        for w in cleaned:
+            add = len(w) if not keep else 1 + len(w)
+            if total + add <= max_chars:
+                keep.append(w)
+                total += add
+            else:
+                break
+        out = ",".join(keep)
+    return out
+
+
 def _build_prompt_en(cfg: data.StringsI18nConfig, target_code: str) -> Optional[str]:
     prompts = cfg.prompts or {}
     default_en = (prompts.get("default_en") or "").strip()
@@ -47,8 +128,34 @@ def _build_prompt_en(cfg: data.StringsI18nConfig, target_code: str) -> Optional[
     return "\n\n".join(parts) if parts else None
 
 
-def _asc_code(loc: data.Locale) -> str:
-    return (loc.asc_code or loc.code).strip()
+def _load_code_to_asc(cfg: data.StringsI18nConfig) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    try:
+        arr = json.loads(cfg.languages_path.read_text(encoding="utf-8"))
+    except Exception:
+        return out
+    if not isinstance(arr, list):
+        return out
+    for it in arr:
+        if not isinstance(it, dict):
+            continue
+        code = str(it.get("code", "")).strip()
+        asc = str(it.get("asc_code", "")).strip()
+        if code and asc:
+            out[code] = asc
+    return out
+
+
+def _asc_code(loc: data.Locale, code_to_asc: Dict[str, str]) -> str:
+    cfg_asc = (loc.asc_code or "").strip()
+    if cfg_asc and cfg_asc != loc.code:
+        return cfg_asc
+    mapped = (code_to_asc.get(loc.code) or "").strip()
+    if mapped:
+        return mapped
+    if cfg_asc:
+        return cfg_asc
+    return loc.code.strip()
 
 
 def _read_text(fp: Path) -> str:
@@ -60,21 +167,78 @@ def _read_text(fp: Path) -> str:
         return ""
 
 
-def _has_content(fp: Path) -> bool:
-    txt = _read_text(fp)
-    return bool(txt.strip())
-
-
-def _dedup_targets_by_asc(locales: List[data.Locale]) -> List[data.Locale]:
+def _dedup_targets_by_asc(
+    locales: List[data.Locale], code_to_asc: Dict[str, str]
+) -> List[data.Locale]:
     seen = set()
     out: List[data.Locale] = []
     for loc in locales:
-        asc = _asc_code(loc)
+        asc = _asc_code(loc, code_to_asc)
         if not asc or asc in seen:
             continue
         seen.add(asc)
         out.append(loc)
     return out
+
+
+def _build_field_prompt(
+    cfg: data.StringsI18nConfig,
+    *,
+    target_code: str,
+    target_locale_name: str,
+    filename: str,
+) -> Optional[str]:
+    base = _build_prompt_en(cfg, target_code=target_code) or ""
+    max_chars, field = _length_policy_for(filename)
+    rules: List[str] = []
+    if field == "keywords":
+        rules.append("Output only a comma-separated keywords list; no duplicates; no trailing comma.")
+    if field == "name":
+        rules.append('If source contains "TimeTrails", keep brand as "TimeTrails".')
+    if field == "subtitle":
+        rules.append('Do not include brand name "TimeTrails".')
+        rules.append("Avoid quotes and emojis.")
+    if max_chars:
+        rules.append(f"Keep output length <= {max_chars} characters.")
+    if not _locale_allows_cjk(target_locale_name):
+        rules.append("Do NOT use Chinese characters.")
+    if not rules:
+        return base if base else None
+    extra = " ".join(rules)
+    return f"{base}\n\n{extra}".strip()
+
+
+def _postprocess_translated_text(
+    *,
+    filename: str,
+    target_locale: str,
+    source_text: str,
+    translated_text: str,
+) -> str:
+    text = (translated_text or "").strip()
+    max_chars, field = _length_policy_for(filename)
+    if field == "keywords":
+        text = _postprocess_keywords_locale(text, max_chars, target_locale)
+    elif field == "name":
+        if _is_zh_locale(target_locale):
+            text = "时光轨迹" if target_locale == "zh-Hans" else "時光軌跡"
+        else:
+            if "TimeTrails" not in text:
+                text = f"TimeTrails · {text}".strip(" ·") if text else "TimeTrails"
+    elif field == "subtitle":
+        for banned in ("时光轨迹", "時光軌跡", "TimeTrails"):
+            text = text.replace(banned, "")
+        text = text.strip().strip(" -–—:|·_/\\")
+        if not text:
+            text = source_text.strip()
+    if _looks_wrong_language(target_locale, text):
+        if field == "keywords":
+            text = _postprocess_keywords_locale(text, max_chars, target_locale)
+        else:
+            text = _extract_ascii(text)
+    if max_chars and text and len(text) > max_chars:
+        text = text[:max_chars].rstrip()
+    return text
 
 
 def _list_locale_files(locale_dir: Path) -> List[str]:
@@ -94,6 +258,7 @@ def _translate_phase(
     src_locale: data.Locale,
     targets: List[data.Locale],
     incremental: bool,
+    code_to_asc: Dict[str, str],
     fallback_src_locale: Optional[data.Locale] = None,
 ) -> None:
     if not targets:
@@ -104,15 +269,15 @@ def _translate_phase(
     api_key = _norm_api_key(getattr(cfg, "api_key", None))
     root = cfg.fastlane_metadata_root
 
-    src_asc = _asc_code(src_locale)
+    src_asc = _asc_code(src_locale, code_to_asc)
     src_dir = (root / src_asc).resolve()
     fallback_dir = None
     if fallback_src_locale is not None:
-        fallback_dir = (root / _asc_code(fallback_src_locale)).resolve()
+        fallback_dir = (root / _asc_code(fallback_src_locale, code_to_asc)).resolve()
 
     print(f"\n🧩 {phase_name}")
     print(f"- src: {src_locale.code} -> {src_asc}")
-    print(f"- tgt: {[f'{x.code}->{_asc_code(x)}' for x in targets]}")
+    print(f"- tgt: {[f'{x.code}->{_asc_code(x, code_to_asc)}' for x in targets]}")
     source_files = set(_list_locale_files(src_dir))
     if fallback_dir is not None:
         source_files.update(_list_locale_files(fallback_dir))
@@ -128,7 +293,7 @@ def _translate_phase(
     start = time.perf_counter()
 
     for tgt in targets:
-        tgt_asc = _asc_code(tgt)
+        tgt_asc = _asc_code(tgt, code_to_asc)
         if tgt_asc == src_asc:
             continue
 
@@ -157,7 +322,7 @@ def _translate_phase(
         if incremental:
             for fn, src_txt in src_map.items():
                 tgt_fp = (tgt_dir / fn).resolve()
-                if _has_content(tgt_fp):
+                if tgt_fp.exists():
                     continue
                 to_translate[fn] = src_txt
         else:
@@ -171,25 +336,42 @@ def _translate_phase(
             f"  {len(to_translate)} file(s)"
         )
 
-        out = translate_flat_dict(
-            prompt_en=_build_prompt_en(cfg, target_code=tgt.code),
-            src_dict=to_translate,
-            src_lang=src_locale.name_en,
-            tgt_locale=tgt.name_en,
-            model=model,
-            api_key=api_key,
-            progress_cb=None,
-        )
-
         wrote = 0
-        for fn, v in out.items():
-            if fn.startswith("@@"):
-                continue
-            if not isinstance(v, str) or not v.strip():
-                continue
+        for fn, src_txt in to_translate.items():
             fp = (tgt_dir / fn).resolve()
+            if fn in URL_PASSTHROUGH_FILES:
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                fp.write_text(src_txt.strip() + "\n", encoding="utf-8")
+                wrote += 1
+                continue
+
+            out = translate_flat_dict(
+                prompt_en=_build_field_prompt(
+                    cfg,
+                    target_code=tgt.code,
+                    target_locale_name=tgt.name_en,
+                    filename=fn,
+                ),
+                src_dict={fn: src_txt},
+                src_lang=src_locale.name_en,
+                tgt_locale=tgt.name_en,
+                model=model,
+                api_key=api_key,
+                progress_cb=None,
+            )
+            v = out.get(fn)
+            if not isinstance(v, str):
+                continue
+            text = _postprocess_translated_text(
+                filename=fn,
+                target_locale=tgt_asc,
+                source_text=src_txt,
+                translated_text=v,
+            )
+            if not text.strip():
+                continue
             fp.parent.mkdir(parents=True, exist_ok=True)
-            fp.write_text(v.strip() + "\n", encoding="utf-8")
+            fp.write_text(text.strip() + "\n", encoding="utf-8")
             wrote += 1
 
         translated_files += wrote
@@ -204,35 +386,41 @@ def _translate_phase(
 def translate_base_to_core(
     cfg: data.StringsI18nConfig, incremental: bool = True
 ) -> None:
-    src_asc = _asc_code(cfg.base_locale)
-    targets = [x for x in cfg.core_locales if _asc_code(x) != src_asc]
-    targets = _dedup_targets_by_asc(targets)
+    code_to_asc = _load_code_to_asc(cfg)
+    src_asc = _asc_code(cfg.base_locale, code_to_asc)
+    targets = [
+        x for x in cfg.core_locales if _asc_code(x, code_to_asc) != src_asc
+    ]
+    targets = _dedup_targets_by_asc(targets, code_to_asc)
     _translate_phase(
         cfg=cfg,
         phase_name="Phase 1: base_locale -> core_locales",
         src_locale=cfg.base_locale,
         targets=targets,
         incremental=incremental,
+        code_to_asc=code_to_asc,
     )
 
 
 def translate_source_to_target(
     cfg: data.StringsI18nConfig, incremental: bool = True
 ) -> None:
-    base_asc = _asc_code(cfg.base_locale)
-    src_asc = _asc_code(cfg.source_locale)
+    code_to_asc = _load_code_to_asc(cfg)
+    base_asc = _asc_code(cfg.base_locale, code_to_asc)
+    src_asc = _asc_code(cfg.source_locale, code_to_asc)
     targets = [
         x
         for x in cfg.target_locales
-        if _asc_code(x) not in {base_asc, src_asc}
+        if _asc_code(x, code_to_asc) not in {base_asc, src_asc}
     ]
-    targets = _dedup_targets_by_asc(targets)
+    targets = _dedup_targets_by_asc(targets, code_to_asc)
     _translate_phase(
         cfg=cfg,
         phase_name="Phase 2: source_locale -> target_locales",
         src_locale=cfg.source_locale,
         targets=targets,
         incremental=incremental,
+        code_to_asc=code_to_asc,
         fallback_src_locale=cfg.base_locale,
     )
 
@@ -242,6 +430,9 @@ def run_fastlane(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
     print("🚀 fastlane metadata translate")
     print(f"- 模式: {mode}")
     print(f"- metadata root: {cfg.fastlane_metadata_root}")
+    legacy_en_dir = (cfg.fastlane_metadata_root / "en").resolve()
+    if legacy_en_dir.exists() and legacy_en_dir.is_dir():
+        print(f"⚠️ 检测到旧目录：{legacy_en_dir}（建议使用 en-US）")
 
     if sys.stdin.isatty():
         while True:
