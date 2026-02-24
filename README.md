@@ -390,17 +390,19 @@ box_strings_i18n sort
 box_strings_i18n doctor
 box_strings_i18n gen
 box_strings_i18n translate
+box_strings_i18n fastlane
 box_strings_i18n translate --no-incremental
+box_strings_i18n fastlane --no-incremental
 box_strings_i18n --config strings_i18n.yaml
 box_strings_i18n --project-root path/to/project
 ```
 
 **参数说明**
 
-- `command`：子命令：menu/init/sort/translate/doctor（默认 menu）
+- `command`：子命令：menu/init/sort/translate/fastlane/doctor（默认 menu）
 - `--config`：配置文件路径（默认 strings_i18n.yaml，基于 project-root）
 - `--project-root`：项目根目录（默认当前目录）
-- `--no-incremental`：translate：关闭增量翻译，改为全量翻译
+- `--no-incremental`：translate/fastlane：关闭增量翻译，改为全量翻译
 - `--strings-file`：gen：从 Base.lproj 下的哪个 .strings 文件生成（默认 Localizable.strings）
 - `--swift-out`：gen：L10n.swift 输出路径（默认 <lang_root>/L10n.swift；相对路径按 lang_root 解析）
 
@@ -412,6 +414,7 @@ box_strings_i18n --project-root path/to/project
 - `box_strings_i18n sort`：排序（骨架：待实现 .strings key 排序与写回）
 - `box_strings_i18n gen`：从 Base.lproj/Localizable.strings 生成 L10n.swift
 - `box_strings_i18n translate`：翻译入口（骨架：待实现）
+- `box_strings_i18n fastlane`：翻译 fastlane/metadata 多语言文案
 
 **文档**
 
