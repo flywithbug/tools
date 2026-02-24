@@ -5,7 +5,6 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -94,6 +93,24 @@ def _build_prompt_en(cfg: data.StringsI18nConfig, target_code: str) -> Optional[
     )
     parts = [x for x in [default_en, extra] if x]
     return "\n\n".join(parts) if parts else None
+
+
+def _build_file_prompt_en(
+    cfg: data.StringsI18nConfig, *, target_code: str, filename: str
+) -> Optional[str]:
+    base = _build_prompt_en(cfg, target_code=target_code) or ""
+    extra_rules: List[str] = []
+    if filename.lower() == "keywords.txt":
+        extra_rules.append(
+            "For keywords.txt: output must be within 100 characters in total."
+        )
+        extra_rules.append(
+            "Return only comma-separated keywords, no explanations or quotes."
+        )
+    if not extra_rules:
+        return base if base else None
+    extra = " ".join(extra_rules)
+    return f"{base}\n\n{extra}".strip()
 
 
 def _read_text(fp: Path) -> str:
@@ -309,6 +326,8 @@ def _execute_file_task(
                 api_key=api_key,
             )
             translated = out_items[0].strip() if out_items else ""
+            if task.rel_path.name.lower() == "keywords.txt" and len(translated) > 100:
+                translated = translated[:100].rstrip()
             if not translated:
                 raise RuntimeError("empty translation")
 
@@ -337,24 +356,6 @@ def _execute_file_task(
         elapsed_sec=time.perf_counter() - t0,
         error=last_err or "unknown error",
     )
-
-
-def _write_phase_report(
-    cfg: data.StringsI18nConfig,
-    *,
-    phase_name: str,
-    lines: List[str],
-) -> Optional[Path]:
-    try:
-        report_dir = (cfg.fastlane_metadata_root / ".box_strings_i18n_reports").resolve()
-        report_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        slug = phase_name.lower().replace(" ", "_").replace(":", "").replace("->", "to")
-        fp = report_dir / f"fastlane_{slug}_{ts}.txt"
-        fp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-        return fp
-    except Exception:
-        return None
 
 
 def _run_phase(
@@ -466,7 +467,9 @@ def _run_phase(
                     source_text=src_txt.strip(),
                     src_locale_name=src_locale.name_en,
                     passthrough=passthrough,
-                    prompt_en=prompt,
+                    prompt_en=_build_file_prompt_en(
+                        cfg, target_code=tgt.code, filename=rel.name
+                    ),
                 )
             )
 
@@ -577,7 +580,9 @@ def _run_phase(
                 f"- {r.task.target_asc}/{r.task.rel_path.as_posix()} | retry={r.retries_used} | err={r.error}"
             )
 
-    report_path = _write_phase_report(cfg, phase_name=phase_name, lines=report_lines)
+    # report 只打印到控制台，不落盘
+    print("\n".join(report_lines))
+    report_path = None
     report_sec = time.perf_counter() - report_t0
     total_sec = time.perf_counter() - phase_t0
 
@@ -586,9 +591,6 @@ def _run_phase(
         f"redundant={sum(len(v) for v in redundant_map.values())}, "
         f"non_txt={sum(len(v) for v in non_txt_map.values())}, elapsed={total_sec:.2f}s"
     )
-    if report_path is not None:
-        print(f"📄 report: {report_path}")
-
     return _PhaseStats(
         phase_name=phase_name,
         src_asc=src_asc,
