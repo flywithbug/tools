@@ -413,13 +413,12 @@ def _run_phase(
     plan_t0 = time.perf_counter()
     plan_tasks: List[_FileTask] = []
     redundant_map: Dict[str, List[Path]] = {}
+    target_dirs_by_asc: Dict[str, Path] = {}
     non_txt_map: Dict[str, List[Path]] = {}
     missing_map: Dict[str, List[Path]] = {}
     deleted_redundant = 0
     skipped_unresolved = 0
     passthrough_files = 0
-
-    policy = _decide_redundant_policy(cfg)
 
     for tgt in targets:
         tgt_asc = _asc_code(tgt, code_to_asc)
@@ -427,6 +426,7 @@ def _run_phase(
             continue
 
         tgt_dir = (root / tgt_asc).resolve()
+        target_dirs_by_asc[tgt_asc] = tgt_dir
         tgt_dir.mkdir(parents=True, exist_ok=True)
 
         missing, redundant, non_txt = _scan_target_integrity(
@@ -437,8 +437,6 @@ def _run_phase(
             missing_map[tgt_asc] = missing
         if redundant:
             redundant_map[tgt_asc] = redundant
-            if policy == "delete":
-                deleted_redundant += _delete_redundant_files(tgt_dir, redundant)
         if non_txt:
             non_txt_map[tgt_asc] = non_txt
 
@@ -472,6 +470,25 @@ def _run_phase(
                     ),
                 )
             )
+
+    if redundant_map:
+        total_redundant = sum(len(v) for v in redundant_map.values())
+        print(f"⚠️ 检测到冗余 *.txt：共 {total_redundant} 个")
+        for asc in sorted(redundant_map.keys()):
+            files = sorted(redundant_map[asc], key=lambda p: p.as_posix().lower())
+            print(f"- {asc}: {len(files)} 个")
+            for p in files[:30]:
+                print(f"  - {p.as_posix()}")
+            if len(files) > 30:
+                print(f"  - ... 还有 {len(files) - 30} 个")
+
+        policy = _decide_redundant_policy(cfg)
+        if policy == "delete":
+            for asc, files in redundant_map.items():
+                tgt_dir = target_dirs_by_asc.get(asc)
+                if tgt_dir is None:
+                    continue
+                deleted_redundant += _delete_redundant_files(tgt_dir, files)
 
     plan_sec = time.perf_counter() - plan_t0
     print(
