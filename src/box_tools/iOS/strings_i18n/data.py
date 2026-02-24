@@ -327,10 +327,23 @@ def _load_languages(languages_path: Path) -> List[Dict[str, str]]:
             continue
         code = str(item.get("code", "")).strip()
         name_en = str(item.get("name_en", "")).strip()
-        asc_code = str(item.get("asc_code", "")).strip()
         if not code or not name_en:
             continue
-        out.append({"code": code, "name_en": name_en, "asc_code": asc_code or code})
+
+        asc_present = "asc_code" in item
+        if asc_present:
+            asc_code = str(item.get("asc_code", "")).strip()
+        else:
+            asc_code = code
+
+        out.append(
+            {
+                "code": code,
+                "name_en": name_en,
+                "asc_code": asc_code,
+                "asc_present": asc_present,
+            }
+        )
     return out
 
 
@@ -468,7 +481,14 @@ def build_target_locales_from_languages_json(
         if code in seen:
             continue
         seen.add(code)
-        out.append(it)
+        out.append(
+            {
+                "code": it["code"],
+                "name_en": it["name_en"],
+                "asc_code": it.get("asc_code", ""),
+                "asc_present": bool(it.get("asc_present")),
+            }
+        )
 
     return out, removed
 
@@ -481,8 +501,9 @@ def _yaml_block_for_target_locales(locales: List[Dict[str, str]]) -> str:
     for it in locales:
         lines.append(f"  - code: {it['code']}")
         lines.append(f"    name_en: {it['name_en']}")
+        asc_present = bool(it.get("asc_present"))
         asc = it.get("asc_code")
-        if asc is None:
+        if not asc_present:
             asc = it["code"]
         if asc == "":
             lines.append("    ascCode: ''")
@@ -532,6 +553,7 @@ def _normalize_target_locales_from_raw(
         name_en = str(it.get("name_en", "")).strip()
         if not code or not name_en:
             continue
+        asc_present = "ascCode" in it or "asc_code" in it
         asc: Optional[str] = None
         if "ascCode" in it:
             asc = str(it.get("ascCode", "")).strip()
@@ -539,7 +561,14 @@ def _normalize_target_locales_from_raw(
             asc = str(it.get("asc_code", "")).strip()
         if asc is None:
             asc = ""
-        out.append({"code": code, "name_en": name_en, "asc_code": asc})
+        out.append(
+            {
+                "code": code,
+                "name_en": name_en,
+                "asc_code": asc,
+                "asc_present": asc_present,
+            }
+        )
     return out
 
 
@@ -567,15 +596,18 @@ def _merge_target_locales_with_existing(
     for it in new_locales:
         code = it["code"]
         asc = it.get("asc_code", "")
+        asc_present = bool(it.get("asc_present"))
         if code in existing:
             e = existing[code]
             if e["asc_present"] and e["asc_code"] == "":
                 asc = ""
+                asc_present = True
         out.append(
             {
                 "code": code,
                 "name_en": it["name_en"],
                 "asc_code": asc,
+                "asc_present": asc_present,
             }
         )
     return out
