@@ -4,6 +4,8 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -11,6 +13,16 @@ from . import data
 from box_tools._share.openai_translate.translate_list import translate_list
 
 URL_PASSTHROUGH_FILES = {"marketing_url.txt", "support_url.txt", "privacy_url.txt"}
+
+
+@dataclass(frozen=True)
+class _TargetTranslateTask:
+    target_code: str
+    target_name: str
+    target_asc: str
+    target_dir: Path
+    src_map: Dict[str, str]
+    prompt_en: Optional[str]
 
 
 def _norm_api_key(v: Any) -> Optional[str]:
@@ -183,6 +195,7 @@ def _handle_redundant_files(
     *,
     target_dir: Path,
     redundant: List[Path],
+    allow_prompt: bool,
 ) -> None:
     if not redundant:
         return
@@ -197,7 +210,7 @@ def _handle_redundant_files(
         str((cfg.options or {}).get("fastlane_redundant_policy", "")).strip().lower()
     )
     if policy not in {"delete", "keep"}:
-        if sys.stdin.isatty():
+        if allow_prompt and sys.stdin.isatty():
             ans = input("是否删除这些冗余 *.txt？(y/n) [n]: ").strip().lower()
             policy = "delete" if ans in {"y", "yes"} else "keep"
         else:
@@ -213,6 +226,60 @@ def _handle_redundant_files(
             fp.unlink()
             deleted += 1
     print(f"🧹 已删除冗余文件：{deleted}")
+
+
+def _compute_fastlane_workers(cfg: data.StringsI18nConfig, total_tasks: int) -> int:
+    if total_tasks <= 0:
+        return 1
+    raw = None
+    if isinstance(cfg.options, dict):
+        raw = cfg.options.get("fastlane_max_workers")
+        if raw is None:
+            raw = cfg.options.get("fastlaneMaxWorkers")
+    try:
+        v = int(raw) if raw is not None else 0
+    except Exception:
+        v = 0
+    if v > 0:
+        return max(1, min(v, total_tasks))
+    cpu = os.cpu_count() or 4
+    guess = max(2, min(6, max(2, cpu // 2)))
+    return min(guess, total_tasks)
+
+
+def _run_target_translate_task(
+    *,
+    task: _TargetTranslateTask,
+    src_locale_name: str,
+    model: str,
+    api_key: Optional[str],
+) -> Tuple[str, int, float]:
+    t0 = time.perf_counter()
+    keys = list(task.src_map.keys())
+    src_items = [task.src_map[k] for k in keys]
+    out_items = translate_list(
+        prompt_en=task.prompt_en,
+        src_items=src_items,
+        src_locale=src_locale_name,
+        tgt_locale=task.target_name,
+        model=model,
+        api_key=api_key,
+    )
+    out = {k: v for k, v in zip(keys, out_items)}
+
+    translated_count = 0
+    for k, v in out.items():
+        if k.startswith("@@"):
+            continue
+        if not isinstance(v, str) or not v.strip():
+            continue
+        rel = Path(k)
+        dst_fp = (task.target_dir / rel).resolve()
+        dst_fp.parent.mkdir(parents=True, exist_ok=True)
+        dst_fp.write_text(v.strip() + "\n", encoding="utf-8")
+        translated_count += 1
+    elapsed = time.perf_counter() - t0
+    return task.target_asc, translated_count, elapsed
 
 
 def _translate_phase(
@@ -255,7 +322,10 @@ def _translate_phase(
 
     total_candidates = 0
     total_written = 0
+    total_fail_targets = 0
     start = time.perf_counter()
+    translate_tasks: List[_TargetTranslateTask] = []
+    use_threads = not (sys.stdin.isatty() and str((cfg.options or {}).get("fastlane_redundant_policy", "")).strip() == "")
 
     for tgt in targets:
         tgt_asc = _asc_code(tgt, code_to_asc)
@@ -276,7 +346,12 @@ def _translate_phase(
             if len(non_txt) > 10:
                 print(f"- ... 还有 {len(non_txt) - 10} 个")
 
-        _handle_redundant_files(cfg, target_dir=tgt_dir, redundant=redundant)
+        _handle_redundant_files(
+            cfg,
+            target_dir=tgt_dir,
+            redundant=redundant,
+            allow_prompt=not use_threads,
+        )
 
         work_rel_paths = _prepare_work_rel_paths(
             source_rel_paths=source_rel_paths,
@@ -309,43 +384,78 @@ def _translate_phase(
 
             src_map[rel.as_posix()] = src_txt.strip()
 
-        translated_count = 0
         if src_map:
+            translate_tasks.append(
+                _TargetTranslateTask(
+                    target_code=tgt.code,
+                    target_name=tgt.name_en,
+                    target_asc=tgt_asc,
+                    target_dir=tgt_dir,
+                    src_map=src_map,
+                    prompt_en=_build_prompt_en(cfg, target_code=tgt.code),
+                )
+            )
             print(
                 f"⏳ ({phase_name}) {src_locale.code}->{tgt.code} [{src_asc}->{tgt_asc}] "
-                f"{len(src_map)} file(s)"
+                f"{len(src_map)} file(s) 已加入队列"
             )
-            keys = list(src_map.keys())
-            src_items = [src_map[k] for k in keys]
-            out_items = translate_list(
-                prompt_en=_build_prompt_en(cfg, target_code=tgt.code),
-                src_items=src_items,
-                src_locale=src_locale.name_en,
-                tgt_locale=tgt.name_en,
-                model=model,
-                api_key=api_key,
-            )
-            out = {k: v for k, v in zip(keys, out_items)}
-
-            for k, v in out.items():
-                if k.startswith("@@"):
-                    continue
-                if not isinstance(v, str) or not v.strip():
-                    continue
-                rel = Path(k)
-                dst_fp = (tgt_dir / rel).resolve()
-                dst_fp.parent.mkdir(parents=True, exist_ok=True)
-                dst_fp.write_text(v.strip() + "\n", encoding="utf-8")
-                translated_count += 1
-                total_written += 1
-
         print(
-            f"✅ {tgt_asc} 完成: translated={translated_count}, passthrough={passthrough_count}, missing={len(missing)}"
+            f"ℹ️ {tgt_asc} 预检查: passthrough={passthrough_count}, missing={len(missing)}, queued={len(src_map)}"
         )
+
+    if translate_tasks:
+        max_workers = _compute_fastlane_workers(cfg, len(translate_tasks))
+        print(f"- 并发: {max_workers} workers（target-level）")
+        done_targets = 0
+        done_files = 0
+        sum_task_elapsed = 0.0
+        translate_wall_start = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            fut_map = {
+                ex.submit(
+                    _run_target_translate_task,
+                    task=t,
+                    src_locale_name=src_locale.name_en,
+                    model=model,
+                    api_key=api_key,
+                ): t
+                for t in translate_tasks
+            }
+            total_targets = len(translate_tasks)
+            for fut in as_completed(fut_map):
+                t = fut_map[fut]
+                done_targets += 1
+                try:
+                    tgt_asc, translated_count, task_elapsed = fut.result()
+                    done_files += translated_count
+                    total_written += translated_count
+                    sum_task_elapsed += task_elapsed
+                    print(
+                        f"✅ {tgt_asc} 翻译完成: +{translated_count} file(s) "
+                        f"| 耗时 {task_elapsed:.2f}s | 进度 {done_targets}/{total_targets}"
+                    )
+                except Exception as e:
+                    total_fail_targets += 1
+                    print(
+                        f"❌ {t.target_asc} 翻译失败: {e} "
+                        f"| 进度 {done_targets}/{total_targets}"
+                    )
+                print(
+                    f"📈 累计进度: translated_files={done_files}, "
+                    f"failed_targets={total_fail_targets}, total_targets={total_targets}"
+                )
+        translate_wall_elapsed = time.perf_counter() - translate_wall_start
+        print(
+            f"⏱️ 翻译阶段耗时: wall={translate_wall_elapsed:.2f}s, "
+            f"sum_tasks={sum_task_elapsed:.2f}s"
+        )
+    else:
+        print("ℹ️ 没有可翻译任务（所有目标都已是最新）。")
 
     elapsed = time.perf_counter() - start
     print(
-        f"🎉 {phase_name} 完成：written={total_written}, candidates={total_candidates}, elapsed={elapsed:.2f}s"
+        f"🎉 {phase_name} 完成：written={total_written}, "
+        f"candidates={total_candidates}, failed_targets={total_fail_targets}, elapsed={elapsed:.2f}s"
     )
 
 
