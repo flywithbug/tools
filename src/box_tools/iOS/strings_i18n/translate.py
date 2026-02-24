@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import data
 
-from box_tools._share.openai_translate.translate import translate_flat_dict
+from box_tools._share.openai_translate.translate_list import translate_list
 
 _PRINT_LOCK = threading.Lock()
 
@@ -500,7 +500,7 @@ def _sync_missing_in_base_locale(
 
 
 def _make_progress_cb(t: _Task):
-    """用于 translate_flat_dict 的进度回调（线程内回调，需加锁打印避免输出互相打架）。
+    """用于翻译调用的进度回调（线程内回调，需加锁打印避免输出互相打架）。
 
     规则：
       - 只有当分片数 > 1 时，才打印 chunk_start/chunk_done/chunking_done（避免单分片噪音）
@@ -646,22 +646,22 @@ def _make_progress_cb(t: _Task):
 
 
 def _translate_text_map(*, t: _Task) -> Dict[str, Any]:
-    # 与 slang_i18n 完全一致的调用方式
-    cb = _make_progress_cb(t)
-    return translate_flat_dict(
+    keys = list(t.src_for_translate.keys())
+    src_items = [t.src_for_translate[k] for k in keys]
+    out_items = translate_list(
         prompt_en=t.prompt_en,
-        src_dict=t.src_for_translate,
-        src_lang=t.src_lang_name,  # ✅ name_en
+        src_items=src_items,
+        src_locale=t.src_lang_name,  # ✅ name_en
         tgt_locale=t.tgt_lang_name,  # ✅ name_en
         model=t.model,
         api_key=_norm_api_key(t.api_key),
-        progress_cb=cb,
     )
+    return {k: v for k, v in zip(keys, out_items)}
 
 
 def _translate_one(t: _Task) -> _TaskResult:
     t0 = time.perf_counter()
-    out = _translate_text_map(t=t)  # cfg 当前不需要传入 translate_flat_dict
+    out = _translate_text_map(t=t)
     t1 = time.perf_counter()
 
     success = 0
