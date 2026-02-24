@@ -4,8 +4,9 @@ import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -16,13 +17,46 @@ URL_PASSTHROUGH_FILES = {"marketing_url.txt", "support_url.txt", "privacy_url.tx
 
 
 @dataclass(frozen=True)
-class _TargetTranslateTask:
+class _FileTask:
     target_code: str
     target_name: str
     target_asc: str
     target_dir: Path
-    src_map: Dict[str, str]
+    rel_path: Path
+    source_text: str
+    src_locale_name: str
+    passthrough: bool
     prompt_en: Optional[str]
+
+
+@dataclass(frozen=True)
+class _FileResult:
+    task: _FileTask
+    ok: bool
+    written: bool
+    retries_used: int
+    elapsed_sec: float
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class _PhaseStats:
+    phase_name: str
+    src_asc: str
+    total_targets: int
+    source_files: int
+    planned_files: int
+    written_files: int
+    failed_files: int
+    skipped_unresolved: int
+    passthrough_files: int
+    deleted_redundant: int
+    scan_sec: float
+    plan_sec: float
+    exec_sec: float
+    report_sec: float
+    total_sec: float
+    report_path: Optional[Path]
 
 
 def _norm_api_key(v: Any) -> Optional[str]:
@@ -77,10 +111,8 @@ def _load_code_to_asc(cfg: data.StringsI18nConfig) -> Dict[str, str]:
         arr = json.loads(cfg.languages_path.read_text(encoding="utf-8"))
     except Exception:
         return out
-
     if not isinstance(arr, list):
         return out
-
     for it in arr:
         if not isinstance(it, dict):
             continue
@@ -88,7 +120,6 @@ def _load_code_to_asc(cfg: data.StringsI18nConfig) -> Dict[str, str]:
         asc = str(it.get("asc_code", "")).strip()
         if code and asc:
             out[code] = asc
-
     return out
 
 
@@ -151,11 +182,7 @@ def _scan_target_integrity(
     redundant = sorted(tgt_set - src_set)
     non_txt = _iter_non_txt_rel_paths(target_dir)
 
-    return (
-        [Path(x) for x in missing],
-        [Path(x) for x in redundant],
-        non_txt,
-    )
+    return ([Path(x) for x in missing], [Path(x) for x in redundant], non_txt)
 
 
 def _prepare_work_rel_paths(
@@ -173,7 +200,6 @@ def _prepare_work_rel_paths(
             continue
         if not _read_text(fp).strip():
             out.append(rel)
-
     return out
 
 
@@ -190,99 +216,148 @@ def _resolve_source_text(
     return None
 
 
-def _handle_redundant_files(
-    cfg: data.StringsI18nConfig,
-    *,
-    target_dir: Path,
-    redundant: List[Path],
-    allow_prompt: bool,
-) -> None:
-    if not redundant:
-        return
+def _decide_redundant_policy(cfg: data.StringsI18nConfig) -> str:
+    policy = str((cfg.options or {}).get("fastlane_redundant_policy", "")).strip().lower()
+    if policy in {"delete", "keep"}:
+        return policy
+    if sys.stdin.isatty():
+        ans = input("检测到冗余 *.txt，是否删除？(y/n) [n]: ").strip().lower()
+        return "delete" if ans in {"y", "yes"} else "keep"
+    return "keep"
 
-    print(f"⚠️ 冗余文件（目标有、源无）：{len(redundant)}")
-    for p in redundant[:20]:
-        print(f"- {target_dir.name}/{p.as_posix()}")
-    if len(redundant) > 20:
-        print(f"- ... 还有 {len(redundant) - 20} 个")
 
-    policy = (
-        str((cfg.options or {}).get("fastlane_redundant_policy", "")).strip().lower()
-    )
-    if policy not in {"delete", "keep"}:
-        if allow_prompt and sys.stdin.isatty():
-            ans = input("是否删除这些冗余 *.txt？(y/n) [n]: ").strip().lower()
-            policy = "delete" if ans in {"y", "yes"} else "keep"
-        else:
-            policy = "keep"
-
-    if policy != "delete":
-        return
-
+def _delete_redundant_files(target_dir: Path, redundant: List[Path]) -> int:
     deleted = 0
     for rel in redundant:
         fp = (target_dir / rel).resolve()
         if fp.exists() and fp.is_file() and fp.suffix.lower() == ".txt":
             fp.unlink()
             deleted += 1
-    print(f"🧹 已删除冗余文件：{deleted}")
+    return deleted
 
 
-def _compute_fastlane_workers(cfg: data.StringsI18nConfig, total_tasks: int) -> int:
+def _compute_file_workers(cfg: data.StringsI18nConfig, total_tasks: int) -> int:
     if total_tasks <= 0:
         return 1
+
     raw = None
     if isinstance(cfg.options, dict):
-        raw = cfg.options.get("fastlane_max_workers")
+        raw = cfg.options.get("fastlane_file_workers")
+        if raw is None:
+            raw = cfg.options.get("fastlaneFileWorkers")
+        if raw is None:
+            raw = cfg.options.get("fastlane_max_workers")
         if raw is None:
             raw = cfg.options.get("fastlaneMaxWorkers")
     try:
         v = int(raw) if raw is not None else 0
     except Exception:
         v = 0
+
     if v > 0:
         return max(1, min(v, total_tasks))
+
     cpu = os.cpu_count() or 4
-    guess = max(2, min(6, max(2, cpu // 2)))
+    guess = max(2, min(8, max(2, cpu // 2)))
     return min(guess, total_tasks)
 
 
-def _run_target_translate_task(
+def _get_retry_times(cfg: data.StringsI18nConfig) -> int:
+    raw = None
+    if isinstance(cfg.options, dict):
+        raw = cfg.options.get("fastlane_retry_times")
+        if raw is None:
+            raw = cfg.options.get("fastlaneRetryTimes")
+    try:
+        n = int(raw) if raw is not None else 2
+    except Exception:
+        n = 2
+    return max(0, n)
+
+
+def _execute_file_task(
     *,
-    task: _TargetTranslateTask,
-    src_locale_name: str,
+    task: _FileTask,
     model: str,
     api_key: Optional[str],
-) -> Tuple[str, int, float]:
+    retry_times: int,
+) -> _FileResult:
     t0 = time.perf_counter()
-    keys = list(task.src_map.keys())
-    src_items = [task.src_map[k] for k in keys]
-    out_items = translate_list(
-        prompt_en=task.prompt_en,
-        src_items=src_items,
-        src_locale=src_locale_name,
-        tgt_locale=task.target_name,
-        model=model,
-        api_key=api_key,
+
+    if task.passthrough:
+        dst = (task.target_dir / task.rel_path).resolve()
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(task.source_text.strip() + "\n", encoding="utf-8")
+        return _FileResult(
+            task=task,
+            ok=True,
+            written=True,
+            retries_used=0,
+            elapsed_sec=time.perf_counter() - t0,
+            error=None,
+        )
+
+    last_err: Optional[str] = None
+    for attempt in range(retry_times + 1):
+        try:
+            out_items = translate_list(
+                prompt_en=task.prompt_en,
+                src_items=[task.source_text],
+                src_locale=task.src_locale_name,
+                tgt_locale=task.target_name,
+                model=model,
+                api_key=api_key,
+            )
+            translated = out_items[0].strip() if out_items else ""
+            if not translated:
+                raise RuntimeError("empty translation")
+
+            dst = (task.target_dir / task.rel_path).resolve()
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(translated + "\n", encoding="utf-8")
+            return _FileResult(
+                task=task,
+                ok=True,
+                written=True,
+                retries_used=attempt,
+                elapsed_sec=time.perf_counter() - t0,
+                error=None,
+            )
+        except Exception as e:
+            last_err = str(e)
+            if attempt < retry_times:
+                time.sleep(min(1.5, 0.25 * (2**attempt)))
+
+    # 最终失败：不写文件，留空
+    return _FileResult(
+        task=task,
+        ok=False,
+        written=False,
+        retries_used=retry_times,
+        elapsed_sec=time.perf_counter() - t0,
+        error=last_err or "unknown error",
     )
-    out = {k: v for k, v in zip(keys, out_items)}
-
-    translated_count = 0
-    for k, v in out.items():
-        if k.startswith("@@"):
-            continue
-        if not isinstance(v, str) or not v.strip():
-            continue
-        rel = Path(k)
-        dst_fp = (task.target_dir / rel).resolve()
-        dst_fp.parent.mkdir(parents=True, exist_ok=True)
-        dst_fp.write_text(v.strip() + "\n", encoding="utf-8")
-        translated_count += 1
-    elapsed = time.perf_counter() - t0
-    return task.target_asc, translated_count, elapsed
 
 
-def _translate_phase(
+def _write_phase_report(
+    cfg: data.StringsI18nConfig,
+    *,
+    phase_name: str,
+    lines: List[str],
+) -> Optional[Path]:
+    try:
+        report_dir = (cfg.fastlane_metadata_root / ".box_strings_i18n_reports").resolve()
+        report_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        slug = phase_name.lower().replace(" ", "_").replace(":", "").replace("->", "to")
+        fp = report_dir / f"fastlane_{slug}_{ts}.txt"
+        fp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        return fp
+    except Exception:
+        return None
+
+
+def _run_phase(
     *,
     cfg: data.StringsI18nConfig,
     phase_name: str,
@@ -291,15 +366,12 @@ def _translate_phase(
     code_to_asc: Dict[str, str],
     incremental: bool,
     fallback_src_locale: Optional[data.Locale] = None,
-) -> None:
-    if not targets:
-        print(f"⚠️ {phase_name}：目标为空，跳过。")
-        return
+) -> _PhaseStats:
+    phase_t0 = time.perf_counter()
 
-    model = _get_model(cfg)
-    api_key = _norm_api_key(getattr(cfg, "api_key", None))
+    # -------------------- 1) 扫描 --------------------
+    scan_t0 = time.perf_counter()
     root = cfg.fastlane_metadata_root
-
     src_asc = _asc_code(src_locale, code_to_asc)
     src_dir = (root / src_asc).resolve()
     fallback_dir = None
@@ -310,22 +382,43 @@ def _translate_phase(
     if fallback_dir is not None:
         src_rel.update(_iter_txt_rel_paths(fallback_dir))
     source_rel_paths = sorted(src_rel, key=lambda x: x.as_posix().lower())
+    scan_sec = time.perf_counter() - scan_t0
 
     print(f"\n🧩 {phase_name}")
-    print(f"- src: {src_locale.code} -> {src_asc}")
-    print(f"- tgt: {[f'{x.code}->{_asc_code(x, code_to_asc)}' for x in targets]}")
-    print(f"- source files: {len(source_rel_paths)}")
+    print(f"[扫描] src={src_locale.code}->{src_asc}, source_files={len(source_rel_paths)}")
 
-    if not source_rel_paths:
-        print(f"⚠️ {phase_name}：源目录没有可翻译的 *.txt，跳过。")
-        return
+    if not targets or not source_rel_paths:
+        total_sec = time.perf_counter() - phase_t0
+        return _PhaseStats(
+            phase_name=phase_name,
+            src_asc=src_asc,
+            total_targets=len(targets),
+            source_files=len(source_rel_paths),
+            planned_files=0,
+            written_files=0,
+            failed_files=0,
+            skipped_unresolved=0,
+            passthrough_files=0,
+            deleted_redundant=0,
+            scan_sec=scan_sec,
+            plan_sec=0.0,
+            exec_sec=0.0,
+            report_sec=0.0,
+            total_sec=total_sec,
+            report_path=None,
+        )
 
-    total_candidates = 0
-    total_written = 0
-    total_fail_targets = 0
-    start = time.perf_counter()
-    translate_tasks: List[_TargetTranslateTask] = []
-    use_threads = not (sys.stdin.isatty() and str((cfg.options or {}).get("fastlane_redundant_policy", "")).strip() == "")
+    # -------------------- 2) 计划 --------------------
+    plan_t0 = time.perf_counter()
+    plan_tasks: List[_FileTask] = []
+    redundant_map: Dict[str, List[Path]] = {}
+    non_txt_map: Dict[str, List[Path]] = {}
+    missing_map: Dict[str, List[Path]] = {}
+    deleted_redundant = 0
+    skipped_unresolved = 0
+    passthrough_files = 0
+
+    policy = _decide_redundant_policy(cfg)
 
     for tgt in targets:
         tgt_asc = _asc_code(tgt, code_to_asc)
@@ -339,136 +432,190 @@ def _translate_phase(
             source_rel_paths=source_rel_paths,
             target_dir=tgt_dir,
         )
+        if missing:
+            missing_map[tgt_asc] = missing
+        if redundant:
+            redundant_map[tgt_asc] = redundant
+            if policy == "delete":
+                deleted_redundant += _delete_redundant_files(tgt_dir, redundant)
         if non_txt:
-            print(f"⚠️ {tgt_asc} 下发现非 *.txt 文件：{len(non_txt)}")
-            for p in non_txt[:10]:
-                print(f"- {tgt_asc}/{p.as_posix()}")
-            if len(non_txt) > 10:
-                print(f"- ... 还有 {len(non_txt) - 10} 个")
+            non_txt_map[tgt_asc] = non_txt
 
-        _handle_redundant_files(
-            cfg,
-            target_dir=tgt_dir,
-            redundant=redundant,
-            allow_prompt=not use_threads,
-        )
-
-        work_rel_paths = _prepare_work_rel_paths(
+        work_rel = _prepare_work_rel_paths(
             source_rel_paths=source_rel_paths,
             target_dir=tgt_dir,
             incremental=incremental,
         )
 
-        if not work_rel_paths:
-            print(f"✅ {tgt_asc} 无需翻译（目标文件已齐全）。")
-            continue
-
-        total_candidates += len(work_rel_paths)
-
-        passthrough_count = 0
-        src_map: Dict[str, str] = {}
-        for rel in work_rel_paths:
-            src_txt = _resolve_source_text(
-                rel=rel, src_dir=src_dir, fallback_dir=fallback_dir
-            )
+        prompt = _build_prompt_en(cfg, target_code=tgt.code)
+        for rel in work_rel:
+            src_txt = _resolve_source_text(rel=rel, src_dir=src_dir, fallback_dir=fallback_dir)
             if not src_txt or not src_txt.strip():
+                skipped_unresolved += 1
                 continue
-
-            if rel.name in URL_PASSTHROUGH_FILES:
-                dst_fp = (tgt_dir / rel).resolve()
-                dst_fp.parent.mkdir(parents=True, exist_ok=True)
-                dst_fp.write_text(src_txt.strip() + "\n", encoding="utf-8")
-                passthrough_count += 1
-                total_written += 1
-                continue
-
-            src_map[rel.as_posix()] = src_txt.strip()
-
-        if src_map:
-            translate_tasks.append(
-                _TargetTranslateTask(
+            passthrough = rel.name in URL_PASSTHROUGH_FILES
+            if passthrough:
+                passthrough_files += 1
+            plan_tasks.append(
+                _FileTask(
                     target_code=tgt.code,
                     target_name=tgt.name_en,
                     target_asc=tgt_asc,
                     target_dir=tgt_dir,
-                    src_map=src_map,
-                    prompt_en=_build_prompt_en(cfg, target_code=tgt.code),
+                    rel_path=rel,
+                    source_text=src_txt.strip(),
+                    src_locale_name=src_locale.name_en,
+                    passthrough=passthrough,
+                    prompt_en=prompt,
                 )
             )
-            print(
-                f"⏳ ({phase_name}) {src_locale.code}->{tgt.code} [{src_asc}->{tgt_asc}] "
-                f"{len(src_map)} file(s) 已加入队列"
-            )
-        print(
-            f"ℹ️ {tgt_asc} 预检查: passthrough={passthrough_count}, missing={len(missing)}, queued={len(src_map)}"
-        )
 
-    if translate_tasks:
-        max_workers = _compute_fastlane_workers(cfg, len(translate_tasks))
-        print(f"- 并发: {max_workers} workers（target-level）")
-        done_targets = 0
-        done_files = 0
-        sum_task_elapsed = 0.0
-        translate_wall_start = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+    plan_sec = time.perf_counter() - plan_t0
+    print(
+        f"[计划] targets={len(targets)}, planned_files={len(plan_tasks)}, "
+        f"skipped_unresolved={skipped_unresolved}, deleted_redundant={deleted_redundant}"
+    )
+
+    # -------------------- 3) 执行 --------------------
+    exec_t0 = time.perf_counter()
+    written_files = 0
+    failed_files = 0
+    failed_items: List[_FileResult] = []
+
+    if plan_tasks:
+        workers = _compute_file_workers(cfg, len(plan_tasks))
+        retry_times = _get_retry_times(cfg)
+        print(f"[执行] file_workers={workers}, retry_times={retry_times}, tasks={len(plan_tasks)}")
+
+        done = 0
+        total = len(plan_tasks)
+        start_exec = time.perf_counter()
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
             fut_map = {
                 ex.submit(
-                    _run_target_translate_task,
+                    _execute_file_task,
                     task=t,
-                    src_locale_name=src_locale.name_en,
-                    model=model,
-                    api_key=api_key,
+                    model=_get_model(cfg),
+                    api_key=_norm_api_key(getattr(cfg, "api_key", None)),
+                    retry_times=retry_times,
                 ): t
-                for t in translate_tasks
+                for t in plan_tasks
             }
-            total_targets = len(translate_tasks)
-            for fut in as_completed(fut_map):
-                t = fut_map[fut]
-                done_targets += 1
-                try:
-                    tgt_asc, translated_count, task_elapsed = fut.result()
-                    done_files += translated_count
-                    total_written += translated_count
-                    sum_task_elapsed += task_elapsed
-                    print(
-                        f"✅ {tgt_asc} 翻译完成: +{translated_count} file(s) "
-                        f"| 耗时 {task_elapsed:.2f}s | 进度 {done_targets}/{total_targets}"
-                    )
-                except Exception as e:
-                    total_fail_targets += 1
-                    print(
-                        f"❌ {t.target_asc} 翻译失败: {e} "
-                        f"| 进度 {done_targets}/{total_targets}"
-                    )
-                print(
-                    f"📈 累计进度: translated_files={done_files}, "
-                    f"failed_targets={total_fail_targets}, total_targets={total_targets}"
-                )
-        translate_wall_elapsed = time.perf_counter() - translate_wall_start
-        print(
-            f"⏱️ 翻译阶段耗时: wall={translate_wall_elapsed:.2f}s, "
-            f"sum_tasks={sum_task_elapsed:.2f}s"
-        )
-    else:
-        print("ℹ️ 没有可翻译任务（所有目标都已是最新）。")
 
-    elapsed = time.perf_counter() - start
+            for fut in as_completed(fut_map):
+                done += 1
+                res = fut.result()
+                if res.ok and res.written:
+                    written_files += 1
+                else:
+                    failed_files += 1
+                    failed_items.append(res)
+
+                elapsed = time.perf_counter() - start_exec
+                remain = total - done
+                eta = (elapsed / done * remain) if done > 0 else 0.0
+                rel = res.task.rel_path.as_posix()
+                if res.ok:
+                    print(
+                        f"✅ [{done}/{total}] {res.task.target_asc}/{rel} "
+                        f"(retry={res.retries_used}, {res.elapsed_sec:.2f}s) | 剩余 {remain} | ETA {eta:.1f}s"
+                    )
+                else:
+                    print(
+                        f"❌ [{done}/{total}] {res.task.target_asc}/{rel} "
+                        f"(retry={res.retries_used}, {res.elapsed_sec:.2f}s) {res.error} | 剩余 {remain} | ETA {eta:.1f}s"
+                    )
+    else:
+        print("[执行] 无任务可执行")
+
+    exec_sec = time.perf_counter() - exec_t0
+
+    # -------------------- 4) 报告 --------------------
+    report_t0 = time.perf_counter()
+    report_lines: List[str] = []
+    report_lines.append(f"Phase: {phase_name}")
+    report_lines.append(f"Mode: {'incremental' if incremental else 'full'}")
+    report_lines.append(f"Source: {src_locale.code} -> {src_asc}")
+    report_lines.append("")
+    report_lines.append("Summary:")
+    report_lines.append(f"- targets: {len(targets)}")
+    report_lines.append(f"- source_files: {len(source_rel_paths)}")
+    report_lines.append(f"- planned_files: {len(plan_tasks)}")
+    report_lines.append(f"- written_files: {written_files}")
+    report_lines.append(f"- failed_files: {failed_files}")
+    report_lines.append(f"- skipped_unresolved: {skipped_unresolved}")
+    report_lines.append(f"- passthrough_files: {passthrough_files}")
+    report_lines.append(f"- deleted_redundant: {deleted_redundant}")
+    report_lines.append("")
+    report_lines.append("Timing:")
+    report_lines.append(f"- scan_sec: {scan_sec:.2f}")
+    report_lines.append(f"- plan_sec: {plan_sec:.2f}")
+    report_lines.append(f"- exec_sec: {exec_sec:.2f}")
+
+    if non_txt_map:
+        report_lines.append("")
+        report_lines.append("Non-txt Files In Targets:")
+        for loc in sorted(non_txt_map.keys()):
+            report_lines.append(f"[{loc}] count={len(non_txt_map[loc])}")
+            for p in non_txt_map[loc][:30]:
+                report_lines.append(f"- {p.as_posix()}")
+
+    if redundant_map:
+        report_lines.append("")
+        report_lines.append("Redundant Txt Files (target has, source missing):")
+        for loc in sorted(redundant_map.keys()):
+            report_lines.append(f"[{loc}] count={len(redundant_map[loc])}")
+            for p in redundant_map[loc][:30]:
+                report_lines.append(f"- {p.as_posix()}")
+
+    if failed_items:
+        report_lines.append("")
+        report_lines.append("Failed Files:")
+        for r in failed_items[:200]:
+            report_lines.append(
+                f"- {r.task.target_asc}/{r.task.rel_path.as_posix()} | retry={r.retries_used} | err={r.error}"
+            )
+
+    report_path = _write_phase_report(cfg, phase_name=phase_name, lines=report_lines)
+    report_sec = time.perf_counter() - report_t0
+    total_sec = time.perf_counter() - phase_t0
+
     print(
-        f"🎉 {phase_name} 完成：written={total_written}, "
-        f"candidates={total_candidates}, failed_targets={total_fail_targets}, elapsed={elapsed:.2f}s"
+        f"[报告] written={written_files}, failed={failed_files}, "
+        f"redundant={sum(len(v) for v in redundant_map.values())}, "
+        f"non_txt={sum(len(v) for v in non_txt_map.values())}, elapsed={total_sec:.2f}s"
+    )
+    if report_path is not None:
+        print(f"📄 report: {report_path}")
+
+    return _PhaseStats(
+        phase_name=phase_name,
+        src_asc=src_asc,
+        total_targets=len(targets),
+        source_files=len(source_rel_paths),
+        planned_files=len(plan_tasks),
+        written_files=written_files,
+        failed_files=failed_files,
+        skipped_unresolved=skipped_unresolved,
+        passthrough_files=passthrough_files,
+        deleted_redundant=deleted_redundant,
+        scan_sec=scan_sec,
+        plan_sec=plan_sec,
+        exec_sec=exec_sec,
+        report_sec=report_sec,
+        total_sec=total_sec,
+        report_path=report_path,
     )
 
 
-def translate_base_to_core(
-    cfg: data.StringsI18nConfig, incremental: bool = True
-) -> None:
+def translate_base_to_core(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
     code_to_asc = _load_code_to_asc(cfg)
     src_asc = _asc_code(cfg.base_locale, code_to_asc)
-
     targets = [x for x in cfg.core_locales if _asc_code(x, code_to_asc) != src_asc]
     targets = _dedup_targets_by_asc(targets, code_to_asc)
 
-    _translate_phase(
+    _run_phase(
         cfg=cfg,
         phase_name="Phase 1: base_locale -> core_locales",
         src_locale=cfg.base_locale,
@@ -478,9 +625,7 @@ def translate_base_to_core(
     )
 
 
-def translate_source_to_target(
-    cfg: data.StringsI18nConfig, incremental: bool = True
-) -> None:
+def translate_source_to_target(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
     code_to_asc = _load_code_to_asc(cfg)
     src_asc = _asc_code(cfg.source_locale, code_to_asc)
     base_asc = _asc_code(cfg.base_locale, code_to_asc)
@@ -492,7 +637,7 @@ def translate_source_to_target(
     ]
     targets = _dedup_targets_by_asc(targets, code_to_asc)
 
-    _translate_phase(
+    _run_phase(
         cfg=cfg,
         phase_name="Phase 2: source_locale -> target_locales",
         src_locale=cfg.source_locale,
@@ -508,6 +653,8 @@ def run_fastlane(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
     print("🚀 fastlane metadata translate")
     print(f"- 模式: {mode}")
     print(f"- metadata root: {cfg.fastlane_metadata_root}")
+    print(f"- file_workers(auto): { _compute_file_workers(cfg, 9999) }")
+    print(f"- retry_times: { _get_retry_times(cfg) }")
 
     legacy_en_dir = (cfg.fastlane_metadata_root / "en").resolve()
     if legacy_en_dir.exists() and legacy_en_dir.is_dir():
