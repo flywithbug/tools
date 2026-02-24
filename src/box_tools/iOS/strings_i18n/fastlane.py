@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+import shutil
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -141,9 +142,14 @@ def _load_code_to_asc(cfg: data.StringsI18nConfig) -> Dict[str, str]:
 
 
 def _asc_code(loc: data.Locale, code_to_asc: Dict[str, str]) -> str:
-    cfg_asc = (loc.asc_code or "").strip()
-    if cfg_asc and cfg_asc != loc.code:
-        return cfg_asc
+    if loc.asc_code is not None:
+        cfg_asc = str(loc.asc_code).strip()
+        if cfg_asc == "":
+            return ""
+        if cfg_asc and cfg_asc != loc.code:
+            return cfg_asc
+    else:
+        cfg_asc = ""
     mapped = (code_to_asc.get(loc.code) or "").strip()
     if mapped:
         return mapped
@@ -186,6 +192,32 @@ def _iter_non_txt_rel_paths(root_dir: Path) -> List[Path]:
         if p.is_file() and p.suffix.lower() != ".txt"
     ]
     return sorted(files, key=lambda x: x.as_posix().lower())
+
+
+def _collect_valid_asc_codes(cfg: data.StringsI18nConfig, code_to_asc: Dict[str, str]) -> Set[str]:
+    out: Set[str] = set()
+    for loc in (
+        [cfg.base_locale, cfg.source_locale] + cfg.core_locales + cfg.target_locales
+    ):
+        asc = _asc_code(loc, code_to_asc)
+        if asc:
+            out.add(asc)
+    return out
+
+
+def _delete_unknown_locale_dirs(root: Path, valid_asc: Set[str]) -> List[str]:
+    if not root.exists() or not root.is_dir():
+        return []
+    deleted: List[str] = []
+    for p in root.iterdir():
+        if not p.is_dir():
+            continue
+        name = p.name
+        if name in valid_asc:
+            continue
+        shutil.rmtree(p)
+        deleted.append(name)
+    return deleted
 
 
 def _scan_target_integrity(
@@ -674,6 +706,14 @@ def run_fastlane(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
     print(f"- metadata root: {cfg.fastlane_metadata_root}")
     print(f"- file_workers(auto): { _compute_file_workers(cfg, 9999) }")
     print(f"- retry_times: { _get_retry_times(cfg) }")
+
+    code_to_asc = _load_code_to_asc(cfg)
+    valid_asc = _collect_valid_asc_codes(cfg, code_to_asc)
+    deleted_dirs = _delete_unknown_locale_dirs(cfg.fastlane_metadata_root, valid_asc)
+    if deleted_dirs:
+        print(f"🧹 已删除非配置语言目录：{len(deleted_dirs)}")
+        for name in sorted(deleted_dirs):
+            print(f"- {name}")
 
     legacy_en_dir = (cfg.fastlane_metadata_root / "en").resolve()
     if legacy_en_dir.exists() and legacy_en_dir.is_dir():

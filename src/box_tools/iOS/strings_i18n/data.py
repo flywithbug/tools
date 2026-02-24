@@ -481,7 +481,13 @@ def _yaml_block_for_target_locales(locales: List[Dict[str, str]]) -> str:
     for it in locales:
         lines.append(f"  - code: {it['code']}")
         lines.append(f"    name_en: {it['name_en']}")
-        lines.append(f"    ascCode: {it.get('asc_code') or it['code']}")
+        asc = it.get("asc_code")
+        if asc is None:
+            asc = it["code"]
+        if asc == "":
+            lines.append("    ascCode: ''")
+        else:
+            lines.append(f"    ascCode: {asc}")
     return "\n".join(lines) + "\n"
 
 
@@ -510,6 +516,94 @@ def replace_target_locales_block(
         end = len(template_text)
 
     return template_text[:start] + new_block + template_text[end:]
+
+
+def _normalize_target_locales_from_raw(
+    raw: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    arr = raw.get("target_locales") or []
+    if not isinstance(arr, list):
+        return out
+    for it in arr:
+        if not isinstance(it, dict):
+            continue
+        code = str(it.get("code", "")).strip()
+        name_en = str(it.get("name_en", "")).strip()
+        if not code or not name_en:
+            continue
+        asc: Optional[str] = None
+        if "ascCode" in it:
+            asc = str(it.get("ascCode", "")).strip()
+        elif "asc_code" in it:
+            asc = str(it.get("asc_code", "")).strip()
+        if asc is None:
+            asc = ""
+        out.append({"code": code, "name_en": name_en, "asc_code": asc})
+    return out
+
+
+def _merge_target_locales_with_existing(
+    new_locales: List[Dict[str, str]], existing_raw: Dict[str, Any]
+) -> List[Dict[str, str]]:
+    existing = {}
+    arr = existing_raw.get("target_locales") or []
+    if isinstance(arr, list):
+        for it in arr:
+            if not isinstance(it, dict):
+                continue
+            code = str(it.get("code", "")).strip()
+            if not code:
+                continue
+            asc_present = "ascCode" in it or "asc_code" in it
+            asc_val = ""
+            if "ascCode" in it:
+                asc_val = str(it.get("ascCode", "")).strip()
+            elif "asc_code" in it:
+                asc_val = str(it.get("asc_code", "")).strip()
+            existing[code] = {"asc_present": asc_present, "asc_code": asc_val}
+
+    out: List[Dict[str, str]] = []
+    for it in new_locales:
+        code = it["code"]
+        asc = it.get("asc_code", "")
+        if code in existing:
+            e = existing[code]
+            if e["asc_present"] and e["asc_code"] == "":
+                asc = ""
+        out.append(
+            {
+                "code": code,
+                "name_en": it["name_en"],
+                "asc_code": asc,
+            }
+        )
+    return out
+
+
+def update_target_locales_from_languages_json(
+    cfg_path: Path, languages_path: Path, *, source_code: str, core_codes: List[str]
+) -> bool:
+    """对比 languages.json 与配置 target_locales，若变化则更新该段落。"""
+    cfg_path = cfg_path.resolve()
+    if not cfg_path.exists():
+        return False
+
+    tpl_text = cfg_path.read_text(encoding="utf-8")
+    raw_cfg = yaml.safe_load(tpl_text) or {}
+
+    new_locales, _removed = build_target_locales_from_languages_json(
+        languages_path, source_code=source_code, core_codes=core_codes
+    )
+    merged = _merge_target_locales_with_existing(new_locales, raw_cfg)
+    existing_norm = _normalize_target_locales_from_raw(raw_cfg)
+
+    if merged == existing_norm:
+        return False
+
+    out_text = replace_target_locales_block(tpl_text, merged)
+    cfg_path.write_text(out_text, encoding="utf-8")
+    return True
 
 
 # ----------------------------
@@ -568,6 +662,23 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
     )
     fastlane_root = (project_root / fastlane_root_rel).resolve()
     fastlane_root.mkdir(parents=True, exist_ok=True)
+
+    # 6.2) 若 languages.json 变化，同步更新 target_locales 段落
+    try:
+        raw_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        src = _first_locale(raw_cfg["source_locale"])
+        core = [_locale_obj(x) for x in (raw_cfg.get("core_locales") or [])]
+        updated = update_target_locales_from_languages_json(
+            cfg_path,
+            languages_path,
+            source_code=src.code,
+            core_codes=[c.code for c in core],
+        )
+        if updated:
+            print("✅ 已更新 strings_i18n.yaml 的 target_locales（基于 languages.json）")
+    except Exception:
+        # init 主流程不因 target_locales 自动更新失败而中断
+        pass
 
     # 7) 仅补齐缺失 ascCode（不改动其它配置字段）
     try:
@@ -827,10 +938,14 @@ def _locale_obj(obj: Any) -> Locale:
     name_en = str(obj.get("name_en", "")).strip()
     if not code or not name_en:
         raise ValueError("locale.code/name_en 不能为空")
-    asc_code = str(obj.get("ascCode", "")).strip()
-    if not asc_code:
+
+    asc_code: Optional[str] = None
+    if "ascCode" in obj:
+        asc_code = str(obj.get("ascCode", "")).strip()
+    elif "asc_code" in obj:
         asc_code = str(obj.get("asc_code", "")).strip()
-    if not asc_code:
+
+    if asc_code is None:
         asc_code = code
     return Locale(code=code, name_en=name_en, asc_code=asc_code)
 
@@ -855,9 +970,11 @@ def _find_missing_asc_in_raw_config(raw: Dict[str, Any]) -> List[Tuple[str, str]
             code = str(it.get("code", "")).strip()
             if not code:
                 continue
-            asc_camel = str(it.get("ascCode", "")).strip()
-            asc_snake = str(it.get("asc_code", "")).strip()
-            if not asc_camel and not asc_snake:
+            has_asc_camel = "ascCode" in it
+            has_asc_snake = "asc_code" in it
+            asc_camel = str(it.get("ascCode", "")).strip() if has_asc_camel else ""
+            asc_snake = str(it.get("asc_code", "")).strip() if has_asc_snake else ""
+            if not has_asc_camel and not has_asc_snake:
                 missing.append((sec, code))
     return missing
 
