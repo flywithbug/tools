@@ -369,6 +369,9 @@ def _echo_raw_analyze_output(ctx: Context, out: str) -> None:
 
 
 def flutter_analyze_gate(ctx: Context) -> None:
+    if shutil.which("flutter") is None:
+        raise RuntimeError("未找到 flutter 命令，无法执行 analyze")
+
     stop_event = threading.Event()
     _load_t0 = time.perf_counter()
     t = threading.Thread(target=_loading_animation, args=(stop_event, "flutter analyze", _load_t0))
@@ -396,28 +399,29 @@ def flutter_analyze_gate(ctx: Context) -> None:
             ctx.echo(f"  ... 还有 {len(errors) - MAX_SHOW_ERRORS} 条 error")
         raise RuntimeError("flutter analyze error，已中断发布。")
 
-    # 如果 analyze 本身返回失败码，但没解析到 error，兜底打印原始输出后中断
+    # 如果 analyze 本身返回失败码，但没解析到 error，提示并交给用户决定是否继续
     if r.code != 0:
-        ctx.echo("❌ flutter analyze 返回失败码，但未解析到标准 error 行；原始输出如下（用于定位真实 issue）：")
+        ctx.echo("⚠️ flutter analyze 返回失败码，但未解析到标准 error 行；原始输出如下（用于定位真实 issue）：")
         _echo_raw_analyze_output(ctx, out)
-        raise RuntimeError("flutter analyze failed（unparsed output），已中断发布。")
+        _confirm_or_abort(ctx, "analyze 未通过（非标准输出），是否继续发布？")
 
-    # 规则 2：warning 需要提示并询问是否继续
+    # 规则 2：warning/info 需要提示并询问是否继续
     if warnings:
         ctx.echo(f"⚠️ flutter analyze warning：共 {len(warnings)} 条")
         for it in warnings[:MAX_SHOW_WARNINGS]:
             ctx.echo(f"  - {it.text}")
         if len(warnings) > MAX_SHOW_WARNINGS:
             ctx.echo(f"  ... 还有 {len(warnings) - MAX_SHOW_WARNINGS} 条 warning")
-        _confirm_or_abort(ctx, "存在 warning，是否继续发布？")
 
-    # 规则 3：info 只提示数量 + 打印前两三条，然后继续（不确认）
     if infos:
-        ctx.echo(f"ℹ️ flutter analyze info：共 {len(infos)} 条（仅提示，不阻断发布）")
+        ctx.echo(f"ℹ️ flutter analyze info：共 {len(infos)} 条")
         for it in infos[:MAX_SHOW_INFO]:
             ctx.echo(f"  - {it.text}")
         if len(infos) > MAX_SHOW_INFO:
             ctx.echo(f"  ...（仅展示前 {MAX_SHOW_INFO} 条）")
+
+    if warnings or infos:
+        _confirm_or_abort(ctx, "存在 warning/info，是否继续发布？")
 
 
 def flutter_pub_publish(ctx: Context, *, dry_run: bool) -> None:
