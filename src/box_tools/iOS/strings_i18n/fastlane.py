@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+import re
 
 from . import data
 from box_tools._share.openai_translate.translate_list import translate_list
@@ -207,6 +208,14 @@ def _collect_valid_asc_codes(
     return out
 
 
+_LOCALE_DIR_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
+
+
+def _looks_like_locale_dir(name: str) -> bool:
+    # 仅识别类似 en / en-US / zh-Hans / es-419 / en-US-POSIX 的目录
+    return bool(_LOCALE_DIR_RE.match(name))
+
+
 def _delete_unknown_locale_dirs(root: Path, valid_asc: Set[str]) -> List[str]:
     if not root.exists() or not root.is_dir():
         return []
@@ -215,6 +224,8 @@ def _delete_unknown_locale_dirs(root: Path, valid_asc: Set[str]) -> List[str]:
         if not p.is_dir():
             continue
         name = p.name
+        if not _looks_like_locale_dir(name):
+            continue
         if name in valid_asc:
             continue
         shutil.rmtree(p)
