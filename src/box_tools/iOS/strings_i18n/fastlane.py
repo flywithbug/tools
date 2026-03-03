@@ -194,7 +194,9 @@ def _iter_non_txt_rel_paths(root_dir: Path) -> List[Path]:
     return sorted(files, key=lambda x: x.as_posix().lower())
 
 
-def _collect_valid_asc_codes(cfg: data.StringsI18nConfig, code_to_asc: Dict[str, str]) -> Set[str]:
+def _collect_valid_asc_codes(
+    cfg: data.StringsI18nConfig, code_to_asc: Dict[str, str]
+) -> Set[str]:
     out: Set[str] = set()
     for loc in (
         [cfg.base_locale, cfg.source_locale] + cfg.core_locales + cfg.target_locales
@@ -266,7 +268,9 @@ def _resolve_source_text(
 
 
 def _decide_redundant_policy(cfg: data.StringsI18nConfig) -> str:
-    policy = str((cfg.options or {}).get("fastlane_redundant_policy", "")).strip().lower()
+    policy = (
+        str((cfg.options or {}).get("fastlane_redundant_policy", "")).strip().lower()
+    )
     if policy in {"delete", "keep"}:
         return policy
     if sys.stdin.isatty():
@@ -418,7 +422,9 @@ def _run_phase(
     scan_sec = time.perf_counter() - scan_t0
 
     print(f"\n🧩 {phase_name}")
-    print(f"[扫描] src={src_locale.code}->{src_asc}, source_files={len(source_rel_paths)}")
+    print(
+        f"[扫描] src={src_locale.code}->{src_asc}, source_files={len(source_rel_paths)}"
+    )
 
     if not targets or not source_rel_paths:
         total_sec = time.perf_counter() - phase_t0
@@ -478,9 +484,10 @@ def _run_phase(
             incremental=incremental,
         )
 
-        prompt = _build_prompt_en(cfg, target_code=tgt.code)
         for rel in work_rel:
-            src_txt = _resolve_source_text(rel=rel, src_dir=src_dir, fallback_dir=fallback_dir)
+            src_txt = _resolve_source_text(
+                rel=rel, src_dir=src_dir, fallback_dir=fallback_dir
+            )
             if not src_txt or not src_txt.strip():
                 skipped_unresolved += 1
                 continue
@@ -537,7 +544,9 @@ def _run_phase(
     if plan_tasks:
         workers = _compute_file_workers(cfg, len(plan_tasks))
         retry_times = _get_retry_times(cfg)
-        print(f"[执行] file_workers={workers}, retry_times={retry_times}, tasks={len(plan_tasks)}")
+        print(
+            f"[执行] file_workers={workers}, retry_times={retry_times}, tasks={len(plan_tasks)}"
+        )
 
         done = 0
         total = len(plan_tasks)
@@ -660,7 +669,9 @@ def _run_phase(
     )
 
 
-def translate_base_to_core(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
+def translate_base_to_core(
+    cfg: data.StringsI18nConfig, incremental: bool = True
+) -> None:
     code_to_asc = _load_code_to_asc(cfg)
     src_asc = _asc_code(cfg.base_locale, code_to_asc)
     targets = [x for x in cfg.core_locales if _asc_code(x, code_to_asc) != src_asc]
@@ -676,7 +687,9 @@ def translate_base_to_core(cfg: data.StringsI18nConfig, incremental: bool = True
     )
 
 
-def translate_source_to_target(cfg: data.StringsI18nConfig, incremental: bool = True) -> None:
+def translate_source_to_target(
+    cfg: data.StringsI18nConfig, incremental: bool = True
+) -> None:
     code_to_asc = _load_code_to_asc(cfg)
     src_asc = _asc_code(cfg.source_locale, code_to_asc)
     base_asc = _asc_code(cfg.base_locale, code_to_asc)
