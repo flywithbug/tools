@@ -472,7 +472,10 @@ def apply_upgrades_to_pubspec(
                     if l.strip() and _indent(l) <= name_indent:
                         break
 
-                    m_ver = re.match(r"^(\s*version\s*:\s*)(.+?)(\s*(#.*)?)\r?\n?$", l)
+                    # 先剥离换行，避免正则把 \n 吃掉导致逐步累积空行
+                    line_no_nl = l.rstrip("\r\n")
+                    newline = l[len(line_no_nl):]
+                    m_ver = re.match(r"^(\s*version\s*:\s*)(.+?)(\s*(#.*)?)$", line_no_nl)
                     if m_ver and not replaced:
                         prefix = m_ver.group(1)
                         raw_val = (m_ver.group(2) or "").strip()
@@ -509,7 +512,6 @@ def apply_upgrades_to_pubspec(
                             new_val = new_val_unquoted
 
                         # 写回该行，保留行尾注释
-                        newline = "\n" if l.endswith("\n") else ""
                         lines[j] = f"{prefix}{new_val}{suffix}{newline}"
                         applied.append(f"{name}: {u.pubspec_constraint} -> {keep_prefix}{u.latest}")
                         replaced = True
