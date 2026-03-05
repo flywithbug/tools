@@ -131,16 +131,18 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
         menu = [
             ("check", "冗余检查（同名资源）"),
             ("gen", "生成静态调用文件"),
-            ("exit", "退出程序"),
         ]
         while True:
             print("\n=== box_strings_i18n / strings / gen_assets ===")
             for idx, (cmd, label) in enumerate(menu, start=1):
                 print(f"{idx}. {cmd:<10} {label}")
-            print("0. back       返回")
+            print("0. exit       退出")
+            print("3. back       返回")
 
             choice = input("> ").strip()
             if choice == "0":
+                raise SystemExit(0)
+            if choice == "3":
                 return 0
             if not choice.isdigit():
                 print("无效选择")
@@ -161,8 +163,6 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
                 except Exception as e:
                     print(f"❌ 生成失败：{e}")
                 continue
-            if cmd == "exit":
-                raise SystemExit(0)
 
     def _strings_menu() -> int:
         menu = [
