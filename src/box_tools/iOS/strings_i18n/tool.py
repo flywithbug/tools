@@ -167,7 +167,6 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
             ("sort", "排序 .strings"),
             ("translate", "翻译 .strings"),
             ("gen", "生成 L10n.swift"),
-            ("gen_assets", "生成静态资源枚举"),
         ]
         while True:
             print("\n=== box_strings_i18n / strings ===")
@@ -186,9 +185,6 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
                 print("无效选择")
                 continue
             cmd = menu[idx - 1][0]
-            if cmd == "gen_assets":
-                _ = _assets_menu(cfg)
-                continue
             argv = [
                 "box_strings_i18n",
                 cmd,
@@ -201,6 +197,7 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
 
     menu = [
         ("strings", "strings 相关功能"),
+        ("gen_assets", "资源：检查/生成"),
         ("fastlane", "翻译 Fastlane metadata"),
         ("version", "版本号（Info.plist）"),
         ("init", "初始化/校验配置"),
@@ -230,6 +227,9 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
         cmd = menu[idx - 1][0]
         if cmd == "strings":
             _ = _strings_menu()
+            continue
+        if cmd == "gen_assets":
+            _ = _assets_menu(cfg)
             continue
         argv = [
             "box_strings_i18n",
