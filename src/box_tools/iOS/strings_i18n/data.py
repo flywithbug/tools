@@ -289,9 +289,6 @@ class StringsI18nConfig:
     # 行为开关
     options: Dict[str, Any]
     prompts: Dict[str, Any]
-
-
-def _merge_strings_options(raw_options: Dict[str, Any]) -> Dict[str, Any]:
 def strings_options(cfg: "StringsI18nConfig") -> Dict[str, Any]:
     return (cfg.options or {}).get("strings") or {}
 
