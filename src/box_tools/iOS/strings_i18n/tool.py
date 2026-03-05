@@ -131,6 +131,7 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
         menu = [
             ("check", "冗余检查（同名资源）"),
             ("gen", "生成静态调用文件"),
+            ("exit", "退出程序"),
         ]
         while True:
             print("\n=== box_strings_i18n / strings / gen_assets ===")
@@ -160,6 +161,8 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
                 except Exception as e:
                     print(f"❌ 生成失败：{e}")
                 continue
+            if cmd == "exit":
+                raise SystemExit(0)
 
     def _strings_menu() -> int:
         menu = [
