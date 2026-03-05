@@ -35,6 +35,9 @@ fastlane_metadata_root: ./fastlane/metadata
 info_plist_paths:
   - ./TimeTrails/TimeTrails/SupportFiles/Info.plist
 
+assets_paths:
+  - ./TimeTrails/TimeTrails/SupportFiles/Assets.xcassets
+
 
 # 基礎語言（通常是簡體中文）
 base_locale:

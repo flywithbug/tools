@@ -214,7 +214,7 @@ def generate_l10n_swift(
 
             lines.append(
                 (
-                    f'        static var {prop}: String {{ return NSLocalizedString('
+                    f"        static var {prop}: String {{ return NSLocalizedString("
                     f'"{key_esc}", value: "{val_esc}", comment: "{cmt_esc}") }}'
                 )
             )
@@ -273,6 +273,7 @@ class StringsI18nConfig:
     base_folder: str  # e.g. Base.lproj
     fastlane_metadata_root: Path  # 绝对路径：fastlane/metadata 根目录
     info_plist_paths: List[Path]  # 绝对路径：Info.plist 列表（可能多个 target）
+    assets_paths: List[Path]  # 绝对路径：Assets.xcassets 列表
 
     # 语言
     base_locale: Locale
@@ -289,6 +290,8 @@ class StringsI18nConfig:
     # 行为开关
     options: Dict[str, Any]
     prompts: Dict[str, Any]
+
+
 def strings_options(cfg: "StringsI18nConfig") -> Dict[str, Any]:
     return (cfg.options or {}).get("strings") or {}
 
@@ -710,7 +713,9 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
             core_codes=[c.code for c in core],
         )
         if updated:
-            print("✅ 已更新 strings_i18n.yaml 的 target_locales（基于 languages.json）")
+            print(
+                "✅ 已更新 strings_i18n.yaml 的 target_locales（基于 languages.json）"
+            )
     except Exception:
         # init 主流程不因 target_locales 自动更新失败而中断
         pass
@@ -792,6 +797,17 @@ def assert_config_ok(
                 f"解决方法：确认 Xcode 工程内 Base.lproj 路径，或修复配置中的 lang_root/base_folder。"
             )
 
+        # assets_paths
+        assets_paths = _cfg_assets_paths(raw, project_root)
+        missing = [p for p in assets_paths if not p.exists()]
+        if missing:
+            missing_lines = "\n".join(f"- {p}" for p in missing)
+            raise ConfigError(
+                "assets_paths 中存在不存在的路径：\n"
+                f"{missing_lines}\n"
+                "解决方法：创建目录或修复配置中的 assets_paths。"
+            )
+
     return raw
 
 
@@ -842,6 +858,21 @@ def _cfg_info_plist_paths(raw: Dict[str, Any], project_root: Path) -> List[Path]
     return out
 
 
+def _cfg_assets_paths(raw: Dict[str, Any], project_root: Path) -> List[Path]:
+    v = raw.get("assets_paths")
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError("assets_paths 必须是数组")
+    out: List[Path] = []
+    for item in v:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("assets_paths 中每一项必须是非空字符串")
+        p = (project_root / item).resolve()
+        out.append(p)
+    return out
+
+
 # ----------------------------
 def load_config(
     cfg_path: Path, *, project_root: Optional[Path] = None
@@ -862,6 +893,7 @@ def load_config(
         )
     ).resolve()
     info_plist_paths = _cfg_info_plist_paths(raw, project_root)
+    assets_paths = _cfg_assets_paths(raw, project_root)
 
     base_locale = _first_locale(raw["base_locale"])
     source_locale = _first_locale(raw["source_locale"])
@@ -876,6 +908,7 @@ def load_config(
         base_folder=str(raw["base_folder"]),
         fastlane_metadata_root=fastlane_metadata_root,
         info_plist_paths=info_plist_paths,
+        assets_paths=assets_paths,
         base_locale=base_locale,
         source_locale=source_locale,
         core_locales=core_locales,
@@ -901,6 +934,7 @@ def validate_config(raw: Dict[str, Any]) -> None:
         "core_locales",
         "target_locales",
         "prompts",
+        "assets_paths",
     ]
     for k in required_top:
         if k not in raw:
@@ -947,6 +981,14 @@ def validate_config(raw: Dict[str, Any]) -> None:
         for item in plist_paths:
             if not isinstance(item, str) or not item.strip():
                 raise ValueError("info_plist_paths 中每一项必须是非空字符串")
+
+    # assets_paths（必填）
+    assets_paths = raw.get("assets_paths")
+    if not isinstance(assets_paths, list) or len(assets_paths) == 0:
+        raise ValueError("assets_paths 必须是非空数组")
+    for item in assets_paths:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("assets_paths 中每一项必须是非空字符串")
 
     # locales (这些在模板里是 list[object]，每个只放一个)
     _ = _first_locale(raw["base_locale"])
@@ -1178,7 +1220,9 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
     try:
         raw_cfg = yaml.safe_load(cfg.config_path.read_text(encoding="utf-8")) or {}
     except Exception as e:
-        warns.append(f"配置文件读取失败，无法检查 ascCode 是否缺失：{cfg.config_path}（{e}）")
+        warns.append(
+            f"配置文件读取失败，无法检查 ascCode 是否缺失：{cfg.config_path}（{e}）"
+        )
         raw_cfg = {}
 
     missing_asc = _find_missing_asc_in_raw_config(raw_cfg)
@@ -1187,7 +1231,9 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
         if len(missing_asc) > 12:
             preview += f" …（共 {len(missing_asc)} 项）"
         warns.append(f"检测到配置中缺少 ascCode：{preview}")
-        warns.append("可在 doctor 交互中选择是否自动补齐 ascCode（仅插入该字段，不改其它配置）。")
+        warns.append(
+            "可在 doctor 交互中选择是否自动补齐 ascCode（仅插入该字段，不改其它配置）。"
+        )
 
         if sys.stdin.isatty():
             ans = (

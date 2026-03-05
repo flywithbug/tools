@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import data
 from . import fastlane
+from . import gen_assets
 from . import translate
 from . import version
 
@@ -26,6 +27,7 @@ BOX_TOOL = tool(
         "box_strings_i18n sort",
         "box_strings_i18n doctor",
         "box_strings_i18n gen",
+        "box_strings_i18n gen_assets",
         "box_strings_i18n translate",
         "box_strings_i18n fastlane",
         "box_strings_i18n version",
@@ -35,13 +37,20 @@ BOX_TOOL = tool(
         "box_strings_i18n --project-root path/to/project",
     ],
     options=[
-        opt("command", "子命令：menu/init/sort/translate/fastlane/doctor（默认 menu）"),
+        opt(
+            "command",
+            "子命令：menu/init/sort/translate/fastlane/doctor/gen/gen_assets（默认 menu）",
+        ),
         opt("--config", "配置文件路径（默认 strings_i18n.yaml，基于 project-root）"),
         opt("--project-root", "项目根目录（默认当前目录）"),
         opt("--no-incremental", "translate/fastlane：关闭增量翻译，改为全量翻译"),
         opt(
             "--strings-file",
             "gen：从 Base.lproj 下的哪个 .strings 文件生成（默认 Localizable.strings）",
+        ),
+        opt(
+            "--assets-out",
+            "gen_assets：Swift 输出路径（默认 <project_root>/TTImageAsset.swift；相对路径按 project_root）",
         ),
         opt(
             "--swift-out",
@@ -57,6 +66,7 @@ BOX_TOOL = tool(
         ex("box_strings_i18n doctor", "环境/结构诊断（骨架：路径与 Base.lproj 检查）"),
         ex("box_strings_i18n sort", "排序（骨架：待实现 .strings key 排序与写回）"),
         ex("box_strings_i18n gen", "从 Base.lproj/Localizable.strings 生成 L10n.swift"),
+        ex("box_strings_i18n gen_assets", "生成静态资源枚举 TTImageAsset.swift"),
         ex("box_strings_i18n translate", "翻译入口（骨架：待实现）"),
         ex("box_strings_i18n fastlane", "翻译 fastlane/metadata 多语言文案"),
         ex("box_strings_i18n version", "统一修改 Info.plist 的版本号（交互式）"),
@@ -82,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
             "fastlane",
             "doctor",
             "gen",
+            "gen_assets",
             "version",
         ],
         help="子命令",
@@ -107,16 +118,56 @@ def build_parser() -> argparse.ArgumentParser:
         default="L10n.swift",
         help="gen：输出 Swift 文件路径（默认写到 lang_root 下；相对路径按 lang_root）",
     )
+    p.add_argument(
+        "--assets-out",
+        default="TTImageAsset.swift",
+        help="gen_assets：输出 Swift 文件路径（默认写到 project_root 下；相对路径按 project_root）",
+    )
     return p
 
 
-def run_menu(cfg_path: Path, project_root: Path) -> int:
+def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) -> int:
+    def _assets_menu(cfg: data.StringsI18nConfig) -> int:
+        menu = [
+            ("check", "冗余检查（同名资源）"),
+            ("gen", "生成静态调用文件"),
+        ]
+        while True:
+            print("\n=== box_strings_i18n / strings / gen_assets ===")
+            for idx, (cmd, label) in enumerate(menu, start=1):
+                print(f"{idx}. {cmd:<10} {label}")
+            print("0. back       返回")
+
+            choice = input("> ").strip()
+            if choice == "0":
+                return 0
+            if not choice.isdigit():
+                print("无效选择")
+                continue
+            idx = int(choice)
+            if not (1 <= idx <= len(menu)):
+                print("无效选择")
+                continue
+            cmd = menu[idx - 1][0]
+            if cmd == "check":
+                _ = gen_assets.check_duplicates(cfg)
+                continue
+            if cmd == "gen":
+                try:
+                    out_path = (project_root / "TTImageAsset.swift").resolve()
+                    fp = gen_assets.generate_assets_swift(cfg, out_path=out_path)
+                    print(f"✅ 已生成：{fp}")
+                except Exception as e:
+                    print(f"❌ 生成失败：{e}")
+                continue
+
     def _strings_menu() -> int:
         menu = [
             ("doctor", "诊断（strings 结构/配置）"),
             ("sort", "排序 .strings"),
             ("translate", "翻译 .strings"),
             ("gen", "生成 L10n.swift"),
+            ("gen_assets", "生成静态资源枚举"),
         ]
         while True:
             print("\n=== box_strings_i18n / strings ===")
@@ -135,6 +186,9 @@ def run_menu(cfg_path: Path, project_root: Path) -> int:
                 print("无效选择")
                 continue
             cmd = menu[idx - 1][0]
+            if cmd == "gen_assets":
+                _ = _assets_menu(cfg)
+                continue
             argv = [
                 "box_strings_i18n",
                 cmd,
@@ -222,7 +276,7 @@ def main(argv=None) -> int:
         return 1
 
     if args.command == "menu":
-        return run_menu(cfg_path=cfg_path, project_root=project_root)
+        return run_menu(cfg_path=cfg_path, project_root=project_root, cfg=cfg)
 
     if args.command == "doctor":
         return data.run_doctor(cfg)
@@ -238,6 +292,21 @@ def main(argv=None) -> int:
                 strings_filename=args.strings_file,
                 out_path=out_path,
             )
+            print(f"✅ 已生成：{fp}")
+            return 0
+        except Exception as e:
+            print(f"❌ 生成失败：{e}")
+            return 1
+
+    if args.command == "gen_assets":
+        try:
+            out_arg = Path(args.assets_out)
+            out_path = (
+                out_arg
+                if out_arg.is_absolute()
+                else (project_root / out_arg).resolve()
+            )
+            fp = gen_assets.generate_assets_swift(cfg, out_path=out_path)
             print(f"✅ 已生成：{fp}")
             return 0
         except Exception as e:
