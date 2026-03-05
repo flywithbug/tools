@@ -38,6 +38,9 @@ info_plist_paths:
 assets_paths:
   - ./TimeTrails/TimeTrails/SupportFiles/Assets.xcassets
 
+gen_assets_path: ./TimeTrails/TimeTrails/SupportFiles/
+
+
 
 # 基礎語言（通常是簡體中文）
 base_locale:

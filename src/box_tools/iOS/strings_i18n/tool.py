@@ -154,7 +154,7 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
                 continue
             if cmd == "gen":
                 try:
-                    out_path = (project_root / "TTImageAsset.swift").resolve()
+                    out_path = (cfg.gen_assets_path / "TTImageAsset.swift").resolve()
                     fp = gen_assets.generate_assets_swift(cfg, out_path=out_path)
                     print(f"✅ 已生成：{fp}")
                 except Exception as e:

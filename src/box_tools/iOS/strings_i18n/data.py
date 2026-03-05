@@ -274,6 +274,7 @@ class StringsI18nConfig:
     fastlane_metadata_root: Path  # 绝对路径：fastlane/metadata 根目录
     info_plist_paths: List[Path]  # 绝对路径：Info.plist 列表（可能多个 target）
     assets_paths: List[Path]  # 绝对路径：Assets.xcassets 列表
+    gen_assets_path: Path  # 绝对路径：TTImageAsset.swift 输出目录
 
     # 语言
     base_locale: Locale
@@ -808,6 +809,14 @@ def assert_config_ok(
                 "解决方法：创建目录或修复配置中的 assets_paths。"
             )
 
+        # gen_assets_path
+        gen_assets_path = _cfg_gen_assets_path(raw, project_root)
+        if not gen_assets_path.exists():
+            raise ConfigError(
+                f"gen_assets_path 目录不存在：{gen_assets_path}\n"
+                "解决方法：创建目录或修复配置中的 gen_assets_path。"
+            )
+
     return raw
 
 
@@ -873,6 +882,15 @@ def _cfg_assets_paths(raw: Dict[str, Any], project_root: Path) -> List[Path]:
     return out
 
 
+def _cfg_gen_assets_path(raw: Dict[str, Any], project_root: Path) -> Path:
+    v = raw.get("gen_assets_path")
+    if v is None:
+        raise ValueError("gen_assets_path 必须是非空字符串")
+    if not isinstance(v, str) or not v.strip():
+        raise ValueError("gen_assets_path 必须是非空字符串")
+    return (project_root / v).resolve()
+
+
 # ----------------------------
 def load_config(
     cfg_path: Path, *, project_root: Optional[Path] = None
@@ -894,6 +912,7 @@ def load_config(
     ).resolve()
     info_plist_paths = _cfg_info_plist_paths(raw, project_root)
     assets_paths = _cfg_assets_paths(raw, project_root)
+    gen_assets_path = _cfg_gen_assets_path(raw, project_root)
 
     base_locale = _first_locale(raw["base_locale"])
     source_locale = _first_locale(raw["source_locale"])
@@ -909,6 +928,7 @@ def load_config(
         fastlane_metadata_root=fastlane_metadata_root,
         info_plist_paths=info_plist_paths,
         assets_paths=assets_paths,
+        gen_assets_path=gen_assets_path,
         base_locale=base_locale,
         source_locale=source_locale,
         core_locales=core_locales,
@@ -935,6 +955,7 @@ def validate_config(raw: Dict[str, Any]) -> None:
         "target_locales",
         "prompts",
         "assets_paths",
+        "gen_assets_path",
     ]
     for k in required_top:
         if k not in raw:
@@ -989,6 +1010,10 @@ def validate_config(raw: Dict[str, Any]) -> None:
     for item in assets_paths:
         if not isinstance(item, str) or not item.strip():
             raise ValueError("assets_paths 中每一项必须是非空字符串")
+
+    gen_assets_path = raw.get("gen_assets_path")
+    if not isinstance(gen_assets_path, str) or not gen_assets_path.strip():
+        raise ValueError("gen_assets_path 必须是非空字符串")
 
     # locales (这些在模板里是 list[object]，每个只放一个)
     _ = _first_locale(raw["base_locale"])

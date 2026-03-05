@@ -287,7 +287,10 @@ def main(argv=None) -> int:
         return 1
 
     out_arg = Path(args.assets_out)
-    out_path = out_arg if out_arg.is_absolute() else (project_root / out_arg).resolve()
+    if out_arg.is_absolute():
+        out_path = out_arg
+    else:
+        out_path = (cfg.gen_assets_path / out_arg).resolve()
 
     try:
         fp = generate_assets_swift(cfg, out_path=out_path)
