@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import plistlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -80,6 +81,15 @@ def _choose_base_version(unique_versions: List[str]) -> str:
 def run_version_bump(cfg: data.StringsI18nConfig) -> int:
     if not sys.stdin.isatty():
         print("需要交互输入，请在终端运行此命令")
+        return 1
+
+    repo_root = _git_root(cfg.project_root)
+    if not repo_root:
+        print("未检测到 git 仓库，无法执行自动提交")
+        return 1
+
+    if _git_is_dirty(repo_root):
+        print("git 工作区不干净，请先提交/清理现有改动后再运行")
         return 1
 
     plist_paths = cfg.info_plist_paths or []
@@ -164,4 +174,75 @@ def run_version_bump(cfg: data.StringsI18nConfig) -> int:
             print(f"写入失败：{p}（{e}）")
             return 1
 
+    changed = _git_status_porcelain(repo_root)
+    if not changed:
+        print("未检测到 git 变更，跳过提交")
+        return 0
+
+    plist_rel = [_relpath(p, repo_root) for p in plist_paths]
+    if not _git_add(repo_root, plist_rel):
+        return 1
+
+    msg = f"chore: bump iOS version to {new_version}"
+    if not _git_commit(repo_root, msg):
+        return 1
+
+    if not _git_push(repo_root):
+        return 1
+
+    print("✅ 已提交并推送")
     return 0
+
+
+def _git_root(start: Path) -> Path | None:
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+            stderr=subprocess.STDOUT,
+        ).decode("utf-8", "replace")
+    except Exception:
+        return None
+    p = Path(out.strip())
+    return p if p.exists() else None
+
+
+def _git_status_porcelain(repo_root: Path) -> List[str]:
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(repo_root), "status", "--porcelain"],
+            stderr=subprocess.STDOUT,
+        ).decode("utf-8", "replace")
+    except Exception:
+        return []
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def _git_is_dirty(repo_root: Path) -> bool:
+    return len(_git_status_porcelain(repo_root)) > 0
+
+
+def _git_add(repo_root: Path, paths: List[str]) -> bool:
+    try:
+        subprocess.check_call(["git", "-C", str(repo_root), "add", *paths])
+        return True
+    except Exception as e:
+        print(f"git add 失败：{e}")
+        return False
+
+
+def _git_commit(repo_root: Path, msg: str) -> bool:
+    try:
+        subprocess.check_call(["git", "-C", str(repo_root), "commit", "-m", msg])
+        return True
+    except Exception as e:
+        print(f"git commit 失败：{e}")
+        return False
+
+
+def _git_push(repo_root: Path) -> bool:
+    try:
+        subprocess.check_call(["git", "-C", str(repo_root), "push"])
+        return True
+    except Exception as e:
+        print(f"git push 失败：{e}")
+        return False
