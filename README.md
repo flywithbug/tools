@@ -29,8 +29,8 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
   - [`box_riverpod_gen`](#box_tools-flutter-riverpod_gen-tool)
 - [flutter/slang_i18n](#flutter-slang_i18n)
   - [`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)
-- [iOS/box_ios](#ios-box_ios)
-  - [`box_ios`](#box_tools-ios-box_ios-tool)
+- [iOS/tools](#ios-tools)
+  - [`box_ios`](#box_tools-ios-tools-tool)
 
 ---
 
@@ -62,9 +62,9 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 - **[`box_slang_i18n`](#box_tools-flutter-slang_i18n-tool)**：Flutter slang i18n 资源管理 CLI：基于默认模板生成/校验配置（保留注释），支持 sort/doctor，以及 AI 增量翻译（translate）（[README.md](src/box_tools/flutter/slang_i18n/README.md)）
 
-### iOS/box_ios
+### iOS/tools
 
-- **[`box_ios`](#box_tools-ios-box_ios-tool)**：iOS .strings i18n 资源管理 CLI（骨架）：生成/校验配置（保留注释），支持 doctor/sort，以及 AI 翻译入口（translate，待实现）（[README.md](src/box_tools/iOS/box_ios/README.md)）
+- **[`box_ios`](#box_tools-ios-tools-tool)**：iOS .strings i18n 资源管理 CLI（骨架）：生成/校验配置（保留注释），支持 doctor/sort，以及 AI 翻译入口（translate，待实现）（[README.md](src/box_tools/iOS/tools/README.md)）
 
 ---
 
@@ -96,9 +96,9 @@ pipx install --force "git+https://github.com/flywithbug/tools.git"
 
 - **box_slang_i18n**：[README.md](src/box_tools/flutter/slang_i18n/README.md)
 
-### iOS/box_ios
+### iOS/tools
 
-- **box_ios**：[README.md](src/box_tools/iOS/box_ios/README.md)
+- **box_ios**：[README.md](src/box_tools/iOS/tools/README.md)
 
 ---
 
@@ -369,11 +369,11 @@ box_slang_i18n --project-root path/to/project
 
 ---
 
-<a id="ios-box_ios"></a>
+<a id="ios-tools"></a>
 
-## iOS/box_ios
+## iOS/tools
 
-<a id="box_tools-ios-box_ios-tool"></a>
+<a id="box_tools-ios-tools-tool"></a>
 
 ### box_ios
 
@@ -389,8 +389,10 @@ box_ios init
 box_ios sort
 box_ios doctor
 box_ios gen
+box_ios gen_assets
 box_ios translate
 box_ios fastlane
+box_ios version
 box_ios translate --no-incremental
 box_ios fastlane --no-incremental
 box_ios --config box_ios.yaml
@@ -399,11 +401,12 @@ box_ios --project-root path/to/project
 
 **参数说明**
 
-- `command`：子命令：menu/init/sort/translate/fastlane/doctor（默认 menu）
+- `command`：子命令：menu/init/sort/translate/fastlane/doctor/gen/gen_assets（默认 menu）
 - `--config`：配置文件路径（默认 box_ios.yaml，基于 project-root）
 - `--project-root`：项目根目录（默认当前目录）
 - `--no-incremental`：translate/fastlane：关闭增量翻译，改为全量翻译
 - `--strings-file`：gen：从 Base.lproj 下的哪个 .strings 文件生成（默认 Localizable.strings）
+- `--assets-out`：gen_assets：Swift 输出路径（默认 <project_root>/TTImageAsset.swift；相对路径按 project_root）
 - `--swift-out`：gen：L10n.swift 输出路径（默认 <lang_root>/L10n.swift；相对路径按 lang_root 解析）
 
 **示例**
@@ -413,12 +416,14 @@ box_ios --project-root path/to/project
 - `box_ios doctor`：环境/结构诊断（骨架：路径与 Base.lproj 检查）
 - `box_ios sort`：排序（骨架：待实现 .strings key 排序与写回）
 - `box_ios gen`：从 Base.lproj/Localizable.strings 生成 L10n.swift
+- `box_ios gen_assets`：生成静态资源枚举 TTImageAsset.swift
 - `box_ios translate`：翻译入口（骨架：待实现）
 - `box_ios fastlane`：翻译 fastlane/metadata 多语言文案
+- `box_ios version`：统一修改 Info.plist 的版本号（交互式）
 
 **文档**
 
-[README.md](src/box_tools/iOS/box_ios/README.md)
+[README.md](src/box_tools/iOS/tools/README.md)
 
 ---
 

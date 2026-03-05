@@ -1,6 +1,6 @@
 [project]
 name = "box"
-version = "0.1.141"
+version = "0.1.142"
 requires-python = ">=3.9"
 dependencies = ["packaging", "PyYAML>=6.0", "openai>=1.0.0", "rich", "httpx", "socksio", "pyperclip"]
 
@@ -8,10 +8,10 @@ dependencies = ["packaging", "PyYAML>=6.0", "openai>=1.0.0", "rich", "httpx", "s
 box = "box.tool:main"
 box_ai_chat = "box_tools.ai.chat.tool:main"
 box_ai_translate = "box_tools.ai.translate.tool:main"
+box_ios = "box_tools.iOS.tools.tool:main"
 box_pubspec = "box_tools.flutter.pubspec.tool:main"
 box_riverpod_gen = "box_tools.flutter.riverpod_gen.tool:main"
 box_slang_i18n = "box_tools.flutter.slang_i18n.tool:main"
-box_ios = "box_tools.iOS.tools.tool:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -27,3 +27,4 @@ dev = ["pytest>=8.0.0"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
