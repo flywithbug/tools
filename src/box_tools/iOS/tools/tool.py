@@ -14,34 +14,34 @@ from . import version
 from _share.tool_spec import tool, opt, ex
 
 BOX_TOOL = tool(
-    id="ios.box_strings_i18n",
-    name="box_strings_i18n",
+    id="ios.box_ios",
+    name="box_ios",
     category="ios",
     summary=(
         "iOS .strings i18n 资源管理 CLI（骨架）：生成/校验配置（保留注释），"
         "支持 doctor/sort，以及 AI 翻译入口（translate，待实现）"
     ),
     usage=[
-        "box_strings_i18n",
-        "box_strings_i18n init",
-        "box_strings_i18n sort",
-        "box_strings_i18n doctor",
-        "box_strings_i18n gen",
-        "box_strings_i18n gen_assets",
-        "box_strings_i18n translate",
-        "box_strings_i18n fastlane",
-        "box_strings_i18n version",
-        "box_strings_i18n translate --no-incremental",
-        "box_strings_i18n fastlane --no-incremental",
-        "box_strings_i18n --config strings_i18n.yaml",
-        "box_strings_i18n --project-root path/to/project",
+        "box_ios",
+        "box_ios init",
+        "box_ios sort",
+        "box_ios doctor",
+        "box_ios gen",
+        "box_ios gen_assets",
+        "box_ios translate",
+        "box_ios fastlane",
+        "box_ios version",
+        "box_ios translate --no-incremental",
+        "box_ios fastlane --no-incremental",
+        "box_ios --config box_ios.yaml",
+        "box_ios --project-root path/to/project",
     ],
     options=[
         opt(
             "command",
             "子命令：menu/init/sort/translate/fastlane/doctor/gen/gen_assets（默认 menu）",
         ),
-        opt("--config", "配置文件路径（默认 strings_i18n.yaml，基于 project-root）"),
+        opt("--config", "配置文件路径（默认 box_ios.yaml，基于 project-root）"),
         opt("--project-root", "项目根目录（默认当前目录）"),
         opt("--no-incremental", "translate/fastlane：关闭增量翻译，改为全量翻译"),
         opt(
@@ -59,17 +59,17 @@ BOX_TOOL = tool(
     ],
     examples=[
         ex(
-            "box_strings_i18n init",
+            "box_ios init",
             "生成/校验配置文件（保留模板注释），并从本地 languages.json 读取 target_locales，同时确保 lang_root 目录存在",
         ),
-        ex("box_strings_i18n", "进入交互菜单（启动会优先校验配置 + 基础目录结构）"),
-        ex("box_strings_i18n doctor", "环境/结构诊断（骨架：路径与 Base.lproj 检查）"),
-        ex("box_strings_i18n sort", "排序（骨架：待实现 .strings key 排序与写回）"),
-        ex("box_strings_i18n gen", "从 Base.lproj/Localizable.strings 生成 L10n.swift"),
-        ex("box_strings_i18n gen_assets", "生成静态资源枚举 TTImageAsset.swift"),
-        ex("box_strings_i18n translate", "翻译入口（骨架：待实现）"),
-        ex("box_strings_i18n fastlane", "翻译 fastlane/metadata 多语言文案"),
-        ex("box_strings_i18n version", "统一修改 Info.plist 的版本号（交互式）"),
+        ex("box_ios", "进入交互菜单（启动会优先校验配置 + 基础目录结构）"),
+        ex("box_ios doctor", "环境/结构诊断（骨架：路径与 Base.lproj 检查）"),
+        ex("box_ios sort", "排序（骨架：待实现 .strings key 排序与写回）"),
+        ex("box_ios gen", "从 Base.lproj/Localizable.strings 生成 L10n.swift"),
+        ex("box_ios gen_assets", "生成静态资源枚举 TTImageAsset.swift"),
+        ex("box_ios translate", "翻译入口（骨架：待实现）"),
+        ex("box_ios fastlane", "翻译 fastlane/metadata 多语言文案"),
+        ex("box_ios version", "统一修改 Info.plist 的版本号（交互式）"),
     ],
     dependencies=[
         "PyYAML>=6.0",
@@ -79,7 +79,7 @@ BOX_TOOL = tool(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="box_strings_i18n")
+    p = argparse.ArgumentParser(prog="box_ios")
     p.add_argument(
         "command",
         nargs="?",
@@ -133,7 +133,7 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
             ("gen", "生成静态调用文件"),
         ]
         while True:
-            print("\n=== box_strings_i18n / strings / gen_assets ===")
+            print("\n=== box_ios / strings / gen_assets ===")
             for idx, (cmd, label) in enumerate(menu, start=1):
                 print(f"{idx}. {cmd:<10} {label}")
             print("0. exit       退出")
@@ -172,7 +172,7 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
             ("gen", "生成 L10n.swift"),
         ]
         while True:
-            print("\n=== box_strings_i18n / strings ===")
+            print("\n=== box_ios / strings ===")
             for idx, (cmd, label) in enumerate(menu, start=1):
                 print(f"{idx}. {cmd:<10} {label}")
             print("0. back       返回")
@@ -189,7 +189,7 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
                 continue
             cmd = menu[idx - 1][0]
             argv = [
-                "box_strings_i18n",
+                "box_ios",
                 cmd,
                 "--config",
                 str(cfg_path),
@@ -207,7 +207,7 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
     ]
 
     while True:
-        print("\n=== box_strings_i18n ===")
+        print("\n=== box_ios ===")
         print(f"config : {cfg_path}")
         print(f"project: {project_root}")
         for idx, (cmd, label) in enumerate(menu, start=1):
@@ -235,7 +235,7 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
             _ = _assets_menu(cfg)
             continue
         argv = [
-            "box_strings_i18n",
+            "box_ios",
             cmd,
             "--config",
             str(cfg_path),

@@ -55,7 +55,7 @@ strings_i18n/
 
 * **data.py**（核心模块）
 
-    * 读取与校验 `strings_i18n.yaml`
+    * 读取与校验 `box_ios.yaml`
     * Xcode 路径与 Base 文件扫描
     * `.strings` 文件解析 / 排序 / 写回（保注释）
     * 生成 `L10n.swift`
@@ -69,7 +69,7 @@ strings_i18n/
 
 ---
 
-## 4. 配置文件（strings_i18n.yaml）
+## 4. 配置文件（box_ios.yaml）
 
 ### 4.1 约束原则
 
@@ -199,7 +199,7 @@ Entry:
 ### 9.1 检查项
 
 * Python 依赖（PyYAML / openai SDK）
-* `strings_i18n.yaml` 是否存在且合法
+* `box_ios.yaml` 是否存在且合法
 * `lang_root / base_folder` 是否存在
 * `Base.lproj/Localizable.strings` 是否存在
 
@@ -215,7 +215,7 @@ Entry:
 
 * 若配置不存在：
 
-    * 生成带注释的 `strings_i18n.yaml` 模板
+    * 生成带注释的 `box_ios.yaml` 模板
 * 若配置存在：
 
     * 仅校验，不覆盖

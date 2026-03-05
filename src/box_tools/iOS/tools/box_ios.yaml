@@ -1,5 +1,5 @@
-# iOS 多語言配置檔（strings_i18n.yaml）
-# 由 strings_i18n.py --init 自動生成
+# iOS 多語言配置檔（box_ios.yaml）
+# 由 box_ios init 自動生成
 # 可手動調整，但建議保持與 languages.json 同步
 
 # OpenAI 模型（默认 gpt-4o）

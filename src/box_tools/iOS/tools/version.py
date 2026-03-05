@@ -95,7 +95,7 @@ def run_version_bump(cfg: data.StringsI18nConfig) -> int:
     plist_paths = cfg.info_plist_paths or []
     if not plist_paths:
         print("未配置 info_plist_paths")
-        print("请在 strings_i18n.yaml 中配置 Info.plist 列表")
+        print("请在 box_ios.yaml 中配置 Info.plist 列表")
         return 1
 
     missing: List[Path] = []

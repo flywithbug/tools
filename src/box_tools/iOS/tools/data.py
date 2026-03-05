@@ -239,7 +239,7 @@ def generate_l10n_swift(
 # ----------------------------
 # 常量 / 默认文件名
 # ----------------------------
-DEFAULT_TEMPLATE_NAME = "strings_i18n.yaml"  # 内置模板文件（带注释）
+DEFAULT_TEMPLATE_NAME = "box_ios.yaml"  # 内置模板文件（带注释）
 DEFAULT_LANGUAGES_NAME = "languages.json"  # 本地语言列表文件（code + name_en）
 DEFAULT_FASTLANE_METADATA_ROOT = "./fastlane/metadata"
 
@@ -254,7 +254,7 @@ class ConfigError(RuntimeError):
 
 
 # ----------------------------
-# 数据模型（按 strings_i18n.yaml schema）
+# 数据模型（按 box_ios.yaml schema）
 # ----------------------------
 @dataclass(frozen=True)
 class Locale:
@@ -416,7 +416,7 @@ def _doctor_print_and_write(
     # 写报告文件（含详细 section）
     try:
         lines: List[str] = []
-        lines.append("box_strings_i18n doctor report")
+        lines.append("box_ios doctor report")
         lines.append("")
         lines.append("=== summary ===")
         lines.append(f"project_root: {cfg.project_root}")
@@ -715,7 +715,7 @@ def init_config(project_root: Path, cfg_path: Path) -> None:
         )
         if updated:
             print(
-                "✅ 已更新 strings_i18n.yaml 的 target_locales（基于 languages.json）"
+                "✅ 已更新 box_ios.yaml 的 target_locales（基于 languages.json）"
             )
     except Exception:
         # init 主流程不因 target_locales 自动更新失败而中断
@@ -752,7 +752,7 @@ def assert_config_ok(
     if not cfg_path.exists():
         raise ConfigError(
             f"配置文件不存在：{cfg_path}\n"
-            f"解决方法：运行 `box_strings_i18n init` 生成默认配置。"
+            f"解决方法：运行 `box_ios init` 生成默认配置。"
         )
 
     try:
@@ -761,7 +761,7 @@ def assert_config_ok(
         raise ConfigError(
             f"配置文件无法解析为 YAML：{cfg_path}\n"
             f"原因：{e}\n"
-            f"解决方法：修复 YAML 格式或运行 `box_strings_i18n init` 重新生成。"
+            f"解决方法：修复 YAML 格式或运行 `box_ios init` 重新生成。"
         )
 
     try:
@@ -770,7 +770,7 @@ def assert_config_ok(
         raise ConfigError(
             f"配置文件校验失败：{cfg_path}\n"
             f"原因：{e}\n"
-            f"解决方法：修复配置字段/类型，或运行 `box_strings_i18n init` 重新生成。"
+            f"解决方法：修复配置字段/类型，或运行 `box_ios init` 重新生成。"
         )
 
     if check_paths_exist:
@@ -779,7 +779,7 @@ def assert_config_ok(
         if not languages_path.exists():
             raise ConfigError(
                 f"languages 文件不存在：{languages_path}\n"
-                f"解决方法：运行 `box_strings_i18n init` 自动生成，或修复配置中的 languages 路径。"
+                f"解决方法：运行 `box_ios init` 自动生成，或修复配置中的 languages 路径。"
             )
 
         # lang_root + base_folder
@@ -787,7 +787,7 @@ def assert_config_ok(
         if not lang_root.exists():
             raise ConfigError(
                 f"lang_root 目录不存在：{lang_root}\n"
-                f"解决方法：创建目录或运行 `box_strings_i18n init` 让工具初始化。"
+                f"解决方法：创建目录或运行 `box_ios init` 让工具初始化。"
             )
 
         base_folder = str(raw["base_folder"])
@@ -1203,7 +1203,7 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
     - printf 占位符一致性（%@/%d/%1$@ ...）检查（警告）
     输出：
     - 控制台可读摘要
-    - 详细报告写入 <lang_root>/.box_strings_i18n_reports/doctor_YYYYMMDD-HHMMSS.txt
+    - 详细报告写入 <lang_root>/.box_ios_reports/doctor_YYYYMMDD-HHMMSS.txt
     """
     errors: List[str] = []
     warns: List[str] = []

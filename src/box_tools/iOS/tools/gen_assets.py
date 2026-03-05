@@ -255,7 +255,7 @@ def generate_assets_swift(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        prog="box_strings_i18n gen_assets",
+        prog="box_ios gen_assets",
         description="Generate Swift asset enum from Assets.xcassets",
     )
     parser.add_argument(
