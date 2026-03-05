@@ -272,6 +272,7 @@ class StringsI18nConfig:
     lang_root: Path  # 绝对路径：*.lproj 所在目录
     base_folder: str  # e.g. Base.lproj
     fastlane_metadata_root: Path  # 绝对路径：fastlane/metadata 根目录
+    info_plist_paths: List[Path]  # 绝对路径：Info.plist 列表（可能多个 target）
 
     # 语言
     base_locale: Locale
@@ -822,6 +823,23 @@ def _cfg_api_key(raw: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _cfg_info_plist_paths(raw: Dict[str, Any], project_root: Path) -> List[Path]:
+    v = raw.get("info_plist_paths")
+    if v is None:
+        v = raw.get("infoPlistPaths")
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError("info_plist_paths 必须是数组")
+    out: List[Path] = []
+    for item in v:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("info_plist_paths 中每一项必须是非空字符串")
+        p = (project_root / item).resolve()
+        out.append(p)
+    return out
+
+
 # ----------------------------
 def load_config(
     cfg_path: Path, *, project_root: Optional[Path] = None
@@ -841,6 +859,7 @@ def load_config(
             or DEFAULT_FASTLANE_METADATA_ROOT
         )
     ).resolve()
+    info_plist_paths = _cfg_info_plist_paths(raw, project_root)
 
     base_locale = _first_locale(raw["base_locale"])
     source_locale = _first_locale(raw["source_locale"])
@@ -854,6 +873,7 @@ def load_config(
         lang_root=lang_root,
         base_folder=str(raw["base_folder"]),
         fastlane_metadata_root=fastlane_metadata_root,
+        info_plist_paths=info_plist_paths,
         base_locale=base_locale,
         source_locale=source_locale,
         core_locales=core_locales,
@@ -911,6 +931,17 @@ def validate_config(raw: Dict[str, Any]) -> None:
         not isinstance(fastlane_root, str) or not fastlane_root.strip()
     ):
         raise ValueError("fastlane_metadata_root 必须是非空字符串")
+
+    # info.plist 列表（可选）
+    plist_paths = raw.get("info_plist_paths")
+    if plist_paths is None:
+        plist_paths = raw.get("infoPlistPaths")
+    if plist_paths is not None:
+        if not isinstance(plist_paths, list):
+            raise ValueError("info_plist_paths 必须是数组")
+        for item in plist_paths:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("info_plist_paths 中每一项必须是非空字符串")
 
     # locales (这些在模板里是 list[object]，每个只放一个)
     _ = _first_locale(raw["base_locale"])

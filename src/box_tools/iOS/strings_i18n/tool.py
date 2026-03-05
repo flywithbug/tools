@@ -8,6 +8,7 @@ from pathlib import Path
 from . import data
 from . import fastlane
 from . import translate
+from . import version
 
 from _share.tool_spec import tool, opt, ex
 
@@ -27,6 +28,7 @@ BOX_TOOL = tool(
         "box_strings_i18n gen",
         "box_strings_i18n translate",
         "box_strings_i18n fastlane",
+        "box_strings_i18n version",
         "box_strings_i18n translate --no-incremental",
         "box_strings_i18n fastlane --no-incremental",
         "box_strings_i18n --config strings_i18n.yaml",
@@ -57,6 +59,7 @@ BOX_TOOL = tool(
         ex("box_strings_i18n gen", "从 Base.lproj/Localizable.strings 生成 L10n.swift"),
         ex("box_strings_i18n translate", "翻译入口（骨架：待实现）"),
         ex("box_strings_i18n fastlane", "翻译 fastlane/metadata 多语言文案"),
+        ex("box_strings_i18n version", "统一修改 Info.plist 的版本号（交互式）"),
     ],
     dependencies=[
         "PyYAML>=6.0",
@@ -71,7 +74,16 @@ def build_parser() -> argparse.ArgumentParser:
         "command",
         nargs="?",
         default="menu",
-        choices=["menu", "init", "sort", "translate", "fastlane", "doctor", "gen"],
+        choices=[
+            "menu",
+            "init",
+            "sort",
+            "translate",
+            "fastlane",
+            "doctor",
+            "gen",
+            "version",
+        ],
         help="子命令",
     )
     p.add_argument(
@@ -105,6 +117,7 @@ def run_menu(cfg_path: Path, project_root: Path) -> int:
         ("translate", "翻译"),
         ("fastlane", "翻译 fastlane metadata"),
         ("gen", "生成 L10n.swift"),
+        ("version", "更新版本号（Info.plist）"),
         ("init", "生成/校验配置"),
     ]
 
@@ -208,6 +221,9 @@ def main(argv=None) -> int:
         incremental = not args.no_incremental
         fastlane.run_fastlane(cfg, incremental=incremental)
         return 0
+
+    if args.command == "version":
+        return version.run_version_bump(cfg)
 
     print("未知命令")
     return 1

@@ -28,6 +28,11 @@ base_folder: Base.lproj
 # fastlane metadata 配置（目录使用 ASC locale，例如 en-US / zh-Hans）
 fastlane_metadata_root: ./fastlane/metadata
 
+# iOS 版本号配置（Info.plist 列表，支持多个 target）
+# 路径相对 project-root，建议填写所有目标的 Info.plist
+info_plist_paths:
+  - ./TimeTrails/TimeTrails/SupportFiles/Info.plist
+
 
 # 基礎語言（通常是簡體中文）
 base_locale:
