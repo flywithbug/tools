@@ -111,18 +111,51 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_menu(cfg_path: Path, project_root: Path) -> int:
+    def _strings_menu() -> int:
+        menu = [
+            ("doctor", "诊断（strings 结构/配置）"),
+            ("sort", "排序 .strings"),
+            ("translate", "翻译 .strings"),
+            ("gen", "生成 L10n.swift"),
+        ]
+        while True:
+            print("\n=== box_strings_i18n / strings ===")
+            for idx, (cmd, label) in enumerate(menu, start=1):
+                print(f"{idx}. {cmd:<10} {label}")
+            print("0. back       返回")
+
+            choice = input("> ").strip()
+            if choice == "0":
+                return 0
+            if not choice.isdigit():
+                print("无效选择")
+                continue
+            idx = int(choice)
+            if not (1 <= idx <= len(menu)):
+                print("无效选择")
+                continue
+            cmd = menu[idx - 1][0]
+            argv = [
+                "box_strings_i18n",
+                cmd,
+                "--config",
+                str(cfg_path),
+                "--project-root",
+                str(project_root),
+            ]
+            return main(argv)
+
     menu = [
-        ("doctor", "环境诊断"),
-        ("sort", "排序"),
-        ("translate", "翻译"),
-        ("fastlane", "翻译 fastlane metadata"),
-        ("gen", "生成 L10n.swift"),
-        ("version", "更新版本号（Info.plist）"),
-        ("init", "生成/校验配置"),
+        ("strings", "strings 相关功能"),
+        ("fastlane", "翻译 Fastlane metadata"),
+        ("version", "版本号（Info.plist）"),
+        ("init", "初始化/校验配置"),
     ]
 
     while True:
         print("\n=== box_strings_i18n ===")
+        print(f"config : {cfg_path}")
+        print(f"project: {project_root}")
         for idx, (cmd, label) in enumerate(menu, start=1):
             print(f"{idx}. {cmd:<10} {label}")
         print("0. exit       退出")
@@ -141,6 +174,9 @@ def run_menu(cfg_path: Path, project_root: Path) -> int:
             continue
 
         cmd = menu[idx - 1][0]
+        if cmd == "strings":
+            _ = _strings_menu()
+            continue
         argv = [
             "box_strings_i18n",
             cmd,

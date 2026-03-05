@@ -13,10 +13,12 @@ openAIModel: gpt-4o
 api_key: ''
 
 options:
-  cleanup_extra_keys: true       # 是否自動清理目標語言中 Base 沒有的 key
-  incremental_translate: true    # 是否支援增量翻譯（僅翻譯新增/變更的 key）
-  normalize_filenames: true      # 是否規範化文件名（可選）
-  sort_keys: true                # 是否按 key 排序輸出
+  # strings：iOS .strings 翻譯/整理相關選項
+  strings:
+    cleanup_extra_keys: true       # 是否自動清理目標語言中 Base 沒有的 key
+    incremental_translate: true    # 是否支援增量翻譯（僅翻譯新增/變更的 key）
+    normalize_filenames: true      # 是否規範化文件名（可選）
+    sort_keys: true                # 是否按 key 排序輸出
 
 languages: ./languages.json      # 語言定義檔路徑（code + name_en + asc_code）
 

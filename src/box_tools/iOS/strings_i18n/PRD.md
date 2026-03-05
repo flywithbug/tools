@@ -73,7 +73,7 @@ strings_i18n/
 
 ### 4.1 约束原则
 
-* **配置文件结构不可更改**
+* **配置结构固定**（不做兼容层）
 * 实现必须适配配置，而不是反向要求用户迁移配置
 
 ### 4.2 关键字段语义（实现需遵守）
@@ -85,7 +85,7 @@ strings_i18n/
 * `core_locales`：translate-core 的目标语言
 * `target_locales`：translate-target 的目标语言
 * `prompts`：翻译提示词（default + by_locale_en）
-* `options.incremental_translate`：是否默认增量翻译
+* `options.strings.incremental_translate`：是否默认增量翻译
 
 ---
 

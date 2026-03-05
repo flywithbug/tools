@@ -204,8 +204,9 @@ def _load_base_files(cfg: data.StringsI18nConfig) -> Tuple[Path, List[Path]]:
 
 def _get_max_workers(cfg: data.StringsI18nConfig) -> int:
     v = None
-    if isinstance(cfg.options, dict):
-        v = cfg.options.get("max_workers", cfg.options.get("maxWorkers"))
+    opt = data.strings_options(cfg)
+    if isinstance(opt, dict):
+        v = opt.get("max_workers", opt.get("maxWorkers"))
     try:
         return int(v) if v is not None else 0
     except Exception:
@@ -229,12 +230,13 @@ def _get_model(cfg: data.StringsI18nConfig) -> str:
         return m0.strip()
 
     # 2) 兼容 options 里可能出现的 model/openai_model/openaiModel
-    if isinstance(cfg.options, dict):
+    opt = data.strings_options(cfg)
+    if isinstance(opt, dict):
         m = (
-            cfg.options.get("model")
-            or cfg.options.get("openai_model")
-            or cfg.options.get("openaiModel")
-            or cfg.options.get("openaiModel")
+            opt.get("model")
+            or opt.get("openai_model")
+            or opt.get("openaiModel")
+            or opt.get("openaiModel")
         )
         if isinstance(m, str) and m.strip():
             return m.strip()

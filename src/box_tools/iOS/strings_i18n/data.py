@@ -291,6 +291,11 @@ class StringsI18nConfig:
     prompts: Dict[str, Any]
 
 
+def _merge_strings_options(raw_options: Dict[str, Any]) -> Dict[str, Any]:
+def strings_options(cfg: "StringsI18nConfig") -> Dict[str, Any]:
+    return (cfg.options or {}).get("strings") or {}
+
+
 # ----------------------------
 # 内置文件读取（模板 / 默认 languages.json）
 # ----------------------------
@@ -909,14 +914,17 @@ def validate_config(raw: Dict[str, Any]) -> None:
     if not isinstance(options, dict):
         raise ValueError("options 必须是 object")
 
+    strings_opt = options.get("strings")
+    if not isinstance(strings_opt, dict):
+        raise ValueError("options.strings 必须是 object")
     for k in [
         "cleanup_extra_keys",
         "incremental_translate",
         "normalize_filenames",
         "sort_keys",
     ]:
-        if k not in options:
-            raise ValueError(f"options 缺少字段：{k}")
+        if k not in strings_opt:
+            raise ValueError(f"options.strings 缺少字段：{k}")
 
     # paths
     for k in ["languages", "lang_root", "base_folder"]:
@@ -1389,7 +1397,7 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
         if p is not None:
             print(f"📄 已输出报告文件：{p}")
 
-        opt = (cfg.options or {}).get("redundant_key_policy")
+        opt = strings_options(cfg).get("redundant_key_policy")
         if opt in {"keep", "delete"}:
             # doctor 阶段不自动删，交由 sort（避免误删）
             pass
@@ -1424,7 +1432,7 @@ def run_doctor(cfg: StringsI18nConfig) -> int:
                 warns.append(f"已删除冗余 key：{deleted} 条")
 
     # strict 模式：把 warns 当 errors
-    strict = bool(cfg.options.get("doctor_strict", False))
+    strict = bool(strings_options(cfg).get("doctor_strict", False))
     if strict and warns:
         errors.extend([f"[STRICT] {w}" for w in warns])
         warns = []
@@ -1786,7 +1794,7 @@ def _resolve_placeholder_mismatch_policy(
     if p is not None:
         print(f"📄 已输出报告文件：{p}")
 
-    opt = (cfg.options or {}).get("placeholder_mismatch_policy")
+    opt = strings_options(cfg).get("placeholder_mismatch_policy")
     if opt in {"keep", "delete"}:
         print(f"✅ 使用配置 placeholder_mismatch_policy={opt}")
         return opt
@@ -1855,7 +1863,7 @@ def _resolve_redundant_policy(
         print(f"📄 已输出报告文件：{p}")
 
     # 配置中可预设策略（用于 CI/非交互），否则交互询问
-    opt = (cfg.options or {}).get("redundant_key_policy")
+    opt = strings_options(cfg).get("redundant_key_policy")
     if opt in {"keep", "delete"}:
         print(f"✅ 使用配置 redundant_key_policy={opt}")
         return opt
@@ -1916,11 +1924,11 @@ def scan_duplicate_keys(cfg: StringsI18nConfig) -> Dict[str, List[str]]:
 def _resolve_duplicate_policy(
     cfg: StringsI18nConfig, dup_report: Dict[str, List[str]]
 ) -> str:
-    """若存在重复 key，决定处理策略。优先读 cfg.options.duplicate_key_policy。"""
+    """若存在重复 key，决定处理策略。优先读 options.strings.duplicate_key_policy。"""
     if not dup_report:
         return "keep_first"
 
-    opt = (cfg.options or {}).get("duplicate_key_policy")
+    opt = strings_options(cfg).get("duplicate_key_policy")
     if isinstance(opt, str) and opt in {"keep_first", "delete_all"}:
         return opt
 
