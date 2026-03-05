@@ -175,10 +175,13 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
             print("\n=== box_ios / strings ===")
             for idx, (cmd, label) in enumerate(menu, start=1):
                 print(f"{idx}. {cmd:<10} {label}")
-            print("0. back       返回")
+            print("0. exit       退出")
+            print("5. back       返回")
 
             choice = input("> ").strip()
             if choice == "0":
+                raise SystemExit(0)
+            if choice == "5":
                 return 0
             if not choice.isdigit():
                 print("无效选择")

@@ -635,11 +635,11 @@ def _make_progress_cb(t: _Task):
 
                 if e == "all_done":
                     # 核心级完成回调通常不必输出；保留 debug 开关
-                    if os.environ.get("BOX_STRINGS_I18N_PROGRESS_DEBUG", ""):
+                    if os.environ.get("BOX_IOS_PROGRESS_DEBUG", ""):
                         print(f"{head} 翻译完成（核心回调） | {since:.2f}s")
                     return
 
-                if os.environ.get("BOX_STRINGS_I18N_PROGRESS_DEBUG", ""):
+                if os.environ.get("BOX_IOS_PROGRESS_DEBUG", ""):
                     print(f"{head} {e}: {evt} | {since:.2f}s")
         except Exception:
             return
@@ -733,7 +733,7 @@ def _run_tasks_and_write(
     else:
         print(f"- 并发: {max_workers} workers（max_workers={max_workers_cfg}）")
 
-    max_print = int(os.environ.get("BOX_STRINGS_I18N_MAX_PRINT", "50") or "50")
+    max_print = int(os.environ.get("BOX_IOS_MAX_PRINT", "50") or "50")
 
     print(f"- 总待翻译 key: {total_keys}（{total_batches} 批次）")
 
