@@ -9,7 +9,6 @@ from . import data
 from . import fastlane
 from . import gen_assets
 from . import translate
-from . import version
 
 from _share.tool_spec import tool, opt, ex
 
@@ -30,7 +29,6 @@ BOX_TOOL = tool(
         "box_ios gen_assets",
         "box_ios translate",
         "box_ios fastlane",
-        "box_ios version",
         "box_ios translate --no-incremental",
         "box_ios fastlane --no-incremental",
         "box_ios --config box_ios.yaml",
@@ -69,7 +67,6 @@ BOX_TOOL = tool(
         ex("box_ios gen_assets", "生成静态资源枚举 TTImageAsset.swift"),
         ex("box_ios translate", "翻译入口（骨架：待实现）"),
         ex("box_ios fastlane", "翻译 fastlane/metadata 多语言文案"),
-        ex("box_ios version", "统一修改 Info.plist 的版本号（交互式）"),
     ],
     dependencies=[
         "PyYAML>=6.0",
@@ -93,7 +90,6 @@ def build_parser() -> argparse.ArgumentParser:
             "doctor",
             "gen",
             "gen_assets",
-            "version",
         ],
         help="子命令",
     )
@@ -205,7 +201,6 @@ def run_menu(cfg_path: Path, project_root: Path, cfg: data.StringsI18nConfig) ->
         ("strings", "strings 相关功能"),
         ("gen_assets", "资源：检查/生成"),
         ("fastlane", "翻译 Fastlane metadata"),
-        ("version", "版本号（Info.plist）"),
         ("init", "初始化/校验配置"),
     ]
 
@@ -332,9 +327,6 @@ def main(argv=None) -> int:
         incremental = not args.no_incremental
         fastlane.run_fastlane(cfg, incremental=incremental)
         return 0
-
-    if args.command == "version":
-        return version.run_version_bump(cfg)
 
     print("未知命令")
     return 1

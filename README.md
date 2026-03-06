@@ -392,7 +392,6 @@ box_ios gen
 box_ios gen_assets
 box_ios translate
 box_ios fastlane
-box_ios version
 box_ios translate --no-incremental
 box_ios fastlane --no-incremental
 box_ios --config box_ios.yaml
@@ -419,11 +418,9 @@ box_ios --project-root path/to/project
 - `box_ios gen_assets`：生成静态资源枚举 TTImageAsset.swift
 - `box_ios translate`：翻译入口（骨架：待实现）
 - `box_ios fastlane`：翻译 fastlane/metadata 多语言文案
-- `box_ios version`：统一修改 Info.plist 的版本号（交互式）
 
 **文档**
 
 [README.md](src/box_tools/iOS/tools/README.md)
 
 ---
-
