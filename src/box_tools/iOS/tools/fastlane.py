@@ -102,12 +102,17 @@ def _build_file_prompt_en(
 ) -> Optional[str]:
     base = _build_prompt_en(cfg, target_code=target_code) or ""
     extra_rules: List[str] = []
-    if filename.lower() == "keywords.txt":
+    fname = filename.lower()
+    if fname == "keywords.txt":
         extra_rules.append(
             "For keywords.txt: output must be within 100 characters in total."
         )
         extra_rules.append(
             "Return only comma-separated keywords, no explanations or quotes."
+        )
+    if fname == "promotional_text.txt":
+        extra_rules.append(
+            "For promotional_text.txt: output must be within 170 characters in total."
         )
     if not extra_rules:
         return base if base else None
@@ -348,10 +353,28 @@ def _execute_file_task(
 ) -> _FileResult:
     t0 = time.perf_counter()
 
+    def _apply_length_limit(filename: str, text: str) -> str:
+        fname = filename.lower()
+        limits = {
+            "keywords.txt": 100,
+            "promotional_text.txt": 170,
+        }
+        limit = limits.get(fname)
+        if limit is None or len(text) <= limit:
+            return text
+        cut = text[:limit].rstrip()
+        if fname == "keywords.txt":
+            # Avoid trailing comma/space after truncation.
+            cut = cut.rstrip(" ,")
+        return cut
+
     if task.passthrough:
         dst = (task.target_dir / task.rel_path).resolve()
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_text(task.source_text.strip() + "\n", encoding="utf-8")
+        if task.rel_path.name.lower() == "keywords.txt":
+            dst.write_text(task.source_text.strip(), encoding="utf-8")
+        else:
+            dst.write_text(task.source_text.strip() + "\n", encoding="utf-8")
         return _FileResult(
             task=task,
             ok=True,
@@ -373,14 +396,16 @@ def _execute_file_task(
                 api_key=api_key,
             )
             translated = out_items[0].strip() if out_items else ""
-            if task.rel_path.name.lower() == "keywords.txt" and len(translated) > 100:
-                translated = translated[:100].rstrip()
+            translated = _apply_length_limit(task.rel_path.name, translated)
             if not translated:
                 raise RuntimeError("empty translation")
 
             dst = (task.target_dir / task.rel_path).resolve()
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_text(translated + "\n", encoding="utf-8")
+            if task.rel_path.name.lower() == "keywords.txt":
+                dst.write_text(translated, encoding="utf-8")
+            else:
+                dst.write_text(translated + "\n", encoding="utf-8")
             return _FileResult(
                 task=task,
                 ok=True,
