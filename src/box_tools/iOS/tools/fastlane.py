@@ -15,6 +15,8 @@ from . import data
 from box_tools._share.openai_translate.translate_list import translate_list
 
 URL_PASSTHROUGH_FILES = {"marketing_url.txt", "support_url.txt", "privacy_url.txt"}
+LENGTH_LIMITS = {"keywords.txt": 100, "promotional_text.txt": 170, "subtitle.txt": 30}
+NO_NEWLINE_FILES = set(LENGTH_LIMITS.keys())
 
 
 @dataclass(frozen=True)
@@ -105,14 +107,18 @@ def _build_file_prompt_en(
     fname = filename.lower()
     if fname == "keywords.txt":
         extra_rules.append(
-            "For keywords.txt: output must be within 100 characters in total."
+            "For keywords.txt: output must be within 100 bytes in total."
         )
         extra_rules.append(
             "Return only comma-separated keywords, no explanations or quotes."
         )
     if fname == "promotional_text.txt":
         extra_rules.append(
-            "For promotional_text.txt: output must be within 170 characters in total."
+            "For promotional_text.txt: output must be within 170 bytes in total."
+        )
+    if fname == "subtitle.txt":
+        extra_rules.append(
+            "For subtitle.txt: output must be within 30 bytes in total."
         )
     if not extra_rules:
         return base if base else None
@@ -265,8 +271,17 @@ def _prepare_work_rel_paths(
         if not fp.exists():
             out.append(rel)
             continue
-        if not _read_text(fp).strip():
+        txt = _read_text(fp)
+        if not txt.strip():
             out.append(rel)
+            continue
+        limit = LENGTH_LIMITS.get(rel.name.lower())
+        if limit is not None:
+            trimmed = txt.strip()
+            if len(trimmed.encode("utf-8")) > limit or (
+                rel.name.lower() in NO_NEWLINE_FILES and txt.endswith("\n")
+            ):
+                out.append(rel)
     return out
 
 
@@ -353,14 +368,23 @@ def _execute_file_task(
 ) -> _FileResult:
     t0 = time.perf_counter()
 
+    def _byte_len(text: str) -> int:
+        return len(text.encode("utf-8"))
+
+    def _truncate_utf8(text: str, max_bytes: int) -> str:
+        b = text.encode("utf-8")
+        if len(b) <= max_bytes:
+            return text
+        b = b[:max_bytes]
+        # Trim to valid UTF-8 boundary.
+        while b and (b[-1] & 0xC0) == 0x80:
+            b = b[:-1]
+        return b.decode("utf-8", errors="ignore")
+
     def _apply_length_limit(filename: str, text: str) -> str:
         fname = filename.lower()
-        limits = {
-            "keywords.txt": 100,
-            "promotional_text.txt": 170,
-        }
-        limit = limits.get(fname)
-        if limit is None or len(text) <= limit:
+        limit = LENGTH_LIMITS.get(fname)
+        if limit is None or _byte_len(text) <= limit:
             return text
         if fname == "keywords.txt":
             # Trim by keyword (comma-separated), not by raw length.
@@ -368,17 +392,16 @@ def _execute_file_task(
             kept: List[str] = []
             for item in items:
                 candidate = ",".join(kept + [item]) if kept else item
-                if len(candidate) > limit:
+                if _byte_len(candidate) > limit:
                     break
                 kept.append(item)
             return ",".join(kept)
-        cut = text[:limit].rstrip()
-        return cut
+        return _truncate_utf8(text, limit).rstrip()
 
     if task.passthrough:
         dst = (task.target_dir / task.rel_path).resolve()
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if task.rel_path.name.lower() == "keywords.txt":
+        if task.rel_path.name.lower() in NO_NEWLINE_FILES:
             dst.write_text(task.source_text.strip(), encoding="utf-8")
         else:
             dst.write_text(task.source_text.strip() + "\n", encoding="utf-8")
@@ -394,6 +417,13 @@ def _execute_file_task(
     last_err: Optional[str] = None
     for attempt in range(retry_times + 1):
         try:
+            limit = LENGTH_LIMITS.get(task.rel_path.name.lower())
+            src_bytes = _byte_len(task.source_text)
+            if limit is not None and src_bytes > limit:
+                print(
+                    f"[长度提示] {task.rel_path.name} 源文本 {src_bytes} bytes > {limit} bytes"
+                )
+
             out_items = translate_list(
                 prompt_en=task.prompt_en,
                 src_items=[task.source_text],
@@ -403,13 +433,36 @@ def _execute_file_task(
                 api_key=api_key,
             )
             translated = out_items[0].strip() if out_items else ""
+
+            if limit is not None and _byte_len(translated) > limit:
+                print(
+                    f"[长度提示] {task.rel_path.name} 翻译结果超限，尝试压缩翻译"
+                )
+                compact_prompt = (
+                    (task.prompt_en or "").strip()
+                    + f"\n\nReduce length to within {limit} bytes."
+                ).strip()
+                out_items = translate_list(
+                    prompt_en=compact_prompt,
+                    src_items=[task.source_text],
+                    src_locale=task.src_locale_name,
+                    tgt_locale=task.target_name,
+                    model=model,
+                    api_key=api_key,
+                )
+                translated = out_items[0].strip() if out_items else ""
+                if _byte_len(translated) > limit:
+                    print(
+                        f"[长度提示] {task.rel_path.name} 压缩后仍超限，将进行截断"
+                    )
+
             translated = _apply_length_limit(task.rel_path.name, translated)
             if not translated:
                 raise RuntimeError("empty translation")
 
             dst = (task.target_dir / task.rel_path).resolve()
             dst.parent.mkdir(parents=True, exist_ok=True)
-            if task.rel_path.name.lower() == "keywords.txt":
+            if task.rel_path.name.lower() in NO_NEWLINE_FILES:
                 dst.write_text(translated, encoding="utf-8")
             else:
                 dst.write_text(translated + "\n", encoding="utf-8")
