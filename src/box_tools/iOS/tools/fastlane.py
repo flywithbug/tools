@@ -362,10 +362,17 @@ def _execute_file_task(
         limit = limits.get(fname)
         if limit is None or len(text) <= limit:
             return text
-        cut = text[:limit].rstrip()
         if fname == "keywords.txt":
-            # Avoid trailing comma/space after truncation.
-            cut = cut.rstrip(" ,")
+            # Trim by keyword (comma-separated), not by raw length.
+            items = [t.strip() for t in text.split(",") if t.strip()]
+            kept: List[str] = []
+            for item in items:
+                candidate = ",".join(kept + [item]) if kept else item
+                if len(candidate) > limit:
+                    break
+                kept.append(item)
+            return ",".join(kept)
+        cut = text[:limit].rstrip()
         return cut
 
     if task.passthrough:
