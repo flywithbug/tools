@@ -15,7 +15,14 @@ from . import data
 from box_tools._share.openai_translate.translate_list import translate_list
 
 URL_PASSTHROUGH_FILES = {"marketing_url.txt", "support_url.txt", "privacy_url.txt"}
-LENGTH_LIMITS = {"keywords.txt": 100, "promotional_text.txt": 170, "subtitle.txt": 30}
+LENGTH_LIMITS = {
+    "keywords.txt": 100,
+    "promotional_text.txt": 170,
+    "subtitle.txt": 30,
+    "description.txt": 4000,
+    "release_notes.txt": 4000,
+    "name.txt": 30,
+}
 NO_NEWLINE_FILES = set(LENGTH_LIMITS.keys())
 
 
@@ -119,6 +126,18 @@ def _build_file_prompt_en(
     if fname == "subtitle.txt":
         extra_rules.append(
             "For subtitle.txt: output must be within 30 bytes in total."
+        )
+    if fname == "description.txt":
+        extra_rules.append(
+            "For description.txt: output must be within 4000 bytes in total."
+        )
+    if fname == "release_notes.txt":
+        extra_rules.append(
+            "For release_notes.txt: output must be within 4000 bytes in total."
+        )
+    if fname == "name.txt":
+        extra_rules.append(
+            "For name.txt: output must be within 30 bytes in total."
         )
     if not extra_rules:
         return base if base else None
