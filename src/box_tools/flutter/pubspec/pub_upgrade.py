@@ -328,18 +328,62 @@ def _extract_current_version(pkg: dict) -> Optional[str]:
     return None
 
 
-def _extract_latest_version(pkg: dict) -> Optional[str]:
-    latest = pkg.get("latest")
-    if isinstance(latest, dict):
-        v = latest.get("version")
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    res = pkg.get("resolvable")
-    if isinstance(res, dict):
-        v = res.get("version")
+def _extract_outdated_version(pkg: dict, field: str) -> Optional[str]:
+    raw = pkg.get(field)
+    if isinstance(raw, dict):
+        v = raw.get("version")
         if isinstance(v, str) and v.strip():
             return v.strip()
     return None
+
+
+def _read_pubspec_version(pubspec_text: str) -> Optional[str]:
+    for raw in pubspec_text.splitlines():
+        m = re.match(r"^\s*version\s*:\s*(.+?)\s*(#.*)?$", raw)
+        if not m:
+            continue
+        value = m.group(1).strip()
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1].strip()
+        return value or None
+    return None
+
+
+def _parse_major_minor(version: str) -> Optional[tuple[int, int]]:
+    nums = _parse_nums(version)
+    if len(nums) < 2:
+        return None
+    return (nums[0], nums[1])
+
+
+def _build_minor_upper_bound(version: str) -> Optional[str]:
+    parsed = _parse_major_minor(version)
+    if not parsed:
+        return None
+    major, minor = parsed
+    return f"{major}.{minor + 1}.0"
+
+
+def _select_target_version(pkg: dict, current: str, upper_bound: Optional[str]) -> tuple[Optional[str], str]:
+    candidates = [
+        ("latest", _extract_outdated_version(pkg, "latest")),
+        ("resolvable", _extract_outdated_version(pkg, "resolvable")),
+        ("upgradable", _extract_outdated_version(pkg, "upgradable")),
+    ]
+
+    if upper_bound:
+        for source, version in candidates:
+            if version and compare_versions(version, upper_bound) < 0:
+                return version, f"{source} < {upper_bound}"
+        return None, f"all candidates >= {upper_bound}"
+
+    current_major_minor = _parse_major_minor(current)
+    current_major = current_major_minor[0] if current_major_minor else None
+    for source, version in candidates:
+        parsed = _parse_major_minor(version) if version else None
+        if version and current_major is not None and parsed and parsed[0] <= current_major:
+            return version, f"{source} keeps major <= {current_major}"
+    return None, "upper missing and no same-major candidate"
 
 
 @dataclass(frozen=True)
@@ -347,7 +391,8 @@ class UpgradeItem:
     name: str
     pubspec_constraint: str
     resolved_current: str
-    latest: str
+    target: str
+    reason: str
 
 
 def build_private_upgrade_plan_from_pubspec(
@@ -355,6 +400,8 @@ def build_private_upgrade_plan_from_pubspec(
     pubspec_privates: dict[str, PubspecPrivateDep],
 ) -> list[UpgradeItem]:
     data = flutter_pub_outdated_show_all_json(ctx)
+    project_version = _read_pubspec_version(read_text(ctx.pubspec_path))
+    upper_bound = _build_minor_upper_bound(project_version) if project_version else None
     pkgs = data.get("packages") or []
     idx: dict[str, dict] = {}
     for pkg in pkgs:
@@ -371,12 +418,12 @@ def build_private_upgrade_plan_from_pubspec(
             continue
 
         cur = _extract_current_version(pkg) or "(unknown)"
-        latest = _extract_latest_version(pkg)
-        if not latest:
+        target, reason = _select_target_version(pkg, cur, upper_bound)
+        if not target:
             continue
 
-        # 只要 latest > current 才算需要升级
-        if cur != "(unknown)" and compare_versions(cur, latest) >= 0:
+        # 只要 target > current 才算需要升级
+        if cur != "(unknown)" and compare_versions(cur, target) >= 0:
             continue
 
         plan.append(
@@ -384,7 +431,8 @@ def build_private_upgrade_plan_from_pubspec(
                 name=name,
                 pubspec_constraint=dep.constraint,
                 resolved_current=cur,
-                latest=latest,
+                target=target,
+                reason=reason,
             )
         )
 
@@ -489,19 +537,19 @@ def apply_upgrades_to_pubspec(
                             val_unquoted = val
 
                         if _is_complex_constraint(val_unquoted):
-                            skipped.append(f"{name}: 复杂约束 '{val_unquoted}'，跳过修改（latest={u.latest}）")
+                            skipped.append(f"{name}: 复杂约束 '{val_unquoted}'，跳过修改（target={u.target}）")
                             replaced = True  # 标记为处理过，避免重复提示
                             break
 
                         m_simple = _SIMPLE_CONSTRAINT_RE.match(val_unquoted)
                         if not m_simple:
-                            skipped.append(f"{name}: 无法识别约束 '{val_unquoted}'，跳过修改（latest={u.latest}）")
+                            skipped.append(f"{name}: 无法识别约束 '{val_unquoted}'，跳过修改（target={u.target}）")
                             replaced = True
                             break
 
                         # 保留前缀符号 ^ 或 ~
                         keep_prefix = m_simple.group("prefix") or ""
-                        new_val_unquoted = f"{keep_prefix}{u.latest}"
+                        new_val_unquoted = f"{keep_prefix}{u.target}"
 
                         # 保留原引号样式
                         if raw_val.startswith('"') and raw_val.endswith('"'):
@@ -513,14 +561,14 @@ def apply_upgrades_to_pubspec(
 
                         # 写回该行，保留行尾注释
                         lines[j] = f"{prefix}{new_val}{suffix}{newline}"
-                        applied.append(f"{name}: {u.pubspec_constraint} -> {keep_prefix}{u.latest}")
+                        applied.append(f"{name}: {u.pubspec_constraint} -> {keep_prefix}{u.target}")
                         replaced = True
                         break
 
                     j += 1
 
                 if not replaced:
-                    skipped.append(f"{name}: 未找到 version: 行，跳过（latest={u.latest}）")
+                    skipped.append(f"{name}: 未找到 version: 行，跳过（target={u.target}）")
 
                 i = j
                 continue
@@ -639,7 +687,7 @@ def run(ctx: Context) -> int:
 
             ctx.echo("\n待升级私有依赖清单（resolved_current -> latest）：")
             for u in plan:
-                ctx.echo(f"  - {u.name}: {u.resolved_current} -> {u.latest}   (pubspec: {u.pubspec_constraint})")
+                ctx.echo(f"  - {u.name}: {u.resolved_current} -> {u.target}   (pubspec: {u.pubspec_constraint}; reason: {u.reason})")
 
         with step_scope(ctx, 6, "写回 pubspec.yaml（只改 version，保留样式/注释）", "应用升级计划到 pubspec.yaml ..."):
             applied, skipped = apply_upgrades_to_pubspec(ctx, ctx.pubspec_path, plan)
@@ -685,7 +733,7 @@ def run(ctx: Context) -> int:
             ctx.echo("✅ analyze 无 error（info/warning 不阻断）")
 
         with step_scope(ctx, 9, "提交到 git 并推送到远端", "git add/commit/push ..."):
-            summary_lines = [f"{u.name}: {u.resolved_current} -> {u.latest}" for u in plan]
+            summary_lines = [f"{u.name}: {u.resolved_current} -> {u.target}" for u in plan]
             _git_add_commit_push(ctx, summary_lines)
 
         ctx.echo(f"\n✅ 全流程完成，总耗时 {time.perf_counter() - t0:.2f}s")

@@ -496,6 +496,7 @@ def publish(ctx: Context) -> int:
     _ensure_required_files(ctx)
 
     pubspec_text = read_text(ctx.pubspec_path)
+    package_name = _read_pubspec_name(pubspec_text) or "(unknown)"
     old_version = _read_pubspec_version(pubspec_text)
     if not old_version:
         raise RuntimeError("pubspec.yaml 未找到 version: 行，无法发布")
@@ -570,6 +571,7 @@ def publish(ctx: Context) -> int:
     _step(ctx, 10, "执行 flutter pub publish")
     flutter_pub_publish(ctx, dry_run=False)
     ctx.echo("✅ 发布完成")
+    ctx.echo(f"📦 当前发布成功版本：{package_name} {new_version}")
 
     _total_cost = time.perf_counter() - _total_t0
     _total_end_dt = datetime.now()
