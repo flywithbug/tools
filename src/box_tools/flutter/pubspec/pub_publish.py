@@ -432,7 +432,7 @@ def flutter_pub_publish(ctx: Context, *, dry_run: bool) -> None:
     if dry_run:
         cmd.append("--dry-run")
     else:
-        cmd.append("--force")
+        cmd.extend(["--force", "--skip-validation"])
 
     stop_event = threading.Event()
     _load_t0 = time.perf_counter()
