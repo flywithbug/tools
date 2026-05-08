@@ -322,9 +322,9 @@ def _prepend_changelog_block(changelog_text: str, new_version: str, note: str, n
 # =======================
 def flutter_pub_get(ctx: Context) -> None:
     cmd = (
-        ["flutter", "pub", "get"]
+        ["flutter", "pub", "get", "--offline"]
         if shutil.which("flutter")
-        else (["dart", "pub", "get"] if shutil.which("dart") else None)
+        else (["dart", "pub", "get", "--offline"] if shutil.which("dart") else None)
     )
     if not cmd:
         raise RuntimeError("未找到 flutter/dart 命令，无法执行 pub get")
