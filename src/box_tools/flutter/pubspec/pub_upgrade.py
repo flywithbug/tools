@@ -584,13 +584,9 @@ def apply_upgrades_to_pubspec(
 # =======================
 # Flutter commands (post-apply)
 # =======================
-def flutter_pub_get(ctx: Context, *, offline: bool = False) -> None:
+def flutter_pub_get(ctx: Context) -> None:
 
-    cmd = ["flutter", "pub", "get"]
-    if offline:
-        cmd.append("--offline")
-    label = "flutter pub get --offline" if offline else "flutter pub get"
-    r = run_cmd_with_loading(ctx, label, cmd, cwd=ctx.project_root)
+    r = run_cmd_with_loading(ctx, "flutter pub get", ["flutter", "pub", "get"], cwd=ctx.project_root)
     if r.code != 0:
         raise RuntimeError((r.err or r.out).strip() or "flutter pub get 失败")
 
@@ -671,7 +667,7 @@ def run(ctx: Context) -> int:
             _git_pull_ff_only(ctx)
 
         with step_scope(ctx, 3, "执行 flutter pub get（预检查）", "正在执行 pub get..."):
-            flutter_pub_get(ctx, offline=True)
+            flutter_pub_get(ctx)
             ctx.echo("✅ pub get 通过")
 
         with step_scope(ctx, 4, "读取 pubspec.yaml 私有依赖（dependencies）", "扫描 dependencies 区块中的 hosted 私有依赖..."):
