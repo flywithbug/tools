@@ -614,7 +614,7 @@ def flutter_analyze(ctx: Context) -> AnalyzeResult:
       - 有 info / warning：列出前两三条，然后继续
       - 有 error：列出来，中断（不提交）
     """
-    cmd = ["flutter", "analyze", "--no-fatal-warnings", "--no-fatal-infos"]
+    cmd = ["flutter", "analyze", "--no-pub", "--no-fatal-warnings", "--no-fatal-infos"]
     r = run_cmd_with_loading(ctx, "flutter analyze", cmd, cwd=ctx.project_root)
 
     out = (r.out or "") + ("\n" + r.err if r.err else "")

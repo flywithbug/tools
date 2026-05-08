@@ -377,7 +377,7 @@ def flutter_analyze_gate(ctx: Context) -> None:
     t = threading.Thread(target=_loading_animation, args=(stop_event, "flutter analyze", _load_t0))
     t.start()
     try:
-        r = run_cmd(["flutter", "analyze"], cwd=ctx.project_root, capture=True)
+        r = run_cmd(["flutter", "analyze", "--no-pub"], cwd=ctx.project_root, capture=True)
     finally:
         stop_event.set()
         t.join()
