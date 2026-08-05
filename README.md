@@ -8,6 +8,8 @@
 
 ```bash
 pipx install --force "git+https://github.com/flywithbug/tools.git"
+
+pipx install --force "git+ssh://git@github.com/flywithbug/tools.git"
 ```
 
 
