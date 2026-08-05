@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -42,6 +43,8 @@ BOX_TOOL = tool(
         opt("--outdated-json", "指定 flutter pub outdated --json 的输出文件（可选，用于离线/复用）"),
         opt("--dry-run", "只打印计划/预览，不写入文件，不执行危险操作"),
         opt("-p, --publish", "publish：是否实际执行最后的 flutter pub publish（默认 false；传 -p true 才执行）"),
+        opt("--app-integrate", "发布成功后集成到 App 的目标：release-x.y.z 或 latest（写入提交 Trailer）"),
+        opt("--app-package", "App 集成后的打包环境：none/qa/gray/prod/store（必须配合 --app-integrate；写入提交 Trailer）"),
         opt("--yes", "跳过所有确认（适合 CI/脚本）"),
         opt("--no-interactive", "关闭交互菜单（脚本模式）"),
         opt("--mode", "version：show/patch/minor（脚本模式快捷入口）"),
@@ -53,6 +56,9 @@ BOX_TOOL = tool(
         ex("box_pubspec upgrade --outdated-json outdated.json", "使用已有 outdated.json"),
         ex("box_pubspec upgrade --yes", "无交互执行升级"),
         ex("box_pubspec publish -p true", "完成发布流程并在最后实际执行 flutter pub publish"),
+        ex("box_pubspec publish --app-integrate release-3.63.0", "提交指定 App release 分支的集成标记"),
+        ex("box_pubspec publish --app-integrate latest", "提交集成至 App 最新 release-* 分支的标记"),
+        ex("box_pubspec publish --app-integrate release-3.63.0 --app-package gray", "提交指定分支集成及 gray 打包标记"),
         ex("box_pubspec version --mode patch --yes", "补丁版本自增并直接写入（只改 version 行）"),
     ],
     dependencies=[],
@@ -76,6 +82,8 @@ class Context:
     echo: Callable[[str], None]
     confirm: Callable[[str], bool]
     execute_publish: bool = False
+    app_integrate_branch: Optional[str] = None
+    app_package: Optional[str] = None
 
 
 # ----------------------------
@@ -148,6 +156,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["menu", "upgrade", "publish", "version", "doctor"],
         help="子命令",
     )
+    p.add_argument(
+        "--app-integrate",
+        default=None,
+        metavar="release-x.y.z|latest",
+        help="发布成功后集成到 App 的目标：release-x.y.z 或 latest（写入提交 Trailer）",
+    )
+    p.add_argument(
+        "--app-package",
+        default=None,
+        choices=["none", "qa", "gray", "prod", "store"],
+        help="App 集成后的打包环境；必须配合 --app-integrate（写入提交 Trailer）",
+    )
     p.add_argument("--project-root", default=".", help="项目根目录（默认当前目录）")
     p.add_argument("--box_pubspec", default=None, help="pubspec.yaml 路径（默认 project-root/pubspec.yaml）")
     p.add_argument("--outdated-json", default=None, help="outdated json 文件路径（可选）")
@@ -175,6 +195,12 @@ def _mk_ctx(args) -> Context:
     pubspec_path = Path(args.box_pubspec).resolve() if args.box_pubspec else (project_root / "pubspec.yaml").resolve()
     outdated_json_path = Path(args.outdated_json).resolve() if args.outdated_json else None
 
+    app_integrate_branch = args.app_integrate
+    if app_integrate_branch and app_integrate_branch != "latest" and not re.fullmatch(r"release-\d+\.\d+\.\d+", app_integrate_branch):
+        raise ValueError("--app-integrate 必须是 release-x.y.z 或 latest")
+    if args.app_package and not app_integrate_branch:
+        raise ValueError("--app-package 必须与 --app-integrate 一起使用")
+
     def echo(msg: str) -> None:
         print(msg)
 
@@ -194,6 +220,8 @@ def _mk_ctx(args) -> Context:
         echo=echo,
         confirm=confirm,
         execute_publish=bool(args.execute_publish),
+        app_integrate_branch=app_integrate_branch,
+        app_package=args.app_package,
     )
 
 
@@ -201,6 +229,8 @@ def run_menu(ctx: Context) -> int:
     menu = [
         ("upgrade", "依赖升级"),
         ("publish", "依赖发布"),
+        ("publish_app", "发布并集成到 App"),
+        ("publish_app_package", "发布并集成到 App 后打包"),
         ("version", "版本升级"),
         ("doctor", "环境检测"),
     ]
@@ -220,12 +250,31 @@ def run_menu(ctx: Context) -> int:
 
         cmd = menu[int(choice) - 1][0]
         argv = ["box_pubspec", cmd, "--project-root", str(ctx.project_root), "--box_pubspec", str(ctx.pubspec_path)]
+        if cmd in ("publish_app", "publish_app_package"):
+            ctx.echo("请输入 App 集成目标（release-x.y.z 或 latest；直接回车使用 latest）：")
+            app_integrate = input("> ").strip() or "latest"
+            argv[1] = "publish"
+            argv += ["--app-integrate", app_integrate]
+            if cmd == "publish_app_package":
+                package_options = ("qa", "gray", "prod", "store")
+                ctx.echo("请选择 App 打包环境：")
+                for index, environment in enumerate(package_options, start=1):
+                    ctx.echo(f"{index}. {environment}")
+                selected = input("> ").strip()
+                if not selected.isdigit() or not (1 <= int(selected) <= len(package_options)):
+                    ctx.echo("无效选择，已取消。")
+                    return 1
+                argv += ["--app-package", package_options[int(selected) - 1]]
         if ctx.outdated_json_path:
             argv += ["--outdated-json", str(ctx.outdated_json_path)]
         if ctx.dry_run:
             argv += ["--dry-run"]
         if ctx.execute_publish:
             argv += ["-p", "true"]
+        if ctx.app_integrate_branch:
+            argv += ["--app-integrate", ctx.app_integrate_branch]
+        if ctx.app_package:
+            argv += ["--app-package", ctx.app_package]
         if ctx.yes:
             argv += ["--yes"]
         if not ctx.interactive:
@@ -269,10 +318,10 @@ def run_startup_doctor(ctx: Context, *, allow_failure: bool = False) -> bool:
 
 def main(argv=None) -> int:
     argv = argv or sys.argv
-    args = build_parser().parse_args(argv[1:])
-    ctx = _mk_ctx(args)
-
     try:
+        args = build_parser().parse_args(argv[1:])
+        ctx = _mk_ctx(args)
+
         # 启动即 doctor：
         # - doctor 命令本身不做静默拦截（用户就是来看的）
         # - publish 仍会提前跑 doctor，有问题先提示；真正的“是否继续发布”由 publish flow 决定
@@ -308,10 +357,10 @@ def main(argv=None) -> int:
         return 1
 
     except KeyboardInterrupt:
-        ctx.echo("\n已取消。")
+        print("\n已取消。")
         return 130
     except Exception as e:
-        ctx.echo(f"❌ {e}")
+        print(f"❌ {e}")
         return 1
 
 

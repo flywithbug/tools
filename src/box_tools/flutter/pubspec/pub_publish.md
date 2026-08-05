@@ -251,3 +251,54 @@ pub_publish 内部建议提供子菜单：
 ---
 
 如果你对 CHANGELOG 的格式已经有团队规范（比如固定 `## [x.y.z]`、或必须写到 `Unreleased` 里、或需要分类 Added/Fixed/Changed），我实现时会优先匹配现有结构，实在找不到才走“顶部插入”的兜底策略。
+
+---
+
+## App 集成与打包标记
+
+发布命令可通过固定的 Git commit Trailer 传递后续 App 自动化意图；组件发布工作流在包真实发布成功后解析这些字段。
+
+```bash
+# 仅发布组件，不影响 App（默认）
+box_pubspec publish -p true
+
+# 发布成功后，集成到指定 App release 分支；不打包
+box_pubspec publish --app-integrate release-3.63.0
+
+# 当前 package 在 main 发布时，集成到 App 最新的 release-* 分支；不打包
+box_pubspec publish --app-integrate latest
+
+# 发布成功后，集成并请求 gray 打包
+box_pubspec publish \
+  --app-integrate release-3.63.0 \
+  --app-package gray
+```
+
+可用打包环境：`none`、`qa`、`gray`、`prod`、`store`。
+
+生成的提交示例：
+
+```text
+build: ap_example + 3.63.2
+
+- version: 3.63.1 -> 3.63.2
+- note: publish
+
+App-Integrate: release-3.63.0
+App-Package: gray
+```
+
+未传 `--app-integrate` 时，不会写入任何 `App-*` Trailer；`--app-package` 必须和 `--app-integrate` 一起使用。
+
+`--app-integrate` 可取指定分支 `release-x.y.z`，或 `latest`。工具仅提交该标记；后续 GitHub Action 在包发布成功后，将 `latest` 解析为 App 当前最新的 `release-*` 分支并执行合并。
+
+### 交互菜单
+
+直接运行 `box_pubspec` 时，可使用两个对应入口：
+
+```text
+3. publish_app          发布并集成到 App
+4. publish_app_package  发布并集成到 App 后打包
+```
+
+两者都会询问 App 目标（`release-x.y.z` 或 `latest`，默认 `latest`）；第 4 项还会以菜单方式选择 `qa`、`gray`、`prod` 或 `store`。这些选择只影响本次 Git 提交的 `App-Integrate` 和 `App-Package` Trailer。

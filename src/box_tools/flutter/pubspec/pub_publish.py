@@ -168,7 +168,13 @@ def _git_add_commit_push(ctx: Context, *, new_version: str, old_version: str, no
     pkg = _read_pubspec_name(read_text(ctx.pubspec_path)) or "(unknown)"
     subject = f"build: {pkg} + {new_version}"
     body = f"- version: {old_version} -> {new_version}\n- note: {note}"
+    trailers: list[str] = []
+    if ctx.app_integrate_branch:
+        trailers.append(f"App-Integrate: {ctx.app_integrate_branch}")
+        trailers.append(f"App-Package: {ctx.app_package or 'none'}")
     msg = subject + "\n\n" + body
+    if trailers:
+        msg += "\n\n" + "\n".join(trailers)
 
     paths = ["pubspec.yaml", CHANGELOG_NAME]
     if (ctx.project_root / "pubspec.lock").exists():
@@ -473,6 +479,11 @@ def publish(ctx: Context) -> int:
     # ✅ [1] 先输入 note，免去用户等待
     _step(ctx, 1, "输入发布说明 note")
     note = _ask_note(ctx)
+    if ctx.app_integrate_branch:
+        ctx.echo(
+            "📱 App 集成请求："
+            f"{ctx.app_integrate_branch}；打包环境：{ctx.app_package or 'none'}"
+        )
 
     # [2] 检查 git 状态
     _step(ctx, 2, "检查是否有未提交变更")
