@@ -122,6 +122,7 @@ def test_publish_app_integrate_accepts_latest_release_branch():
 
 def test_menu_publish_app_adds_latest_integration_trailer_option(monkeypatch, tmp_path):
     tool_mod = importlib.import_module('box_tools.flutter.pubspec.tool')
+    monkeypatch.setattr(tool_mod, '_current_release_branch', lambda _root: None)
     argv = []
     answers = iter(['3', ''])
     ctx = tool_mod.Context(
@@ -148,6 +149,7 @@ def test_menu_publish_app_defaults_to_latest_without_local_cache(monkeypatch, tm
     argv = []
     answers = iter(['3', ''])
     monkeypatch.setattr(tool_mod, 'APP_INTEGRATE_STATE_PATH', tmp_path / 'box_pubspec_state.json')
+    monkeypatch.setattr(tool_mod, '_current_release_branch', lambda _root: None)
     ctx = tool_mod.Context(
         project_root=tmp_path,
         pubspec_path=tmp_path / 'pubspec.yaml',
@@ -170,6 +172,7 @@ def test_menu_publish_app_uses_and_updates_cached_release_branch(monkeypatch, tm
     tool_mod = importlib.import_module('box_tools.flutter.pubspec.tool')
     state_path = tmp_path / 'box_pubspec_state.json'
     monkeypatch.setattr(tool_mod, 'APP_INTEGRATE_STATE_PATH', state_path)
+    monkeypatch.setattr(tool_mod, '_current_release_branch', lambda _root: None)
 
     argv = []
     first_answers = iter(['3', 'release-3.63.0'])
@@ -197,6 +200,59 @@ def test_menu_publish_app_uses_and_updates_cached_release_branch(monkeypatch, tm
     argv.clear()
     third_answers = iter(['3', 'latest'])
     monkeypatch.setattr('builtins.input', lambda _: next(third_answers))
+    assert tool_mod.run_menu(ctx) == 0
+    assert argv[-2:] == ['--app-integrate', 'release-3.63.0']
+
+
+def test_menu_publish_app_prefers_current_release_branch(monkeypatch, tmp_path):
+    tool_mod = importlib.import_module('box_tools.flutter.pubspec.tool')
+    state_path = tmp_path / 'box_pubspec_state.json'
+    monkeypatch.setattr(tool_mod, 'APP_INTEGRATE_STATE_PATH', state_path)
+    # 当前分支是 release-3.63.0，且本机无缓存：回车应默认当前分支而非 latest
+    monkeypatch.setattr(tool_mod, '_current_release_branch', lambda _root: 'release-3.63.0')
+
+    argv = []
+    answers = iter(['3', ''])
+    ctx = tool_mod.Context(
+        project_root=tmp_path,
+        pubspec_path=tmp_path / 'pubspec.yaml',
+        outdated_json_path=None,
+        dry_run=False,
+        yes=False,
+        interactive=True,
+        echo=lambda _: None,
+        confirm=lambda _: True,
+    )
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(tool_mod, 'main', lambda command: argv.extend(command) or 0)
+
+    assert tool_mod.run_menu(ctx) == 0
+    assert argv[-2:] == ['--app-integrate', 'release-3.63.0']
+
+
+def test_menu_publish_app_current_branch_overrides_cache(monkeypatch, tmp_path):
+    tool_mod = importlib.import_module('box_tools.flutter.pubspec.tool')
+    state_path = tmp_path / 'box_pubspec_state.json'
+    state_path.write_text('{"app_integrate_branch": "release-3.60.0"}\n', encoding='utf-8')
+    monkeypatch.setattr(tool_mod, 'APP_INTEGRATE_STATE_PATH', state_path)
+    # 当前分支优先于缓存：缓存是 3.60.0，但当前在 3.63.0 → 回车用 3.63.0
+    monkeypatch.setattr(tool_mod, '_current_release_branch', lambda _root: 'release-3.63.0')
+
+    argv = []
+    answers = iter(['3', ''])
+    ctx = tool_mod.Context(
+        project_root=tmp_path,
+        pubspec_path=tmp_path / 'pubspec.yaml',
+        outdated_json_path=None,
+        dry_run=False,
+        yes=False,
+        interactive=True,
+        echo=lambda _: None,
+        confirm=lambda _: True,
+    )
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(tool_mod, 'main', lambda command: argv.extend(command) or 0)
+
     assert tool_mod.run_menu(ctx) == 0
     assert argv[-2:] == ['--app-integrate', 'release-3.63.0']
 

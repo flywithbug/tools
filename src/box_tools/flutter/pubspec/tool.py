@@ -249,6 +249,20 @@ def _save_cached_app_integrate_branch(branch: str) -> None:
     )
 
 
+def _current_release_branch(project_root: Path) -> Optional[str]:
+    """当前 git 分支名若形如 release-x.y.z 则返回，否则 None。
+
+    非 git 仓库、缺少 git 命令、或当前分支不是 release-* 时都返回 None，
+    以便回退到缓存分支 / latest。
+    """
+    try:
+        r = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=project_root, capture=True)
+    except Exception:
+        return None
+    branch = (r.out or "").strip()
+    return branch if _RELEASE_BRANCH_RE.fullmatch(branch) else None
+
+
 def run_menu(ctx: Context) -> int:
     menu = [
         ("upgrade", "依赖升级"),
@@ -275,13 +289,16 @@ def run_menu(ctx: Context) -> int:
         cmd = menu[int(choice) - 1][0]
         argv = ["box_pubspec", cmd, "--project-root", str(ctx.project_root), "--box_pubspec", str(ctx.pubspec_path)]
         if cmd in ("publish_app", "publish_app_package"):
+            current_branch = _current_release_branch(ctx.project_root)
             cached_branch = _load_cached_app_integrate_branch()
-            default_target = cached_branch or "latest"
-            default_note = (
-                f"直接回车使用缓存的 {cached_branch}"
-                if cached_branch
-                else "直接回车使用 latest，即最新的 release-* 分支"
-            )
+            # 默认优先级：当前 release-* 分支 > 本机缓存分支 > latest
+            default_target = current_branch or cached_branch or "latest"
+            if current_branch:
+                default_note = f"直接回车使用当前分支 {current_branch}"
+            elif cached_branch:
+                default_note = f"直接回车使用缓存的 {cached_branch}"
+            else:
+                default_note = "直接回车使用 latest，即最新的 release-* 分支"
             ctx.echo(
                 "请输入 App 集成目标（release-x.y.z 或 latest；"
                 f"{default_note}）："
