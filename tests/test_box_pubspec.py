@@ -143,6 +143,64 @@ def test_menu_publish_app_adds_latest_integration_trailer_option(monkeypatch, tm
     assert argv[-2:] == ['--app-integrate', 'latest']
 
 
+def test_menu_publish_app_defaults_to_latest_without_local_cache(monkeypatch, tmp_path):
+    tool_mod = importlib.import_module('box_tools.flutter.pubspec.tool')
+    argv = []
+    answers = iter(['3', ''])
+    monkeypatch.setattr(tool_mod, 'APP_INTEGRATE_STATE_PATH', tmp_path / 'box_pubspec_state.json')
+    ctx = tool_mod.Context(
+        project_root=tmp_path,
+        pubspec_path=tmp_path / 'pubspec.yaml',
+        outdated_json_path=None,
+        dry_run=False,
+        yes=False,
+        interactive=True,
+        echo=lambda _: None,
+        confirm=lambda _: True,
+    )
+
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(tool_mod, 'main', lambda command: argv.extend(command) or 0)
+
+    assert tool_mod.run_menu(ctx) == 0
+    assert argv[-2:] == ['--app-integrate', 'latest']
+
+
+def test_menu_publish_app_uses_and_updates_cached_release_branch(monkeypatch, tmp_path):
+    tool_mod = importlib.import_module('box_tools.flutter.pubspec.tool')
+    state_path = tmp_path / 'box_pubspec_state.json'
+    monkeypatch.setattr(tool_mod, 'APP_INTEGRATE_STATE_PATH', state_path)
+
+    argv = []
+    first_answers = iter(['3', 'release-3.63.0'])
+    ctx = tool_mod.Context(
+        project_root=tmp_path,
+        pubspec_path=tmp_path / 'pubspec.yaml',
+        outdated_json_path=None,
+        dry_run=False,
+        yes=False,
+        interactive=True,
+        echo=lambda _: None,
+        confirm=lambda _: True,
+    )
+    monkeypatch.setattr('builtins.input', lambda _: next(first_answers))
+    monkeypatch.setattr(tool_mod, 'main', lambda command: argv.extend(command) or 0)
+    assert tool_mod.run_menu(ctx) == 0
+    assert argv[-2:] == ['--app-integrate', 'release-3.63.0']
+
+    argv.clear()
+    second_answers = iter(['3', ''])
+    monkeypatch.setattr('builtins.input', lambda _: next(second_answers))
+    assert tool_mod.run_menu(ctx) == 0
+    assert argv[-2:] == ['--app-integrate', 'release-3.63.0']
+
+    argv.clear()
+    third_answers = iter(['3', 'latest'])
+    monkeypatch.setattr('builtins.input', lambda _: next(third_answers))
+    assert tool_mod.run_menu(ctx) == 0
+    assert argv[-2:] == ['--app-integrate', 'release-3.63.0']
+
+
 def test_menu_publish_app_package_adds_selected_package_option(monkeypatch, tmp_path):
     tool_mod = importlib.import_module('box_tools.flutter.pubspec.tool')
     argv = []

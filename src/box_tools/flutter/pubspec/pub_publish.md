@@ -301,4 +301,4 @@ App-Package: gray
 4. publish_app_package  发布并集成到 App 后打包
 ```
 
-两者都会询问 App 目标（`release-x.y.z` 或 `latest`，默认 `latest`）；第 4 项还会以菜单方式选择 `qa`、`gray`、`prod` 或 `store`。这些选择只影响本次 Git 提交的 `App-Integrate` 和 `App-Package` Trailer。
+两者都会询问 App 目标（`release-x.y.z` 或 `latest`）。工具在本机 `~/.box/box_pubspec_state.json` 缓存最后一次选择的明确 `release-x.y.z`：有缓存时，输入 `latest` 或直接回车都会改用该缓存分支；没有缓存时，直接回车才使用 `latest`，由后续 Action 解析最新 `release-*` 分支。第 4 项还会以菜单方式选择 `qa`、`gray`、`prod` 或 `store`。这些选择只影响本次 Git 提交的 `App-Integrate` 和 `App-Package` Trailer。

@@ -65,6 +65,9 @@ BOX_TOOL = tool(
     docs="README.md",  # 可省略：默认就是 README.md
 )
 
+APP_INTEGRATE_STATE_PATH = Path.home() / ".box" / "box_pubspec_state.json"
+_RELEASE_BRANCH_RE = re.compile(r"release-\d+\.\d+\.\d+")
+
 
 
 # ----------------------------
@@ -196,7 +199,7 @@ def _mk_ctx(args) -> Context:
     outdated_json_path = Path(args.outdated_json).resolve() if args.outdated_json else None
 
     app_integrate_branch = args.app_integrate
-    if app_integrate_branch and app_integrate_branch != "latest" and not re.fullmatch(r"release-\d+\.\d+\.\d+", app_integrate_branch):
+    if app_integrate_branch and app_integrate_branch != "latest" and not _RELEASE_BRANCH_RE.fullmatch(app_integrate_branch):
         raise ValueError("--app-integrate 必须是 release-x.y.z 或 latest")
     if args.app_package and not app_integrate_branch:
         raise ValueError("--app-package 必须与 --app-integrate 一起使用")
@@ -222,6 +225,27 @@ def _mk_ctx(args) -> Context:
         execute_publish=bool(args.execute_publish),
         app_integrate_branch=app_integrate_branch,
         app_package=args.app_package,
+    )
+
+
+def _load_cached_app_integrate_branch() -> Optional[str]:
+    """读取本机最近使用的 App release 分支；损坏或过期缓存直接忽略。"""
+    try:
+        state = json.loads(APP_INTEGRATE_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    branch = state.get("app_integrate_branch") if isinstance(state, dict) else None
+    return branch if isinstance(branch, str) and _RELEASE_BRANCH_RE.fullmatch(branch) else None
+
+
+def _save_cached_app_integrate_branch(branch: str) -> None:
+    """只缓存明确的 release 分支，避免 latest 失去动态语义。"""
+    if not _RELEASE_BRANCH_RE.fullmatch(branch):
+        return
+    APP_INTEGRATE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    write_text_atomic(
+        APP_INTEGRATE_STATE_PATH,
+        json.dumps({"app_integrate_branch": branch}, ensure_ascii=False, indent=2) + "\n",
     )
 
 
@@ -251,8 +275,23 @@ def run_menu(ctx: Context) -> int:
         cmd = menu[int(choice) - 1][0]
         argv = ["box_pubspec", cmd, "--project-root", str(ctx.project_root), "--box_pubspec", str(ctx.pubspec_path)]
         if cmd in ("publish_app", "publish_app_package"):
-            ctx.echo("请输入 App 集成目标（release-x.y.z 或 latest；直接回车使用 latest）：")
-            app_integrate = input("> ").strip() or "latest"
+            cached_branch = _load_cached_app_integrate_branch()
+            default_target = cached_branch or "latest"
+            default_note = (
+                f"直接回车使用缓存的 {cached_branch}"
+                if cached_branch
+                else "直接回车使用 latest，即最新的 release-* 分支"
+            )
+            ctx.echo(
+                "请输入 App 集成目标（release-x.y.z 或 latest；"
+                f"{default_note}）："
+            )
+            app_integrate = input("> ").strip() or default_target
+            if app_integrate == "latest" and cached_branch:
+                ctx.echo(f"📌 latest 已替换为本机缓存分支：{cached_branch}")
+                app_integrate = cached_branch
+            if _RELEASE_BRANCH_RE.fullmatch(app_integrate):
+                _save_cached_app_integrate_branch(app_integrate)
             argv[1] = "publish"
             argv += ["--app-integrate", app_integrate]
             if cmd == "publish_app_package":
