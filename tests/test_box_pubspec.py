@@ -25,6 +25,7 @@ def test_publish_success_echoes_released_version(tmp_path, monkeypatch):
         interactive=False,
         echo=logs.append,
         confirm=lambda _: True,
+        execute_publish=True,
     )
 
     monkeypatch.setattr(publish_mod, '_git_check_repo', lambda _: None)
@@ -48,6 +49,16 @@ def test_publish_success_echoes_released_version(tmp_path, monkeypatch):
 
     assert rc == 0
     assert any('当前发布成功版本：demo_pkg 1.2.4' in line for line in logs)
+
+
+def test_publish_flag_defaults_to_false_and_accepts_true():
+    tool_mod = importlib.import_module('box_tools.flutter.pubspec.tool')
+
+    default_args = tool_mod.build_parser().parse_args(['publish'])
+    enabled_args = tool_mod.build_parser().parse_args(['publish', '-p', 'true'])
+
+    assert tool_mod._mk_ctx(default_args).execute_publish is False
+    assert tool_mod._mk_ctx(enabled_args).execute_publish is True
 
 
 def test_upgrade_plan_does_not_exceed_current_minor_version(tmp_path, monkeypatch):

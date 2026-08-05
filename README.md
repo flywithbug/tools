@@ -242,6 +242,7 @@ box_ai_translate --source en --target zh-Hans
 box_pubspec
 box_pubspec upgrade
 box_pubspec publish
+box_pubspec publish -p true
 box_pubspec version
 box_pubspec doctor
 box_pubspec upgrade --yes
@@ -257,6 +258,7 @@ box_pubspec --box_pubspec path/to/pubspec.yaml doctor
 - `--box_pubspec`：pubspec.yaml 路径（默认 project-root/pubspec.yaml）
 - `--outdated-json`：指定 flutter pub outdated --json 的输出文件（可选，用于离线/复用）
 - `--dry-run`：只打印计划/预览，不写入文件，不执行危险操作
+- `-p true` / `--publish true`：仅 publish 子命令使用；实际执行最后的 `flutter pub publish`（默认 false）
 - `--yes`：跳过所有确认（适合 CI/脚本）
 - `--no-interactive`：关闭交互菜单（脚本模式）
 - `--mode`：version：show/patch/minor（脚本模式快捷入口）
@@ -268,6 +270,7 @@ box_pubspec --box_pubspec path/to/pubspec.yaml doctor
 - `box_pubspec upgrade`：执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）
 - `box_pubspec upgrade --outdated-json outdated.json`：使用已有 outdated.json
 - `box_pubspec upgrade --yes`：无交互执行升级
+- `box_pubspec publish -p true`：完成发布流程并在最后实际执行 `flutter pub publish`
 - `box_pubspec version --mode patch --yes`：补丁版本自增并直接写入（只改 version 行）
 
 **文档**
@@ -424,4 +427,3 @@ box_ios --project-root path/to/project
 [README.md](src/box_tools/iOS/tools/README.md)
 
 ---
-

@@ -568,6 +568,13 @@ def publish(ctx: Context) -> int:
     _step_end(ctx, 9, _t9)
 
     # [10] publish
+    if not getattr(ctx, "execute_publish", False):
+        ctx.echo("⏭️ 已跳过 flutter pub publish；如需实际发布，请使用 -p true。")
+        _total_cost = time.perf_counter() - _total_t0
+        _total_end_dt = datetime.now()
+        ctx.echo(f"⏱️ end: {_total_end_dt.strftime('%Y-%m-%d %H:%M:%S')}  total: {_total_cost:.2f}s")
+        return 0
+
     _step(ctx, 10, "执行 flutter pub publish")
     flutter_pub_publish(ctx, dry_run=False)
     ctx.echo("✅ 发布完成")

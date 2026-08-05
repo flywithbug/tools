@@ -27,6 +27,7 @@ BOX_TOOL = tool(
         "box_pubspec",
         "box_pubspec upgrade",
         "box_pubspec publish",
+        "box_pubspec publish -p true",
         "box_pubspec version",
         "box_pubspec doctor",
         "box_pubspec upgrade --yes",
@@ -40,6 +41,7 @@ BOX_TOOL = tool(
         opt("--box_pubspec", "pubspec.yaml 路径（默认 project-root/pubspec.yaml）"),
         opt("--outdated-json", "指定 flutter pub outdated --json 的输出文件（可选，用于离线/复用）"),
         opt("--dry-run", "只打印计划/预览，不写入文件，不执行危险操作"),
+        opt("-p, --publish", "publish：是否实际执行最后的 flutter pub publish（默认 false；传 -p true 才执行）"),
         opt("--yes", "跳过所有确认（适合 CI/脚本）"),
         opt("--no-interactive", "关闭交互菜单（脚本模式）"),
         opt("--mode", "version：show/patch/minor（脚本模式快捷入口）"),
@@ -50,6 +52,7 @@ BOX_TOOL = tool(
         ex("box_pubspec upgrade", "执行依赖升级（默认直接 apply + pub get + analyze + 自动提交）"),
         ex("box_pubspec upgrade --outdated-json outdated.json", "使用已有 outdated.json"),
         ex("box_pubspec upgrade --yes", "无交互执行升级"),
+        ex("box_pubspec publish -p true", "完成发布流程并在最后实际执行 flutter pub publish"),
         ex("box_pubspec version --mode patch --yes", "补丁版本自增并直接写入（只改 version 行）"),
     ],
     dependencies=[],
@@ -72,6 +75,7 @@ class Context:
 
     echo: Callable[[str], None]
     confirm: Callable[[str], bool]
+    execute_publish: bool = False
 
 
 # ----------------------------
@@ -128,6 +132,14 @@ def flutter_pub_outdated_json(ctx: Context) -> dict:
 # CLI / Menu
 # ----------------------------
 def build_parser() -> argparse.ArgumentParser:
+    def parse_bool(value: str) -> bool:
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes"):
+            return True
+        if normalized in ("false", "0", "no"):
+            return False
+        raise argparse.ArgumentTypeError("必须传 true 或 false")
+
     p = argparse.ArgumentParser(prog="box_pubspec")
     p.add_argument(
         "command",
@@ -141,6 +153,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--outdated-json", default=None, help="outdated json 文件路径（可选）")
 
     p.add_argument("--dry-run", action="store_true", help="只预览，不写入/不发布")
+    p.add_argument(
+        "-p",
+        "--publish",
+        dest="execute_publish",
+        type=parse_bool,
+        default=False,
+        metavar="true|false",
+        help="publish：是否实际执行最后的 flutter pub publish（默认 false）",
+    )
     p.add_argument("--yes", action="store_true", help="跳过确认（适合 CI）")
     p.add_argument("--no-interactive", action="store_true", help="关闭交互菜单（脚本模式）")
 
@@ -172,6 +193,7 @@ def _mk_ctx(args) -> Context:
         interactive=(not args.no_interactive),
         echo=echo,
         confirm=confirm,
+        execute_publish=bool(args.execute_publish),
     )
 
 
@@ -202,6 +224,8 @@ def run_menu(ctx: Context) -> int:
             argv += ["--outdated-json", str(ctx.outdated_json_path)]
         if ctx.dry_run:
             argv += ["--dry-run"]
+        if ctx.execute_publish:
+            argv += ["-p", "true"]
         if ctx.yes:
             argv += ["--yes"]
         if not ctx.interactive:
