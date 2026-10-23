@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>本地多语言管理</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="title">本地多语言管理</div>
+    <div class="subtitle">纯 H5 + Python，本地文件缓存</div>
+  </header>
+
+  <main class="container">
+    <section class="panel">
+      <div class="row">
+        <input id="newKey" placeholder="新增 key，如: home.title" />
+        <button id="addKeyBtn">新增 key</button>
+      </div>
+      <div class="row">
+        <input id="newLocale" placeholder="新增语言，如: fr" />
+        <button id="addLocaleBtn">新增语言</button>
+      </div>
+      <div class="row">
+        <input id="searchInput" placeholder="搜索 key" />
+        <button id="exportBtn">导出 JSON</button>
+        <label class="import">
+          导入 JSON
+          <input id="importInput" type="file" accept="application/json" />
+        </label>
+      </div>
+    </section>
+
+    <section class="panel table-panel">
+      <div id="tableRoot" class="table-root"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

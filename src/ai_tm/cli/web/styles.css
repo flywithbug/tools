@@ -1,0 +1,142 @@
+:root {
+  --bg: #f6f4f1;
+  --ink: #1f1f1f;
+  --accent: #0b5b6b;
+  --card: #ffffff;
+  --border: #d8d2c7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: radial-gradient(circle at top, #fff7e6 0%, #f1f0ea 40%, #f6f4f1 100%);
+  color: var(--ink);
+}
+
+.topbar {
+  padding: 24px 32px 8px;
+}
+
+.title {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.subtitle {
+  font-size: 14px;
+  color: #5f5b52;
+  margin-top: 6px;
+}
+
+.container {
+  padding: 16px 32px 40px;
+  display: grid;
+  gap: 16px;
+}
+
+.panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 8px 22px rgba(25, 26, 27, 0.08);
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+input[type="text"],
+input[type="file"],
+input:not([type]) {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  flex: 1 1 220px;
+  background: #fff;
+}
+
+button,
+.import {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.import input {
+  display: none;
+}
+
+.table-panel {
+  overflow: auto;
+}
+
+.table-root {
+  min-width: 720px;
+}
+
+.grid {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.cell {
+  padding: 10px 12px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: #fff;
+  min-height: 42px;
+}
+
+.cell.header {
+  background: #f3efe7;
+  font-weight: 700;
+}
+
+.cell.key {
+  background: #f8f6f2;
+  font-weight: 600;
+}
+
+.cell.editable {
+  outline: none;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+}
+
+.action-btn {
+  border: 1px solid #c0543a;
+  background: #c0543a;
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 16px;
+  }
+
+  .table-root {
+    min-width: 640px;
+  }
+}
